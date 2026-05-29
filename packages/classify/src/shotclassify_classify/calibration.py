@@ -16,7 +16,11 @@ def above_threshold(
 
 def renormalise(classification: Classification) -> Classification:
     total = sum(c.score for c in classification.confidences) or 1.0
-    new = classification.model_copy(deep=True)
-    for c in new.confidences:
-        c.score = round(c.score / total, 6)
-    return new
+    return Classification(
+        primary=classification.primary,
+        confidences=[
+            type(c)(category=c.category, score=round(c.score / total, 6))
+            for c in classification.confidences
+        ],
+        rationale=classification.rationale,
+    )
