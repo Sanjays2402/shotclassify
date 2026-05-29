@@ -1,0 +1,38 @@
+{
+  "properties": {
+    "text": {
+      "title": "Text",
+      "type": "string"
+    },
+    "language": {
+      "default": "und",
+      "title": "Language",
+      "type": "string"
+    },
+    "word_count": {
+      "default": 0,
+      "title": "Word Count",
+      "type": "integer"
+    },
+    "mean_confidence": {
+      "default": 0.0,
+      "title": "Mean Confidence",
+      "type": "number"
+    },
+    "deskew_angle": {
+      "default": 0.0,
+      "title": "Deskew Angle",
+      "type": "number"
+    },
+    "preprocessed": {
+      "default": false,
+      "title": "Preprocessed",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "text"
+  ],
+  "title": "OCRResult",
+  "type": "object"
+}

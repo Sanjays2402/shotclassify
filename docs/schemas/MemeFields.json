@@ -1,0 +1,42 @@
+{
+  "properties": {
+    "template": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Template"
+    },
+    "top_text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Top Text"
+    },
+    "bottom_text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Bottom Text"
+    }
+  },
+  "title": "MemeFields",
+  "type": "object"
+}

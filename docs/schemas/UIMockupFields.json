@@ -1,0 +1,25 @@
+{
+  "properties": {
+    "framework_guess": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Framework Guess"
+    },
+    "components": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Components",
+      "type": "array"
+    }
+  },
+  "title": "UIMockupFields",
+  "type": "object"
+}

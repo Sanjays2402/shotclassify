@@ -1,0 +1,124 @@
+{
+  "$defs": {
+    "ReceiptLine": {
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "qty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qty"
+        },
+        "price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "title": "ReceiptLine",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "vendor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Vendor"
+    },
+    "date": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Date"
+    },
+    "subtotal": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Subtotal"
+    },
+    "tax": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tax"
+    },
+    "total": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Total"
+    },
+    "currency": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Currency"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/ReceiptLine"
+      },
+      "title": "Items",
+      "type": "array"
+    }
+  },
+  "title": "ReceiptFields",
+  "type": "object"
+}

@@ -1,0 +1,25 @@
+{
+  "properties": {
+    "filename": {
+      "title": "Filename",
+      "type": "string"
+    },
+    "note": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Note"
+    }
+  },
+  "required": [
+    "filename"
+  ],
+  "title": "ProcessRequest",
+  "type": "object"
+}

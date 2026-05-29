@@ -1,0 +1,28 @@
+{
+  "properties": {
+    "language": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Language"
+    },
+    "code": {
+      "default": "",
+      "title": "Code",
+      "type": "string"
+    },
+    "line_count": {
+      "default": 0,
+      "title": "Line Count",
+      "type": "integer"
+    }
+  },
+  "title": "CodeFields",
+  "type": "object"
+}

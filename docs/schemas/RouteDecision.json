@@ -1,0 +1,57 @@
+{
+  "$defs": {
+    "RouteAction": {
+      "enum": [
+        "none",
+        "save_to_dir",
+        "copy_to_clipboard",
+        "post_to_slack_webhook",
+        "open_url_template"
+      ],
+      "title": "RouteAction",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/RouteAction"
+    },
+    "target": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target"
+    },
+    "executed": {
+      "default": false,
+      "title": "Executed",
+      "type": "boolean"
+    },
+    "dry_run": {
+      "default": true,
+      "title": "Dry Run",
+      "type": "boolean"
+    },
+    "detail": {
+      "default": "",
+      "title": "Detail",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "title": "RouteDecision",
+  "type": "object"
+}

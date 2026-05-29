@@ -1,0 +1,61 @@
+{
+  "$defs": {
+    "Category": {
+      "enum": [
+        "receipt",
+        "code_snippet",
+        "error_stacktrace",
+        "chat_screenshot",
+        "meme",
+        "document",
+        "ui_mockup",
+        "chart",
+        "other"
+      ],
+      "title": "Category",
+      "type": "string"
+    },
+    "Confidence": {
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/Category"
+        },
+        "score": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "category",
+        "score"
+      ],
+      "title": "Confidence",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "primary": {
+      "$ref": "#/$defs/Category"
+    },
+    "confidences": {
+      "items": {
+        "$ref": "#/$defs/Confidence"
+      },
+      "title": "Confidences",
+      "type": "array"
+    },
+    "rationale": {
+      "default": "",
+      "title": "Rationale",
+      "type": "string"
+    }
+  },
+  "required": [
+    "primary",
+    "confidences"
+  ],
+  "title": "Classification",
+  "type": "object"
+}

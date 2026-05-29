@@ -1,0 +1,35 @@
+{
+  "properties": {
+    "platform": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Platform"
+    },
+    "participants": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Participants",
+      "type": "array"
+    },
+    "messages": {
+      "items": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "title": "Messages",
+      "type": "array"
+    }
+  },
+  "title": "ChatFields",
+  "type": "object"
+}

@@ -1,0 +1,37 @@
+{
+  "properties": {
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "qty": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Qty"
+    },
+    "price": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Price"
+    }
+  },
+  "required": [
+    "description"
+  ],
+  "title": "ReceiptLine",
+  "type": "object"
+}

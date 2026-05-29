@@ -1,0 +1,44 @@
+{
+  "properties": {
+    "chart_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Chart Type"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Title"
+    },
+    "axes": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Axes",
+      "type": "object"
+    },
+    "series": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Series",
+      "type": "array"
+    }
+  },
+  "title": "ChartFields",
+  "type": "object"
+}

@@ -1,0 +1,657 @@
+{
+  "$defs": {
+    "Category": {
+      "enum": [
+        "receipt",
+        "code_snippet",
+        "error_stacktrace",
+        "chat_screenshot",
+        "meme",
+        "document",
+        "ui_mockup",
+        "chart",
+        "other"
+      ],
+      "title": "Category",
+      "type": "string"
+    },
+    "ChartFields": {
+      "properties": {
+        "chart_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chart Type"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "axes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Axes",
+          "type": "object"
+        },
+        "series": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Series",
+          "type": "array"
+        }
+      },
+      "title": "ChartFields",
+      "type": "object"
+    },
+    "ChatFields": {
+      "properties": {
+        "platform": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Platform"
+        },
+        "participants": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Participants",
+          "type": "array"
+        },
+        "messages": {
+          "items": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "title": "Messages",
+          "type": "array"
+        }
+      },
+      "title": "ChatFields",
+      "type": "object"
+    },
+    "CodeFields": {
+      "properties": {
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Language"
+        },
+        "code": {
+          "default": "",
+          "title": "Code",
+          "type": "string"
+        },
+        "line_count": {
+          "default": 0,
+          "title": "Line Count",
+          "type": "integer"
+        }
+      },
+      "title": "CodeFields",
+      "type": "object"
+    },
+    "DocumentFields": {
+      "properties": {
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        },
+        "page_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page Kind"
+        }
+      },
+      "title": "DocumentFields",
+      "type": "object"
+    },
+    "ErrorFields": {
+      "properties": {
+        "framework": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Framework"
+        },
+        "exception": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exception"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        },
+        "likely_cause": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Likely Cause"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line"
+        }
+      },
+      "title": "ErrorFields",
+      "type": "object"
+    },
+    "ExtractedFields": {
+      "description": "Discriminated bag of per-category extracted fields.",
+      "properties": {
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReceiptFields"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodeFields"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorFields"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "chat": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatFields"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "meme": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemeFields"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "document": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DocumentFields"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ui_mockup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UIMockupFields"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "chart": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChartFields"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "raw": {
+          "additionalProperties": true,
+          "title": "Raw",
+          "type": "object"
+        }
+      },
+      "title": "ExtractedFields",
+      "type": "object"
+    },
+    "MemeFields": {
+      "properties": {
+        "template": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "top_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Top Text"
+        },
+        "bottom_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bottom Text"
+        }
+      },
+      "title": "MemeFields",
+      "type": "object"
+    },
+    "ReceiptFields": {
+      "properties": {
+        "vendor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vendor"
+        },
+        "date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Date"
+        },
+        "subtotal": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subtotal"
+        },
+        "tax": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tax"
+        },
+        "total": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ReceiptLine"
+          },
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "title": "ReceiptFields",
+      "type": "object"
+    },
+    "ReceiptLine": {
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "qty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qty"
+        },
+        "price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "title": "ReceiptLine",
+      "type": "object"
+    },
+    "RouteAction": {
+      "enum": [
+        "none",
+        "save_to_dir",
+        "copy_to_clipboard",
+        "post_to_slack_webhook",
+        "open_url_template"
+      ],
+      "title": "RouteAction",
+      "type": "string"
+    },
+    "RouteDecision": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/RouteAction"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "executed": {
+          "default": false,
+          "title": "Executed",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": true,
+          "title": "Dry Run",
+          "type": "boolean"
+        },
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "RouteDecision",
+      "type": "object"
+    },
+    "UIMockupFields": {
+      "properties": {
+        "framework_guess": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Framework Guess"
+        },
+        "components": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Components",
+          "type": "array"
+        }
+      },
+      "title": "UIMockupFields",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "filename": {
+      "title": "Filename",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "primary_category": {
+      "$ref": "#/$defs/Category"
+    },
+    "confidence": {
+      "title": "Confidence",
+      "type": "number"
+    },
+    "ocr_text": {
+      "title": "Ocr Text",
+      "type": "string"
+    },
+    "extracted": {
+      "$ref": "#/$defs/ExtractedFields"
+    },
+    "route": {
+      "$ref": "#/$defs/RouteDecision"
+    },
+    "image_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Image Path"
+    },
+    "user_corrected_to": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Category"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "id",
+    "filename",
+    "created_at",
+    "primary_category",
+    "confidence",
+    "ocr_text",
+    "extracted",
+    "route"
+  ],
+  "title": "ClassificationRecord",
+  "type": "object"
+}

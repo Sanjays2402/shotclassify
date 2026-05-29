@@ -1,0 +1,36 @@
+{
+  "$defs": {
+    "Category": {
+      "enum": [
+        "receipt",
+        "code_snippet",
+        "error_stacktrace",
+        "chat_screenshot",
+        "meme",
+        "document",
+        "ui_mockup",
+        "chart",
+        "other"
+      ],
+      "title": "Category",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "category": {
+      "$ref": "#/$defs/Category"
+    },
+    "score": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Score",
+      "type": "number"
+    }
+  },
+  "required": [
+    "category",
+    "score"
+  ],
+  "title": "Confidence",
+  "type": "object"
+}
