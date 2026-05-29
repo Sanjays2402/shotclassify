@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "shotclassify.fullname" . }}-rules
+data:
+  rules.yaml: |
+    defaults:
+      dry_run: true
+    rules:
+      - { category: receipt,          min_confidence: 0.70, action: save_to_dir, target: /data/receipts }
+      - { category: code_snippet,     min_confidence: 0.60, action: copy_to_clipboard }
+      - { category: error_stacktrace, min_confidence: 0.65, action: open_url_template, target: "https://github.com/example/issues/new?title={title}&body={body}" }

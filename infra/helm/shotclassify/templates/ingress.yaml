@@ -1,0 +1,24 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "shotclassify.fullname" . }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "shotclassify.fullname" . }}-web
+                port: { number: 3000 }
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "shotclassify.fullname" . }}-api
+                port: { number: 7441 }
+{{- end }}

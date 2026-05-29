@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "shotclassify.fullname" . }}-worker
+  labels: {{- include "shotclassify.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount.worker }}
+  selector:
+    matchLabels: { app: shotclassify-worker }
+  template:
+    metadata:
+      labels: { app: shotclassify-worker }
+    spec:
+      containers:
+        - name: worker
+          image: "{{ .Values.image.worker.repository }}:{{ .Values.image.worker.tag }}"
+          env:
+            - { name: DATABASE_URL, value: "{{ .Values.postgres.url }}" }
+            - { name: REDIS_URL,    value: "{{ .Values.redis.url }}" }
+            {{- range $k, $v := .Values.env }}
+            - { name: "{{ $k }}", value: "{{ $v }}" }
+            {{- end }}
+          resources: {{- toYaml .Values.resources.worker | nindent 12 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "shotclassify.fullname" . }}-web
+spec:
+  replicas: {{ .Values.replicaCount.web }}
+  selector: { matchLabels: { app: shotclassify-web } }
+  template:
+    metadata: { labels: { app: shotclassify-web } }
+    spec:
+      containers:
+        - name: web
+          image: "{{ .Values.image.web.repository }}:{{ .Values.image.web.tag }}"
+          ports: [{containerPort: 3000}]
+          resources: {{- toYaml .Values.resources.web | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata: { name: {{ include "shotclassify.fullname" . }}-web }
+spec:
+  type: {{ .Values.service.web.type }}
+  ports: [{port: {{ .Values.service.web.port }}, targetPort: 3000}]
+  selector: { app: shotclassify-web }
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: {{ include "shotclassify.fullname" . }}-secret }
+type: Opaque
+stringData:
+  app-secret-key: {{ .Values.secret.appSecretKey | default "change-me-change-me-change-me-32!" | quote }}
+  api-key:         {{ .Values.secret.apiKey | default "change-me-api-key" | quote }}
+  oauth-client-id: {{ .Values.secret.oauthClientId | quote }}
+  oauth-client-secret: {{ .Values.secret.oauthClientSecret | quote }}

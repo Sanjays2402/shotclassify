@@ -1,0 +1,16 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "shotclassify.fullname" . }}-default-deny
+spec:
+  podSelector:
+    matchLabels:
+      app: shotclassify-api
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: shotclassify-web }
+  egress:
+    - to:
+        - podSelector: {}

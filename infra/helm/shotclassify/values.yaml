@@ -1,0 +1,61 @@
+image:
+  api:
+    repository: ghcr.io/sanjays2402/shotclassify-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  worker:
+    repository: ghcr.io/sanjays2402/shotclassify-worker
+    tag: latest
+  web:
+    repository: ghcr.io/sanjays2402/shotclassify-web
+    tag: latest
+
+replicaCount:
+  api: 2
+  worker: 2
+  web: 1
+
+service:
+  api:
+    type: ClusterIP
+    port: 7441
+  web:
+    type: ClusterIP
+    port: 3000
+
+ingress:
+  enabled: false
+  className: nginx
+  host: shotclassify.example.com
+
+env:
+  LLM_BASE_URL: "http://llm-proxy:4141/v1"
+  LLM_MODEL: "gpt-4o-mini"
+  AUTH_ENABLED: "true"
+  ROUTE_DRY_RUN: "true"
+  OTEL_ENABLED: "false"
+
+postgres:
+  enabled: true
+  url: "postgresql+psycopg2://shot:shot@postgres:5432/shotclassify"
+
+redis:
+  enabled: true
+  url: "redis://redis:6379/0"
+
+secret:
+  appSecretKey: ""
+  apiKey: ""
+  oauthClientId: ""
+  oauthClientSecret: ""
+
+resources:
+  api:
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits:   { cpu: "1",    memory: "1Gi" }
+  worker:
+    requests: { cpu: "200m", memory: "512Mi" }
+    limits:   { cpu: "2",    memory: "2Gi" }
+  web:
+    requests: { cpu: "50m",  memory: "128Mi" }
+    limits:   { cpu: "500m", memory: "512Mi" }
