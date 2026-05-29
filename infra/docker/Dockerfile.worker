@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        tesseract-ocr libtesseract-dev libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir uv
+WORKDIR /app
+COPY pyproject.toml ./
+COPY packages ./packages
+COPY services ./services
+COPY cli ./cli
+RUN uv pip install --system -e ./packages/common -e ./packages/ocr -e ./packages/classify \
+                              -e ./packages/extract -e ./packages/route -e ./packages/store -e ./cli \
+    && uv pip install --system rq redis pillow pytesseract opencv-python-headless numpy \
+                              langdetect openai httpx pygments pyyaml structlog \
+                              sqlalchemy psycopg2-binary pydantic-settings authlib itsdangerous
+CMD ["python", "-m", "services.worker.app.main"]

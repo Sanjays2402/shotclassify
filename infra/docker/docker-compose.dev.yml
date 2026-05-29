@@ -1,0 +1,77 @@
+name: shotclassify-dev
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shot
+      POSTGRES_PASSWORD: shot
+      POSTGRES_DB: shotclassify
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shot"]
+      interval: 5s
+      retries: 10
+    volumes:
+      - pg:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    depends_on:
+      redis: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql+psycopg2://shot:shot@postgres:5432/shotclassify
+      REDIS_URL: redis://redis:6379/0
+      LLM_BASE_URL: http://host.docker.internal:4141/v1
+      LLM_API_KEY: copilot
+      LLM_MODEL: gpt-4o-mini
+      AUTH_ENABLED: "true"
+      AUTH_API_KEY: dev-api-key-change-me
+      APP_SECRET_KEY: dev-secret-change-me-please-32bytes!!
+      STORAGE_LOCAL_DIR: /data/storage
+    ports: ["7441:7441"]
+    volumes:
+      - data:/data
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.worker
+    depends_on:
+      redis: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql+psycopg2://shot:shot@postgres:5432/shotclassify
+      REDIS_URL: redis://redis:6379/0
+      LLM_BASE_URL: http://host.docker.internal:4141/v1
+      LLM_API_KEY: copilot
+      STORAGE_LOCAL_DIR: /data/storage
+    volumes:
+      - data:/data
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.web
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_BASE: http://localhost:7441
+      SHOTCLASSIFY_API_BASE: http://api:7441
+      SHOTCLASSIFY_API_KEY: dev-api-key-change-me
+    ports: ["3000:3000"]
+
+volumes:
+  pg:
+  data:
