@@ -1,0 +1,27 @@
+{
+  "total": 340,
+  "correct": 212,
+  "accuracy": 0.6235,
+  "elapsed_s": 72.67,
+  "confusion": {
+    "chat_screenshot": {
+      "error_stacktrace": 42,
+      "chat_screenshot": 13
+    },
+    "code_snippet": {
+      "code_snippet": 29,
+      "error_stacktrace": 9,
+      "receipt": 32
+    },
+    "document": {
+      "error_stacktrace": 18,
+      "receipt": 27
+    },
+    "error_stacktrace": {
+      "error_stacktrace": 70
+    },
+    "receipt": {
+      "receipt": 100
+    }
+  }
+}
