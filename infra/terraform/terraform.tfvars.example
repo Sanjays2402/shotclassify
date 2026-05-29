@@ -1,0 +1,7 @@
+region = "us-west-2"
+name   = "shotclassify"
+tags = {
+  Project = "shotclassify"
+  Owner   = "sanjay"
+  Env     = "prod"
+}
