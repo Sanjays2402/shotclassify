@@ -1,0 +1,85 @@
+"""OAuth login (GitHub) + session cookie."""
+from __future__ import annotations
+
+import secrets
+import urllib.parse
+
+import httpx
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+
+from shotclassify_common import get_settings
+
+from ..middleware.auth import issue_session
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+_AUTHORIZE = "https://github.com/login/oauth/authorize"
+_TOKEN = "https://github.com/login/oauth/access_token"
+_USER = "https://api.github.com/user"
+
+
+@router.get("/login")
+def login(request: Request):
+    s = get_settings()
+    if not s.auth_oauth_client_id:
+        return HTMLResponse(
+            "<h1>OAuth not configured</h1>"
+            "<p>Set AUTH_OAUTH_CLIENT_ID/SECRET, or use X-API-Key for the CLI.</p>",
+            status_code=200,
+        )
+    state = secrets.token_urlsafe(16)
+    redirect_uri = str(request.url_for("auth_callback"))
+    params = {
+        "client_id": s.auth_oauth_client_id,
+        "redirect_uri": redirect_uri,
+        "scope": "read:user",
+        "state": state,
+    }
+    resp = RedirectResponse(f"{_AUTHORIZE}?{urllib.parse.urlencode(params)}")
+    resp.set_cookie("sc_oauth_state", state, httponly=True, samesite="lax")
+    return resp
+
+
+@router.get("/callback", name="auth_callback")
+def callback(request: Request, code: str, state: str):
+    s = get_settings()
+    cookie_state = request.cookies.get("sc_oauth_state")
+    if not cookie_state or cookie_state != state:
+        raise HTTPException(400, "Invalid OAuth state.")
+    with httpx.Client(timeout=10) as client:
+        r = client.post(
+            _TOKEN,
+            data={
+                "client_id": s.auth_oauth_client_id,
+                "client_secret": s.auth_oauth_client_secret,
+                "code": code,
+            },
+            headers={"Accept": "application/json"},
+        )
+        r.raise_for_status()
+        access = r.json().get("access_token")
+        if not access:
+            raise HTTPException(400, "No access token returned.")
+        u = client.get(_USER, headers={"Authorization": f"Bearer {access}"})
+        u.raise_for_status()
+        login_name = u.json().get("login")
+    if s.auth_allowed_github_login and login_name != s.auth_allowed_github_login:
+        raise HTTPException(403, "Not in allowlist.")
+    resp = RedirectResponse("/")
+    resp.set_cookie(
+        "sc_session", issue_session(login_name), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30
+    )
+    return resp
+
+
+@router.post("/logout")
+def logout():
+    resp = RedirectResponse("/", status_code=303)
+    resp.delete_cookie("sc_session")
+    return resp
+
+
+@router.get("/whoami")
+def whoami(request: Request):
+    return {"principal": getattr(request.state, "principal", None)}
