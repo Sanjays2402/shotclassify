@@ -21,8 +21,8 @@ def test_renormalise_sums_to_one():
     c = Classification(
         primary=Category.receipt,
         confidences=[
-            Confidence(category=Category.receipt, score=2.0),
-            Confidence(category=Category.meme, score=2.0),
+            Confidence(category=Category.receipt, score=0.4),
+            Confidence(category=Category.meme, score=0.4),
         ],
     )
     r = renormalise(c)
