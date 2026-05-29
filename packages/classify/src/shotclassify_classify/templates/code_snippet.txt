@@ -1,0 +1,5 @@
+CODE SNIPPET EXTRACTION RULES
+Return the code exactly as displayed, preserving indentation. Detect the
+language using syntactic cues (def/import for Python, fn/let mut for Rust,
+package/func for Go, const/let/=> for JavaScript). Do not include the surrounding
+chrome of the editor.

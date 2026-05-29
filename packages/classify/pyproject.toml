@@ -1,0 +1,10 @@
+[project]
+name = "shotclassify-classify"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "ShotClassify classify package"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[tool.hatch.build.targets.wheel]
+packages = ["src/shotclassify_classify"]

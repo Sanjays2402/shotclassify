@@ -1,0 +1,4 @@
+RECEIPT EXTRACTION RULES
+Identify the vendor on the first non-numeric line. Look for currency symbols and
+ISO codes. The line beginning with "Total" wins over "Subtotal". Format dates as
+YYYY-MM-DD. Itemise quantity, description, and price; collapse repeated items.

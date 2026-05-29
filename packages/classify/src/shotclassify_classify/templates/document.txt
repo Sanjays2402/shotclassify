@@ -1,0 +1,3 @@
+DOCUMENT EXTRACTION RULES
+Summarise in one sentence what the page is. page_kind is one of: pdf, slide,
+article, email, spreadsheet, form.

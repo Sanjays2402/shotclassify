@@ -1,0 +1,4 @@
+ERROR EXTRACTION RULES
+Identify the framework (python, node, jvm, dotnet, ruby). Extract the most
+specific exception, its message, the topmost user-code frame, and a one-sentence
+likely cause that a human engineer can act on.

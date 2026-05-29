@@ -1,0 +1,3 @@
+CHART EXTRACTION RULES
+chart_type: bar, line, pie, scatter, heatmap, candlestick. Axes maps x and y to
+their labels. Series is the legend in display order.

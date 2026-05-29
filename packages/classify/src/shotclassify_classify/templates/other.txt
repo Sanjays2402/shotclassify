@@ -1,0 +1,3 @@
+OTHER FALLBACK
+Use this when nothing else fits. Be conservative; many screenshots are documents
+or charts in disguise.

@@ -1,0 +1,4 @@
+CHAT EXTRACTION RULES
+Identify the platform from UI cues (Slack channel hash, iMessage bubble shape,
+WhatsApp green bubbles). Extract participants from the messages, not from any
+header alone. Strip read receipts and timestamps from message bodies.

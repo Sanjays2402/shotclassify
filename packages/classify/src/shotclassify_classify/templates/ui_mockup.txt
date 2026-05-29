@@ -1,0 +1,4 @@
+UI MOCKUP EXTRACTION RULES
+Guess the source tool from chrome (Figma toolbar, Sketch grid, raw wireframe).
+Components is a flat list of recognisable UI elements (button, table, modal,
+chart, navbar, etc.).

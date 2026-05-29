@@ -1,0 +1,3 @@
+MEME EXTRACTION RULES
+Identify the template name (Drake, Distracted Boyfriend, etc.) when obvious.
+Top text and bottom text capture the captions in reading order.
