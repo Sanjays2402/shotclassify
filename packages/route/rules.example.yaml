@@ -1,0 +1,47 @@
+defaults:
+  dry_run: true
+  slack_webhook: ""
+
+rules:
+  - category: receipt
+    min_confidence: 0.70
+    action: save_to_dir
+    target: ~/Documents/Receipts
+
+  - category: code_snippet
+    min_confidence: 0.60
+    action: copy_to_clipboard
+
+  - category: error_stacktrace
+    min_confidence: 0.65
+    action: open_url_template
+    target: "https://github.com/Sanjays2402/shotclassify/issues/new?title={title}&body={body}"
+
+  - category: chart
+    min_confidence: 0.55
+    action: save_to_dir
+    target: ~/Documents/Charts
+
+  - category: document
+    min_confidence: 0.55
+    action: save_to_dir
+    target: ~/Documents/Scans
+
+  - category: meme
+    min_confidence: 0.50
+    action: save_to_dir
+    target: ~/Pictures/Memes
+
+  - category: ui_mockup
+    min_confidence: 0.55
+    action: save_to_dir
+    target: ~/Documents/UI
+
+  - category: chat_screenshot
+    min_confidence: 0.55
+    action: save_to_dir
+    target: ~/Documents/Chats
+
+  - category: other
+    min_confidence: 0.0
+    action: none
