@@ -89,3 +89,17 @@ class AuditRepository:
 
         with get_session() as s:
             return int(s.execute(select(func.count(AuditLogRow.id))).scalar() or 0)
+
+    def list_for_principal(self, principal: str, limit: int = 10000) -> list[dict[str, Any]]:
+        return self.list(limit=limit, principal=principal)
+
+    def delete_for_principal(self, principal: str) -> int:
+        """Hard-delete every audit row owned by ``principal`` (GDPR erasure)."""
+        from sqlalchemy import delete as sa_delete
+
+        with get_session() as s:
+            result = s.execute(
+                sa_delete(AuditLogRow).where(AuditLogRow.principal == principal)
+            )
+            s.commit()
+            return int(result.rowcount or 0)

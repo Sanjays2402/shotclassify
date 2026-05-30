@@ -22,6 +22,7 @@ from .routes import auth as auth_routes
 from .routes import classify as classify_routes
 from .routes import health as health_routes
 from .routes import history as history_routes
+from .routes import me as me_routes
 from .routes import metrics as metrics_routes
 from .routes import settings as settings_routes
 
@@ -69,6 +70,7 @@ def create_app() -> FastAPI:
     app.include_router(history_routes.router)
     app.include_router(settings_routes.router)
     app.include_router(audit_routes.router)
+    app.include_router(me_routes.router)
     storage_root = Path(s.storage_local_dir)
     storage_root.mkdir(parents=True, exist_ok=True)
     app.mount("/blob", StaticFiles(directory=str(storage_root)), name="blob")

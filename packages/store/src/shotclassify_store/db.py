@@ -31,6 +31,10 @@ class ClassificationRow(Base):
     route: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     user_corrected_to: Mapped[str | None] = mapped_column(String(64), nullable=True)
     elapsed_ms: Mapped[int] = mapped_column(default=0)
+    # GDPR / data lifecycle: principal that created the record. Nullable so
+    # existing rows from before the migration remain valid; new rows are
+    # tagged from request.state.principal by the classify route.
+    principal: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
 
 class ApiKeyRow(Base):

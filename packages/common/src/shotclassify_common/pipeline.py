@@ -20,6 +20,7 @@ def process_image(
     note: str | None = None,
     save: bool = True,
     item_id: str | None = None,
+    principal: str | None = None,
 ) -> ProcessResult:
     image_path = str(image_path)
     started = time.perf_counter()
@@ -41,7 +42,7 @@ def process_image(
     )
     if save:
         try:
-            Repository().save_result(result, image_path=image_path)
+            Repository().save_result(result, image_path=image_path, principal=principal)
         except Exception as exc:
             log.warning("persist_failed", error=str(exc))
     log.info(

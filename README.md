@@ -156,6 +156,11 @@ Settings (`/v1/settings`):
 - `PUT /v1/settings/rules`
 - `GET /v1/settings/env`
 
+Data lifecycle (`/v1/me`):
+
+- `GET /v1/me/data` export everything tied to the authenticated principal.
+- `DELETE /v1/me/data?confirm=erase` permanently erase it.
+
 Static blobs are served from `/blob/*`.
 
 ## Categories
@@ -200,6 +205,56 @@ Generate inputs with `python scripts/make_corpus.py` then `python scripts/bench.
 ```
 
 ## Operations
+
+### Data lifecycle (GDPR)
+
+The API exposes a per-principal export and erasure endpoint under `/v1/me/data`.
+Scope is the request principal as set by `APIKeyAndSessionAuth`: the GitHub
+login for session users, or the literal string `api-key` for API key callers.
+
+Export bundles the caller's identity, every `classifications` row tagged with
+that principal (full extracted/route JSON plus OCR text), and every `audit_log`
+row recorded against the principal:
+
+```bash
+curl -H "X-API-Key: $AUTH_API_KEY" https://host/v1/me/data | jq
+```
+
+Response shape:
+
+```json
+{
+  "principal": "api-key",
+  "exported_at": "2026-05-30T18:00:00+00:00",
+  "request_id": "...",
+  "counts": { "classifications": 12, "audit_log": 47 },
+  "classifications": [ /* full ClassificationRecord objects */ ],
+  "audit_log": [ /* full audit rows */ ]
+}
+```
+
+Erasure is hard-delete and irreversible. It removes every matching
+`classifications` row, unlinks any blobs that live under `STORAGE_LOCAL_DIR`,
+and removes every `audit_log` row owned by the principal. A `confirm=erase`
+query parameter is required so accidental DELETEs return `400` instead of
+wiping data:
+
+```bash
+curl -X DELETE -H "X-API-Key: $AUTH_API_KEY" \
+  "https://host/v1/me/data?confirm=erase"
+```
+
+Classifications are tagged with their owning principal at write time via the
+`principal` column on the `classifications` table (Alembic migration
+`0003_classification_principal`). Rows written before the migration have
+`principal = NULL` and are therefore not returned by export and not removed by
+erasure; operators handling pre-migration data should backfill the column from
+the corresponding audit rows before relying on `/v1/me/data` for compliance
+reports.
+
+The DELETE call itself is audited by `AuditLogMiddleware` after the response
+is sent, so the erasure action remains forensically visible without retaining
+any user payload.
 
 ### Audit log
 

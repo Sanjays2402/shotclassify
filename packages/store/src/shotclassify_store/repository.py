@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import or_, select
-
 from shotclassify_common import (
     Category,
     ClassificationRecord,
@@ -12,6 +10,7 @@ from shotclassify_common import (
     ProcessResult,
     RouteDecision,
 )
+from sqlalchemy import or_, select
 
 from .db import ClassificationRow, get_session, init_db
 
@@ -20,7 +19,12 @@ class Repository:
     def __init__(self) -> None:
         init_db()
 
-    def save_result(self, result: ProcessResult, image_path: str | None = None) -> None:
+    def save_result(
+        self,
+        result: ProcessResult,
+        image_path: str | None = None,
+        principal: str | None = None,
+    ) -> None:
         row = ClassificationRow(
             id=result.id,
             filename=result.filename,
@@ -33,10 +37,56 @@ class Repository:
             extracted=result.extracted.model_dump(mode="json"),
             route=result.route.model_dump(mode="json"),
             elapsed_ms=result.elapsed_ms,
+            principal=principal,
         )
         with get_session() as s:
             s.merge(row)
             s.commit()
+
+    def list_by_principal(self, principal: str) -> list[ClassificationRecord]:
+        stmt = (
+            select(ClassificationRow)
+            .where(ClassificationRow.principal == principal)
+            .order_by(ClassificationRow.created_at.desc())
+        )
+        with get_session() as s:
+            rows = list(s.execute(stmt).scalars())
+        return [self._to_record(r) for r in rows]
+
+    def delete_by_principal(self, principal: str) -> int:
+        """Hard-delete all classifications owned by a principal.
+
+        Returns the number of rows removed. Also unlinks the associated blob
+        files when they live under the configured local storage dir.
+        """
+        from pathlib import Path
+
+        from shotclassify_common import get_settings
+
+        storage_root = Path(get_settings().storage_local_dir).resolve()
+        with get_session() as s:
+            rows = list(
+                s.execute(
+                    select(ClassificationRow).where(
+                        ClassificationRow.principal == principal
+                    )
+                ).scalars()
+            )
+            removed = 0
+            for row in rows:
+                if row.image_path:
+                    try:
+                        p = Path(row.image_path).resolve()
+                        # Only unlink files inside the configured storage root
+                        # to avoid traversal-induced deletes.
+                        if str(p).startswith(str(storage_root)) and p.exists():
+                            p.unlink()
+                    except OSError:
+                        pass
+                s.delete(row)
+                removed += 1
+            s.commit()
+        return removed
 
     def list(
         self,

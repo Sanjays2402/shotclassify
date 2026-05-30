@@ -4,8 +4,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
-
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from shotclassify_common import Category, ProcessResult, get_settings
 from shotclassify_common.pipeline import process_image
 from shotclassify_common.utils import ensure_dir, new_id
@@ -27,34 +26,46 @@ def _save_upload(upload: UploadFile) -> tuple[str, str]:
 
 @router.post("/classify", response_model=ProcessResult)
 async def classify(
+    request: Request,
     file: UploadFile = File(...),
     note: str | None = Form(None),
 ) -> ProcessResult:
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(415, "Upload must be an image.")
     rid, path = _save_upload(file)
-    return await asyncio.to_thread(process_image, path, note, True, rid)
+    principal = getattr(request.state, "principal", None)
+    return await asyncio.to_thread(process_image, path, note, True, rid, principal)
 
 
 @router.post("/classify/batch", response_model=list[ProcessResult])
 async def classify_batch(
+    request: Request,
     files: list[UploadFile] = File(...),
     note: str | None = Form(None),
 ) -> list[ProcessResult]:
     if not files:
         raise HTTPException(400, "No files.")
     saved = [_save_upload(f) for f in files]
-    tasks = [asyncio.to_thread(process_image, p, note, True, rid) for rid, p in saved]
+    principal = getattr(request.state, "principal", None)
+    tasks = [
+        asyncio.to_thread(process_image, p, note, True, rid, principal)
+        for rid, p in saved
+    ]
     return await asyncio.gather(*tasks)
 
 
 @router.post("/classify/{item_id}/reclassify", response_model=ProcessResult)
-async def reclassify(item_id: str, note: str | None = Form(None)) -> ProcessResult:
+async def reclassify(
+    item_id: str, request: Request, note: str | None = Form(None)
+) -> ProcessResult:
     repo = Repository()
     record = repo.get(item_id)
     if not record or not record.image_path or not Path(record.image_path).exists():
         raise HTTPException(404, "Original image not available for reclassification.")
-    return await asyncio.to_thread(process_image, record.image_path, note, True, item_id)
+    principal = getattr(request.state, "principal", None)
+    return await asyncio.to_thread(
+        process_image, record.image_path, note, True, item_id, principal
+    )
 
 
 @router.post("/classify/{item_id}/correct")
