@@ -673,6 +673,46 @@ of who did what, so prioritise its restore path.
   `scope="ip"` from a single address that has no key are usually scanners,
   block at the ingress.
 
+### Alerting (PrometheusRule)
+
+The Helm chart ships a `PrometheusRule` covering availability, error rate,
+latency, and saturation. It is opt-in so installs without the Prometheus
+Operator do not fail to render. Enable it by setting
+`metrics.prometheusRule.enabled=true` and labelling it so your Prometheus
+instance picks it up:
+
+```yaml
+metrics:
+  prometheusRule:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack   # matches Prometheus ruleSelector
+    downFor: 2m
+    errorRateThreshold: 0.05           # 5% 5xx over 10m -> warning
+    exceptionRatePerSec: 0.1           # unhandled exceptions per second
+    latencyP95Seconds: 2.5             # route p95 over 15m -> warning
+    inFlightThreshold: 50              # sustained queue depth
+```
+
+Alerts fired by the rule, each carrying a `runbook_url` that points back at
+this section:
+
+- `ShotclassifyApiDown` (critical): no successful scrape for `downFor`.
+- `ShotclassifyApiHighErrorRate` (warning): 5xx ratio over threshold for 10m.
+- `ShotclassifyApiHighExceptionRate` (warning): unhandled exceptions/s over
+  threshold for 10m. Cross-check Sentry for stack traces.
+- `ShotclassifyApiHighLatencyP95` (warning): per-route p95 above threshold
+  for 15m. Check upstream LLM, OCR, DB, and CPU saturation.
+- `ShotclassifyApiInFlightSaturation` (warning): in-flight requests above
+  threshold for 10m. Scale `replicaCount.api` or investigate slow
+  downstreams.
+
+Rule structure is pinned by `tests/test_helm_prometheus_rule.py`, which
+renders the chart with the rule on and asserts the alert set, severities,
+runbook links, and that the expressions still reference the metric names
+emitted by `services/api/app/middleware/metrics.py`. A metric rename will
+fail the test before it silently breaks paging.
+
 ### Error tracking (Sentry)
 
 The API and worker initialize the Sentry SDK in their startup hooks via

@@ -1,0 +1,81 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "shotclassify.fullname" . }}-api
+  labels:
+    {{- include "shotclassify.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: shotclassify-api.availability
+      rules:
+        - alert: ShotclassifyApiDown
+          expr: |
+            absent(up{job=~".*shotclassify.*-api.*"} == 1)
+          for: {{ .Values.metrics.prometheusRule.downFor }}
+          labels:
+            severity: critical
+            service: shotclassify-api
+          annotations:
+            summary: "shotclassify API is unreachable"
+            description: "No /metrics scrapes succeeded for the API for {{ .Values.metrics.prometheusRule.downFor }}. Check pod status, readiness probes, and ingress."
+            runbook_url: "https://github.com/Sanjays2402/shotclassify/blob/main/README.md#on-call"
+        - alert: ShotclassifyApiHighErrorRate
+          expr: |
+            (
+              sum(rate(shotclassify_http_requests_total{status=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(shotclassify_http_requests_total[5m])), 0.001)
+            ) > {{ .Values.metrics.prometheusRule.errorRateThreshold }}
+          for: 10m
+          labels:
+            severity: warning
+            service: shotclassify-api
+          annotations:
+            summary: "5xx rate above {{ .Values.metrics.prometheusRule.errorRateThreshold }} for 10m"
+            description: "More than {{ .Values.metrics.prometheusRule.errorRateThreshold }} of HTTP responses are 5xx. Check logs and Sentry."
+            runbook_url: "https://github.com/Sanjays2402/shotclassify/blob/main/README.md#on-call"
+        - alert: ShotclassifyApiHighExceptionRate
+          expr: |
+            sum(rate(shotclassify_http_exceptions_total[5m])) > {{ .Values.metrics.prometheusRule.exceptionRatePerSec }}
+          for: 10m
+          labels:
+            severity: warning
+            service: shotclassify-api
+          annotations:
+            summary: "Unhandled exceptions firing above {{ .Values.metrics.prometheusRule.exceptionRatePerSec }}/s"
+            description: "Unhandled exceptions are being raised in request handlers. Check Sentry and recent deploys."
+            runbook_url: "https://github.com/Sanjays2402/shotclassify/blob/main/README.md#on-call"
+    - name: shotclassify-api.latency
+      rules:
+        - alert: ShotclassifyApiHighLatencyP95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(shotclassify_http_request_duration_seconds_bucket[10m])) by (le, route)
+            ) > {{ .Values.metrics.prometheusRule.latencyP95Seconds }}
+          for: 15m
+          labels:
+            severity: warning
+            service: shotclassify-api
+          annotations:
+            summary: "p95 latency above {{ .Values.metrics.prometheusRule.latencyP95Seconds }}s for 15m"
+            description: "Route-level p95 latency is degraded. Check upstream LLM, OCR, DB, and CPU saturation."
+            runbook_url: "https://github.com/Sanjays2402/shotclassify/blob/main/README.md#on-call"
+    - name: shotclassify-api.saturation
+      rules:
+        - alert: ShotclassifyApiInFlightSaturation
+          expr: |
+            sum(shotclassify_http_requests_in_flight) > {{ .Values.metrics.prometheusRule.inFlightThreshold }}
+          for: 10m
+          labels:
+            severity: warning
+            service: shotclassify-api
+          annotations:
+            summary: "In-flight requests above {{ .Values.metrics.prometheusRule.inFlightThreshold }}"
+            description: "Sustained queue depth suggests under-provisioned API replicas. Scale up or investigate slow downstreams."
+            runbook_url: "https://github.com/Sanjays2402/shotclassify/blob/main/README.md#on-call"
+{{- end }}

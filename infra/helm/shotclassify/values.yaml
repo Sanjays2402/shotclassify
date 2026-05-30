@@ -87,6 +87,18 @@ metrics:
     interval: 30s
     scrapeTimeout: 10s
     labels: {}
+  prometheusRule:
+    # PrometheusRule for paging on availability, error rate, latency, and
+    # saturation. Requires the Prometheus Operator CRDs in-cluster.
+    enabled: false
+    # Extra labels (e.g. release: kube-prometheus-stack) so Prometheus picks
+    # the rule up via its ruleSelector.
+    labels: {}
+    downFor: 2m
+    errorRateThreshold: 0.05
+    exceptionRatePerSec: 0.1
+    latencyP95Seconds: 2.5
+    inFlightThreshold: 50
 
 pdb:
   # PodDisruptionBudgets keep at least one pod available during voluntary
