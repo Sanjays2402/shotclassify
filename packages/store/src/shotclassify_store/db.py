@@ -1,14 +1,13 @@
 """SQLAlchemy models + session factory."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
+from shotclassify_common import get_settings
 from sqlalchemy import JSON, DateTime, Float, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
-
-from shotclassify_common import get_settings
 
 
 class Base(DeclarativeBase):
@@ -22,7 +21,7 @@ class ClassificationRow(Base):
     filename: Mapped[str] = mapped_column(String(512))
     image_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     primary_category: Mapped[str] = mapped_column(String(64), index=True)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
@@ -41,9 +40,32 @@ class ApiKeyRow(Base):
     label: Mapped[str] = mapped_column(String(128))
     token_hash: Mapped[str] = mapped_column(String(128), index=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AuditLogRow(Base):
+    """Persisted audit trail: who did what when, for compliance and forensics."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        index=True,
+    )
+    principal: Mapped[str] = mapped_column(String(128), index=True)
+    method: Mapped[str] = mapped_column(String(8))
+    path: Mapped[str] = mapped_column(String(512), index=True)
+    status_code: Mapped[int] = mapped_column(default=0)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    elapsed_ms: Mapped[int] = mapped_column(default=0)
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 @lru_cache(maxsize=1)

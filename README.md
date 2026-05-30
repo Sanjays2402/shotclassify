@@ -199,6 +199,70 @@ Generate inputs with `python scripts/make_corpus.py` then `python scripts/bench.
 └── tests/                pytest suite
 ```
 
+## Operations
+
+### Audit log
+
+Every authenticated, state-changing request (POST, PUT, PATCH, DELETE) is
+persisted to the `audit_log` table by `AuditLogMiddleware`. Each row captures:
+
+- `principal` (GitHub login or `api-key`), `method`, `path`, `status_code`
+- `request_id` (matches the `x-request-id` response header and structured logs)
+- `client_ip` (honours `X-Forwarded-For` when present), `user_agent`
+- `elapsed_ms`, `target_id` (best-effort `/v1/<resource>/<id>` extraction)
+- `created_at` (UTC), plus a free-form `extra` JSON column for future fields
+
+Read-only requests, health probes, OAuth callbacks, and static `/blob/*` fetches
+are deliberately skipped to keep the table focused on actions worth reviewing.
+Audit writes are wrapped in a `try/except` so a logging failure can never break
+the user request, but failures are emitted as `audit_log_write_failed` warnings.
+
+Query the trail:
+
+```bash
+curl -H "X-API-Key: $AUTH_API_KEY" https://host/v1/audit?limit=50
+curl -H "X-API-Key: $AUTH_API_KEY" "https://host/v1/audit?principal=api-key"
+curl -H "X-API-Key: $AUTH_API_KEY" "https://host/v1/audit?path_prefix=/v1/history"
+curl -H "X-API-Key: $AUTH_API_KEY" https://host/v1/audit/stats
+```
+
+The table is created automatically via `init_db()` on boot and is also covered
+by Alembic migration `0002_audit_log` for Postgres deployments where you want
+to manage schema changes explicitly.
+
+### Deploy
+
+Production deployments use the Helm chart in `infra/helm/shotclassify`. The
+chart ships a multi-stage Dockerfile (`infra/docker/Dockerfile`), HPA, network
+policy, and configurable resource limits. CI runs lint + tests + build on every
+push via `.github/workflows/ci.yml`.
+
+### Health and readiness
+
+- `GET /healthz` returns liveness without touching dependencies.
+- `GET /readyz` checks DB connectivity and reports queue / LLM endpoints.
+
+Wire these to your Kubernetes liveness/readiness probes (defaults already set in
+the Helm chart).
+
+### Backup
+
+The SQLite default is fine for single-node and dev, but production should run
+Postgres via `DATABASE_URL`. Back up both the database (classifications and
+audit log) and the object/blob store (`STORAGE_LOCAL_DIR` or the configured S3
+bucket). The audit log is append-only in practice and is your forensic record
+of who did what, so prioritise its restore path.
+
+### On-call
+
+- Structured JSON logs include `request_id`, `path`, and `method`. Search for a
+  request by `request_id` to correlate the full request lifecycle across the
+  API, worker, and audit log.
+- If `audit_log_write_failed` warnings appear, the request itself still
+  succeeded; investigate DB connectivity to the audit table.
+- Spike in `/v1/audit` rows from an unexpected `principal` is a credential
+  abuse signal. Rotate `AUTH_API_KEY` and revoke OAuth sessions if needed.
+
 ## License
 
 MIT. See `LICENSE`.
