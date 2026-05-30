@@ -1,20 +1,58 @@
-FROM node:20-bookworm-slim AS deps
+# Multi-stage production Dockerfile for the Next.js web app.
+
+ARG NODE_VERSION=20
+
+############################
+# Stage 1: deps (full install for build)
+############################
+FROM node:${NODE_VERSION}-bookworm-slim AS deps
 WORKDIR /app
 COPY web/package.json web/package-lock.json* ./
-RUN npm install --no-audit --no-fund
+RUN npm ci --no-audit --no-fund || npm install --no-audit --no-fund
 
-FROM node:20-bookworm-slim AS build
+############################
+# Stage 2: build
+############################
+FROM node:${NODE_VERSION}-bookworm-slim AS build
 WORKDIR /app
-COPY web/ ./
+ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
+COPY web/ ./
 RUN npm run build
 
-FROM node:20-bookworm-slim AS run
+############################
+# Stage 3: prod-deps (no devDependencies)
+############################
+FROM node:${NODE_VERSION}-bookworm-slim AS proddeps
 WORKDIR /app
-ENV NODE_ENV=production
-COPY --from=build /app/.next ./.next
-COPY --from=build /app/public ./public
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/node_modules ./node_modules
+COPY web/package.json web/package-lock.json* ./
+RUN npm ci --omit=dev --no-audit --no-fund || npm install --omit=dev --no-audit --no-fund
+
+############################
+# Stage 4: runtime
+############################
+FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        tini curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 app \
+    && useradd  --system --uid 10001 --gid 10001 --home-dir /app --shell /usr/sbin/nologin app
+
+COPY --from=build    --chown=app:app /app/.next       ./.next
+COPY --from=build    --chown=app:app /app/public      ./public
+COPY --from=build    --chown=app:app /app/package.json ./package.json
+COPY --from=proddeps --chown=app:app /app/node_modules ./node_modules
+
+USER app:app
 EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl --silent --fail "http://127.0.0.1:${PORT}/" || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["npm", "start"]

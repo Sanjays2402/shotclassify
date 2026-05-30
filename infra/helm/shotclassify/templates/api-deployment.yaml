@@ -15,11 +15,21 @@ spec:
         prometheus.io/port: "7441"
         prometheus.io/path: "/metrics"
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: api
           image: "{{ .Values.image.api.repository }}:{{ .Values.image.api.tag }}"
           imagePullPolicy: {{ .Values.image.api.pullPolicy }}
           ports: [{containerPort: 7441}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities: { drop: ["ALL"] }
           env:
             - { name: DATABASE_URL, value: "{{ .Values.postgres.url }}" }
             - { name: REDIS_URL,    value: "{{ .Values.redis.url }}" }

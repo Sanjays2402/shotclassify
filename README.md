@@ -206,6 +206,54 @@ Generate inputs with `python scripts/make_corpus.py` then `python scripts/bench.
 
 ## Operations
 
+### Container images
+
+All three services ship as multi-stage Docker images under `infra/docker/`:
+
+| Image     | Dockerfile                  | Base                       | Final user      |
+| --------- | --------------------------- | -------------------------- | --------------- |
+| API       | `infra/docker/Dockerfile`        | `python:3.11-slim`         | `app` (uid 10001) |
+| Worker    | `infra/docker/Dockerfile.worker` | `python:3.11-slim`         | `app` (uid 10001) |
+| Web       | `infra/docker/Dockerfile.web`    | `node:20-bookworm-slim`    | `app` (uid 10001) |
+
+Every Dockerfile is multi-stage. The builder stage installs the full compile
+toolchain (`build-essential`, `libpq-dev`, `libffi-dev`, `libssl-dev`,
+`libtesseract-dev`, etc.) and resolves the Python or Node dependency closure.
+The runtime stage starts from a clean slim base, copies only the installed
+site-packages or production `node_modules`, ships only the runtime OS
+libraries (`tesseract-ocr`, `libgl1`, `libglib2.0-0`, `libpq5`, `tini`,
+`ca-certificates`), creates an unprivileged `app` user (uid/gid 10001), and
+runs the process under `tini` so SIGTERM is forwarded cleanly to uvicorn /
+the RQ worker / `next start`.
+
+The API and web images declare a `HEALTHCHECK` against `/healthz` and `/` so
+`docker ps`, swarm, and ECS see container-level liveness without depending
+on Kubernetes probes.
+
+Build context is pruned by `.dockerignore` at the repo root, which excludes
+`.git`, `.venv`, `node_modules`, `web/.next`, local SQLite databases, the
+`storage/` and `samples/` directories, the Helm and Terraform trees, and any
+`.env*` file other than `.env.example`. This keeps image layers free of
+local state and prevents accidentally baking secrets into a pushed tag.
+
+Build and push from the repo root:
+
+```sh
+docker build -f infra/docker/Dockerfile        -t ghcr.io/sanjays2402/shotclassify-api:$(git rev-parse --short HEAD)    .
+docker build -f infra/docker/Dockerfile.worker -t ghcr.io/sanjays2402/shotclassify-worker:$(git rev-parse --short HEAD) .
+docker build -f infra/docker/Dockerfile.web    -t ghcr.io/sanjays2402/shotclassify-web:$(git rev-parse --short HEAD)    .
+```
+
+The Helm `api` Deployment now sets a pod-level `securityContext`
+(`runAsNonRoot: true`, uid/gid 10001, `seccompProfile: RuntimeDefault`) and a
+container-level `securityContext` that drops all Linux capabilities and
+blocks privilege escalation, matching the non-root user baked into the image.
+
+`tests/test_dockerfiles.py` enforces these properties statically (multi-stage,
+non-root final `USER`, healthcheck present, no build toolchain leaked into
+the runtime stage, `tini` entrypoint, `.dockerignore` excludes secrets) so a
+future refactor that regresses them fails CI without needing a Docker daemon.
+
 ### Roles and access control
 
 The API enforces a three-tier role model on every authenticated route:
