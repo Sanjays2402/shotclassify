@@ -1,5 +1,6 @@
 """ShotClassify shared utilities: settings, logging, telemetry, schemas."""
-from .settings import Settings, get_settings
+from .errors import capture_exception, init_sentry
+from .errors import is_initialized as sentry_is_initialized
 from .logging import configure_logging, get_logger
 from .schemas import (
     Category,
@@ -22,12 +23,16 @@ from .schemas import (
     RouteDecision,
     UIMockupFields,
 )
+from .settings import Settings, get_settings
 
 __all__ = [
     "Settings",
     "get_settings",
     "configure_logging",
     "get_logger",
+    "capture_exception",
+    "init_sentry",
+    "sentry_is_initialized",
     "Category",
     "ChartFields",
     "ChatFields",

@@ -62,6 +62,15 @@ secret:
   apiKey: ""
   oauthClientId: ""
   oauthClientSecret: ""
+  sentryDsn: ""
+
+sentry:
+  # Error tracking. The chart only injects SENTRY_DSN when secret.sentryDsn is set.
+  enabled: false
+  release: ""
+  sampleRate: "1.0"
+  tracesSampleRate: "0.0"
+  profilesSampleRate: "0.0"
 
 metrics:
   # /metrics is always exposed by the API container on port 7441.

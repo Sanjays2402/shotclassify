@@ -38,6 +38,7 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.26",
     "prometheus-client>=0.20",
     "authlib>=1.3",
+    "sentry-sdk[fastapi]>=2.0",
     "shotclassify-common",
     "shotclassify-ocr",
     "shotclassify-classify",

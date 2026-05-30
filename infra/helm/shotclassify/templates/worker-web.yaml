@@ -55,3 +55,4 @@ stringData:
   api-key:         {{ .Values.secret.apiKey | default "change-me-api-key" | quote }}
   oauth-client-id: {{ .Values.secret.oauthClientId | quote }}
   oauth-client-secret: {{ .Values.secret.oauthClientSecret | quote }}
+  sentry-dsn: {{ .Values.secret.sentryDsn | default "" | quote }}

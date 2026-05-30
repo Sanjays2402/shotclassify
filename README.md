@@ -388,6 +388,51 @@ of who did what, so prioritise its restore path.
   `scope="ip"` from a single address that has no key are usually scanners,
   block at the ingress.
 
+### Error tracking (Sentry)
+
+The API and worker initialize the Sentry SDK in their startup hooks via
+`shotclassify_common.init_sentry`. Initialization is a no-op unless
+`SENTRY_DSN` is set, so local development and CI never emit events.
+
+Relevant environment variables (see `.env.example`):
+
+```
+SENTRY_DSN=                       # leave empty to disable
+SENTRY_RELEASE=                   # e.g. git sha; tags events with a release
+SENTRY_SAMPLE_RATE=1.0            # error sampling, 0.0 to 1.0
+SENTRY_TRACES_SAMPLE_RATE=0.0     # performance traces, 0.0 to 1.0
+SENTRY_PROFILES_SAMPLE_RATE=0.0   # profiles, 0.0 to 1.0
+```
+
+The wiring is opinionated for safety:
+
+- `send_default_pii=False` so user identifiers are not auto-attached.
+- A `before_send` scrubber strips `Authorization`, `Cookie`, `X-API-Key`,
+  and `X-Auth-Token` request headers, clears request cookies, replaces the
+  raw `QUERY_STRING` env entry, and filters any `extra` field whose name
+  contains `key`, `secret`, or `token`.
+- Starlette, FastAPI, and standard-library logging integrations are enabled.
+  Log records at `ERROR` and above are forwarded as events; everything from
+  `INFO` and above becomes a breadcrumb.
+
+In Kubernetes, enable Sentry by setting both flags in `values.yaml`:
+
+```yaml
+sentry:
+  enabled: true
+  release: "v0.1.0"
+secret:
+  sentryDsn: "https://<public>@<host>/<project>"
+```
+
+The Helm chart injects `SENTRY_DSN` from the chart's existing Opaque secret
+(`<release>-shotclassify-secret`, key `sentry-dsn`); the other Sentry knobs
+ride along as plain env on the API deployment.
+
+For ad hoc capture inside application code use
+`shotclassify_common.capture_exception(exc)`, which returns the Sentry event
+id when initialized and `None` otherwise; it never raises.
+
 ## License
 
 MIT. See `LICENSE`.

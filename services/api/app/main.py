@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from shotclassify_common import configure_logging, get_settings
+from shotclassify_common import configure_logging, get_settings, init_sentry
 from shotclassify_common.telemetry import instrument_fastapi, setup_telemetry
 from shotclassify_common.utils import ensure_dir
 from shotclassify_store import init_db
@@ -31,6 +31,7 @@ from .routes import settings as settings_routes
 async def lifespan(app: FastAPI):
     s = get_settings()
     configure_logging(level=s.app_log_level, fmt=s.app_log_format)
+    init_sentry(service_name="shotclassify-api")
     setup_telemetry(service_name="shotclassify-api")
     init_db()
     ensure_dir(s.storage_local_dir)

@@ -76,6 +76,13 @@ class Settings(BaseSettings):
     # CI
     enable_ci: bool = False
 
+    # Error tracking (Sentry). Disabled when sentry_dsn is empty.
+    sentry_dsn: str = ""
+    sentry_release: str = ""
+    sentry_sample_rate: float = 1.0
+    sentry_traces_sample_rate: float = 0.0
+    sentry_profiles_sample_rate: float = 0.0
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

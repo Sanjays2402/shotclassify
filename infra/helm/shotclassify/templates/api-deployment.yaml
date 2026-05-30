@@ -30,6 +30,14 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ include "shotclassify.fullname" . }}-secret, key: app-secret-key } }
             - name: AUTH_API_KEY
               valueFrom: { secretKeyRef: { name: {{ include "shotclassify.fullname" . }}-secret, key: api-key } }
+            {{- if .Values.sentry.enabled }}
+            - name: SENTRY_DSN
+              valueFrom: { secretKeyRef: { name: {{ include "shotclassify.fullname" . }}-secret, key: sentry-dsn } }
+            - { name: SENTRY_RELEASE,                 value: "{{ .Values.sentry.release }}" }
+            - { name: SENTRY_SAMPLE_RATE,             value: "{{ .Values.sentry.sampleRate }}" }
+            - { name: SENTRY_TRACES_SAMPLE_RATE,      value: "{{ .Values.sentry.tracesSampleRate }}" }
+            - { name: SENTRY_PROFILES_SAMPLE_RATE,    value: "{{ .Values.sentry.profilesSampleRate }}" }
+            {{- end }}
           readinessProbe:
             httpGet: { path: /readyz, port: 7441 }
             initialDelaySeconds: 5
