@@ -1,5 +1,8 @@
 # ShotClassify
 
+![landing](docs/screenshots/landing.png)
+
+
 Drop a screenshot. Get a classification, extracted content, and a suggested action.
 
 ShotClassify is a local-first screenshot triage system. It combines a vision LLM (any OpenAI-compatible endpoint, default: the GitHub Copilot proxy at `http://127.0.0.1:4141/v1`) with local Tesseract OCR. Each image is sorted into one of nine categories, parsed by a category-specific extractor, and routed to a configurable action (save to folder, copy code to clipboard, file a bug repro, post to Slack).
