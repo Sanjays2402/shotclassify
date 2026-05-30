@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from itsdangerous import BadSignature, URLSafeSerializer
+from shotclassify_common import get_settings
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from shotclassify_common import get_settings
+from .rbac import role_for_api_key, role_for_login
 
 PUBLIC_PATHS = {
     "/",
@@ -47,15 +48,19 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
         if not s.auth_enabled or path in PUBLIC_PATHS or path.startswith("/blob"):
             return await call_next(request)
         api_key = request.headers.get("x-api-key")
-        if api_key and s.auth_api_key and api_key == s.auth_api_key:
-            request.state.principal = "api-key"
-            return await call_next(request)
+        if api_key:
+            role = role_for_api_key(api_key)
+            if role:
+                request.state.principal = "api-key"
+                request.state.role = role
+                return await call_next(request)
         session = request.cookies.get("sc_session")
         login = read_session(session)
         if login and (
             not s.auth_allowed_github_login or login == s.auth_allowed_github_login
         ):
             request.state.principal = login
+            request.state.role = role_for_login(login)
             return await call_next(request)
         return JSONResponse(
             {"error": "unauthorized", "detail": "Provide X-API-Key or login via /auth/login."},

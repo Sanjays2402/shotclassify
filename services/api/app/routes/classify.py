@@ -10,7 +10,9 @@ from shotclassify_common.pipeline import process_image
 from shotclassify_common.utils import ensure_dir, new_id
 from shotclassify_store import Repository
 
-router = APIRouter(prefix="/v1", tags=["classify"])
+from ..middleware.rbac import require_role
+
+router = APIRouter(prefix="/v1", tags=["classify"], dependencies=[require_role("operator")])
 
 
 def _save_upload(upload: UploadFile) -> tuple[str, str]:

@@ -55,6 +55,15 @@ class Settings(BaseSettings):
     auth_oauth_client_secret: str = ""
     auth_allowed_github_login: str = ""
     auth_api_key: str = "dev-api-key-change-me"
+    # RBAC. Roles: admin, operator, viewer. The default API key (auth_api_key)
+    # always maps to ``admin`` for backward compatibility. auth_api_keys lets you
+    # provision multiple non-admin keys: JSON object of {key: role}, e.g.
+    # '{"viewer-key-abc": "viewer", "ops-key-xyz": "operator"}'.
+    # auth_role_map assigns roles to OAuth logins, same JSON-object shape.
+    # Unknown principals fall through to auth_default_role.
+    auth_api_keys: str = ""
+    auth_role_map: str = ""
+    auth_default_role: Literal["admin", "operator", "viewer"] = "viewer"
 
     # Routing
     route_rules_path: str = "./packages/route/rules.example.yaml"

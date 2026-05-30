@@ -206,6 +206,40 @@ Generate inputs with `python scripts/make_corpus.py` then `python scripts/bench.
 
 ## Operations
 
+### Roles and access control
+
+The API enforces a three-tier role model on every authenticated route:
+
+| Role     | Read history | Classify / reclassify | Delete history | Read settings | Write settings | Read audit log |
+| -------- | :----------: | :-------------------: | :------------: | :-----------: | :------------: | :------------: |
+| viewer   | yes          | no                    | no             | no            | no             | no             |
+| operator | yes          | yes                   | yes            | yes           | no             | no             |
+| admin    | yes          | yes                   | yes            | yes           | yes            | yes            |
+
+Role assignment lives in environment variables (see `.env.example`):
+
+* `AUTH_API_KEY` is the legacy single key and is always treated as `admin`.
+* `AUTH_API_KEYS` is a JSON object `{key: role}` for provisioning additional
+  keys with non-admin roles, for example
+  `'{"ops-rotating-token": "operator", "dashboard-readonly": "viewer"}'`.
+* `AUTH_ROLE_MAP` is a JSON object `{login: role}` mapping authenticated
+  GitHub logins to roles.
+* Any authenticated principal not matched falls through to
+  `AUTH_DEFAULT_ROLE` (default `viewer`).
+* Malformed JSON in `AUTH_API_KEYS` or `AUTH_ROLE_MAP` is ignored rather than
+  failing startup, so a bad rotation never locks the cluster out.
+
+Unauthenticated requests still return `401`. Authenticated requests that lack
+the required role return `403` with a body like
+`{"detail": "Role 'viewer' lacks required role 'admin'."}`. The data lifecycle
+endpoints under `/v1/me/data` are deliberately open to every authenticated
+role because they self-scope to the caller's own rows.
+
+In the Helm chart, set `secret.apiKeys` and `secret.roleMap` (JSON strings)
+alongside the existing `secret.apiKey`; the chart wires them through to the
+API Deployment as `AUTH_API_KEYS` and `AUTH_ROLE_MAP` secret env vars only
+when non-empty.
+
 ### Data lifecycle (GDPR)
 
 The API exposes a per-principal export and erasure endpoint under `/v1/me/data`.

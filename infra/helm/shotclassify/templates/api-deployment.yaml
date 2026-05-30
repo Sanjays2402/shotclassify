@@ -30,6 +30,14 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ include "shotclassify.fullname" . }}-secret, key: app-secret-key } }
             - name: AUTH_API_KEY
               valueFrom: { secretKeyRef: { name: {{ include "shotclassify.fullname" . }}-secret, key: api-key } }
+            {{- if .Values.secret.apiKeys }}
+            - name: AUTH_API_KEYS
+              valueFrom: { secretKeyRef: { name: {{ include "shotclassify.fullname" . }}-secret, key: api-keys } }
+            {{- end }}
+            {{- if .Values.secret.roleMap }}
+            - name: AUTH_ROLE_MAP
+              valueFrom: { secretKeyRef: { name: {{ include "shotclassify.fullname" . }}-secret, key: role-map } }
+            {{- end }}
             {{- if .Values.sentry.enabled }}
             - name: SENTRY_DSN
               valueFrom: { secretKeyRef: { name: {{ include "shotclassify.fullname" . }}-secret, key: sentry-dsn } }

@@ -8,10 +8,12 @@ from fastapi import APIRouter, Body, HTTPException
 
 from shotclassify_common import get_settings
 
+from ..middleware.rbac import require_role
+
 router = APIRouter(prefix="/v1/settings", tags=["settings"])
 
 
-@router.get("/rules")
+@router.get("/rules", dependencies=[require_role("operator")])
 def get_rules():
     p = Path(get_settings().route_rules_path)
     if not p.exists():
@@ -24,7 +26,7 @@ def get_rules():
     return {"path": str(p), "yaml": raw, "parsed": parsed}
 
 
-@router.put("/rules")
+@router.put("/rules", dependencies=[require_role("admin")])
 def put_rules(payload: dict = Body(...)):
     raw = payload.get("yaml", "")
     try:
@@ -36,7 +38,7 @@ def put_rules(payload: dict = Body(...)):
     return {"ok": True, "path": str(p)}
 
 
-@router.get("/env")
+@router.get("/env", dependencies=[require_role("operator")])
 def safe_env():
     s = get_settings()
     return {

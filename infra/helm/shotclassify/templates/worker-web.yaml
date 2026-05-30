@@ -53,6 +53,8 @@ type: Opaque
 stringData:
   app-secret-key: {{ .Values.secret.appSecretKey | default "change-me-change-me-change-me-32!" | quote }}
   api-key:         {{ .Values.secret.apiKey | default "change-me-api-key" | quote }}
+  api-keys:        {{ .Values.secret.apiKeys | default "" | quote }}
+  role-map:        {{ .Values.secret.roleMap | default "" | quote }}
   oauth-client-id: {{ .Values.secret.oauthClientId | quote }}
   oauth-client-secret: {{ .Values.secret.oauthClientSecret | quote }}
   sentry-dsn: {{ .Values.secret.sentryDsn | default "" | quote }}

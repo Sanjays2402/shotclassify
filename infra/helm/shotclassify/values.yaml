@@ -32,6 +32,7 @@ env:
   LLM_BASE_URL: "http://llm-proxy:4141/v1"
   LLM_MODEL: "gpt-4o-mini"
   AUTH_ENABLED: "true"
+  AUTH_DEFAULT_ROLE: "viewer"
   ROUTE_DRY_RUN: "true"
   OTEL_ENABLED: "false"
   RATE_LIMIT_ENABLED: "true"
@@ -60,6 +61,12 @@ redis:
 secret:
   appSecretKey: ""
   apiKey: ""
+  # Extra API keys keyed by role. JSON object e.g. '{"opskey":"operator","vkey":"viewer"}'.
+  # Injected as AUTH_API_KEYS env var.
+  apiKeys: ""
+  # Per-OAuth-login role map. JSON object e.g. '{"alice":"admin"}'.
+  # Injected as AUTH_ROLE_MAP env var.
+  roleMap: ""
   oauthClientId: ""
   oauthClientSecret: ""
   sentryDsn: ""
