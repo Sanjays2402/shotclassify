@@ -206,6 +206,33 @@ Generate inputs with `python scripts/make_corpus.py` then `python scripts/bench.
 
 ## Operations
 
+### Production configuration validation
+
+The API and worker run `shotclassify_common.validate_for_production` from
+their startup lifespan. When `APP_ENV` is `staging` or `production` the
+process refuses to come up if any of the following are still at their dev
+default or otherwise unsafe:
+
+- `APP_SECRET_KEY` is the placeholder, empty, or shorter than 32 bytes
+- `AUTH_ENABLED` is false
+- `AUTH_API_KEY` is the well-known `dev-api-key-change-me` placeholder
+- `CORS_ALLOWED_ORIGINS` is empty or contains `*`
+- `DATABASE_URL` points at SQLite
+- `STORAGE_BACKEND=local` (ephemeral inside a pod) or `s3` with no bucket
+- `LLM_API_KEY` is empty or the dev `copilot` placeholder
+
+All failures are reported in a single `InsecureConfigurationError` so an
+operator can fix the deploy in one pass instead of crash-looping per
+setting. `APP_ENV=development` is exempt so local iteration keeps working.
+Verify a candidate environment file before rollout:
+
+```sh
+APP_ENV=production env $(grep -v '^#' .env.production | xargs) \
+  python -c "from shotclassify_common import validate_for_production; validate_for_production(); print('ok')"
+```
+
+The matching test suite lives in `tests/test_secrets_validation.py`.
+
 ### Container images
 
 All three services ship as multi-stage Docker images under `infra/docker/`:

@@ -23,11 +23,21 @@ from .schemas import (
     RouteDecision,
     UIMockupFields,
 )
+from .secrets_validation import (
+    ConfigIssue,
+    InsecureConfigurationError,
+    collect_issues,
+    validate_for_production,
+)
 from .settings import Settings, get_settings
 
 __all__ = [
     "Settings",
     "get_settings",
+    "ConfigIssue",
+    "InsecureConfigurationError",
+    "collect_issues",
+    "validate_for_production",
     "configure_logging",
     "get_logger",
     "capture_exception",
