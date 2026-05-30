@@ -49,6 +49,15 @@ secret:
   oauthClientId: ""
   oauthClientSecret: ""
 
+metrics:
+  # /metrics is always exposed by the API container on port 7441.
+  # Set serviceMonitor.enabled=true if you run the Prometheus Operator.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
 resources:
   api:
     requests: { cpu: "100m", memory: "256Mi" }

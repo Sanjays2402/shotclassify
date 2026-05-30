@@ -36,6 +36,7 @@ dependencies = [
     "opentelemetry-sdk>=1.26",
     "opentelemetry-instrumentation-fastapi>=0.47b0",
     "opentelemetry-exporter-otlp>=1.26",
+    "prometheus-client>=0.20",
     "authlib>=1.3",
     "shotclassify-common",
     "shotclassify-ocr",

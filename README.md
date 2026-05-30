@@ -230,6 +230,41 @@ The table is created automatically via `init_db()` on boot and is also covered
 by Alembic migration `0002_audit_log` for Postgres deployments where you want
 to manage schema changes explicitly.
 
+### Metrics
+
+The API exposes Prometheus metrics on `GET /metrics` (public, unauthenticated,
+intended for in-cluster scraping). `PrometheusMiddleware` wraps every request
+outermost so it observes auth failures and exceptions in addition to handler
+latency. The exported series are:
+
+- `shotclassify_http_requests_total{method,route,status}` counter
+- `shotclassify_http_request_duration_seconds{method,route}` histogram
+  (buckets: 5ms to 10s)
+- `shotclassify_http_requests_in_flight{method}` gauge
+- `shotclassify_http_exceptions_total{method,route,exception}` counter
+
+The `route` label uses the FastAPI path template (for example `/v1/items/{id}`)
+rather than the raw URL, so cardinality stays bounded regardless of client
+input. Scrapes of `/metrics` itself are intentionally excluded from these
+counters to avoid self-amplification.
+
+The Helm chart adds `prometheus.io/scrape` annotations to the API Service and
+Pod template for annotation-based scrapers, and includes an optional
+`ServiceMonitor` for the Prometheus Operator. Enable it with:
+
+```yaml
+metrics:
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    labels:
+      release: kube-prometheus-stack
+```
+
+For multi-worker uvicorn/gunicorn deployments, set `PROMETHEUS_MULTIPROC_DIR`
+to a writable directory and the endpoint will aggregate across workers via
+`prometheus_client.multiprocess`.
+
 ### Deploy
 
 Production deployments use the Helm chart in `infra/helm/shotclassify`. The
@@ -258,6 +293,10 @@ of who did what, so prioritise its restore path.
 - Structured JSON logs include `request_id`, `path`, and `method`. Search for a
   request by `request_id` to correlate the full request lifecycle across the
   API, worker, and audit log.
+- Watch `shotclassify_http_request_duration_seconds` p95/p99 per route and
+  `shotclassify_http_requests_total{status=~"5.."}` for error budget burn.
+  Suggested first alerts: 5xx rate > 1% over 5 min, and p95 latency on
+  `/v1/classify` over 5 seconds.
 - If `audit_log_write_failed` warnings appear, the request itself still
   succeeded; investigate DB connectivity to the audit table.
 - Spike in `/v1/audit` rows from an unexpected `principal` is a credential

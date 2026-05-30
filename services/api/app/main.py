@@ -14,12 +14,14 @@ from shotclassify_store import init_db
 
 from .middleware.audit import AuditLogMiddleware
 from .middleware.auth import APIKeyAndSessionAuth
+from .middleware.metrics import PrometheusMiddleware
 from .middleware.request_id import RequestIdMiddleware
 from .routes import audit as audit_routes
 from .routes import auth as auth_routes
 from .routes import classify as classify_routes
 from .routes import health as health_routes
 from .routes import history as history_routes
+from .routes import metrics as metrics_routes
 from .routes import settings as settings_routes
 
 
@@ -50,10 +52,16 @@ def create_app() -> FastAPI:
     # Middleware execution order is outer-to-inner in the order added.
     # We want: RequestId (assign id) -> Auth (set principal) -> Audit (record)
     # Starlette runs the LAST-added middleware OUTERMOST, so add Audit last.
+    # Order: outermost middleware is added last. We want Prometheus outermost
+    # so it observes every response status (including auth 401s), then Audit,
+    # then Auth, then RequestId innermost so the request_id contextvar is set
+    # before audit/auth log handlers fire.
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(APIKeyAndSessionAuth)
     app.add_middleware(AuditLogMiddleware)
+    app.add_middleware(PrometheusMiddleware)
     app.include_router(health_routes.router)
+    app.include_router(metrics_routes.router)
     app.include_router(auth_routes.router)
     app.include_router(classify_routes.router)
     app.include_router(history_routes.router)

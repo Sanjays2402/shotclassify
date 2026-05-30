@@ -12,6 +12,7 @@ PUBLIC_PATHS = {
     "/",
     "/healthz",
     "/readyz",
+    "/metrics",
     "/auth/login",
     "/auth/callback",
     "/auth/logout",
