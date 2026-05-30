@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     route_dry_run: bool = True
     route_slack_webhook: str = ""
 
+    # Rate limiting
+    rate_limit_enabled: bool = True
+    rate_limit_per_ip_rpm: int = 120
+    rate_limit_per_key_rpm: int = 600
+    rate_limit_burst: int = 20
+    rate_limit_exempt_paths: str = "/healthz,/readyz,/metrics,/blob"
+
     # Telemetry
     otel_enabled: bool = False
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"

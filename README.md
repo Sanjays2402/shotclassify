@@ -230,6 +230,32 @@ The table is created automatically via `init_db()` on boot and is also covered
 by Alembic migration `0002_audit_log` for Postgres deployments where you want
 to manage schema changes explicitly.
 
+### Rate limiting
+
+`RateLimitMiddleware` enforces a token bucket per client. Requests carrying
+`X-API-Key` are scoped by key, the rest by client IP (honouring
+`X-Forwarded-For` when present, so put a trusted proxy in front in production).
+The bucket runs in-process per pod, so the effective cluster-wide ceiling is
+`replicaCount.api * RATE_LIMIT_*_RPM` in the worst case. For a hard global
+limit, terminate at an ingress that does its own rate limiting and treat these
+values as a safety net.
+
+Defaults (override via env or Helm `rateLimit.*` / `env.RATE_LIMIT_*`):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `RATE_LIMIT_ENABLED` | `true` | Master switch. |
+| `RATE_LIMIT_PER_IP_RPM` | `120` | Sustained requests per minute per source IP. |
+| `RATE_LIMIT_PER_KEY_RPM` | `600` | Sustained rpm per `X-API-Key`. |
+| `RATE_LIMIT_BURST` | `20` | Extra tokens above the sustained rate for short bursts. |
+| `RATE_LIMIT_EXEMPT_PATHS` | `/healthz,/readyz,/metrics,/blob` | Comma-separated path prefixes the limiter ignores. |
+
+When a bucket is empty the API responds with HTTP 429, a JSON body of
+`{"error":"rate_limited"}`, a `Retry-After` seconds header, and
+`X-RateLimit-Scope: ip|api_key`. Rejections increment
+`shotclassify_rate_limit_rejections_total{scope}` so you can alert on sustained
+throttling and distinguish abusive IPs from a noisy API key.
+
 ### Metrics
 
 The API exposes Prometheus metrics on `GET /metrics` (public, unauthenticated,
@@ -301,6 +327,11 @@ of who did what, so prioritise its restore path.
   succeeded; investigate DB connectivity to the audit table.
 - Spike in `/v1/audit` rows from an unexpected `principal` is a credential
   abuse signal. Rotate `AUTH_API_KEY` and revoke OAuth sessions if needed.
+- Sustained `shotclassify_rate_limit_rejections_total{scope="api_key"}` means a
+  legitimate caller is hitting their per-key ceiling. Either raise
+  `RATE_LIMIT_PER_KEY_RPM` or issue a separate key. Rejections with
+  `scope="ip"` from a single address that has no key are usually scanners,
+  block at the ingress.
 
 ## License
 

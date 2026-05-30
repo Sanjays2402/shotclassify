@@ -15,6 +15,7 @@ from shotclassify_store import init_db
 from .middleware.audit import AuditLogMiddleware
 from .middleware.auth import APIKeyAndSessionAuth
 from .middleware.metrics import PrometheusMiddleware
+from .middleware.rate_limit import RateLimitMiddleware
 from .middleware.request_id import RequestIdMiddleware
 from .routes import audit as audit_routes
 from .routes import auth as auth_routes
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
     # before audit/auth log handlers fire.
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(APIKeyAndSessionAuth)
+    app.add_middleware(RateLimitMiddleware)
     app.add_middleware(AuditLogMiddleware)
     app.add_middleware(PrometheusMiddleware)
     app.include_router(health_routes.router)

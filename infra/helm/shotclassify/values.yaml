@@ -34,6 +34,20 @@ env:
   AUTH_ENABLED: "true"
   ROUTE_DRY_RUN: "true"
   OTEL_ENABLED: "false"
+  RATE_LIMIT_ENABLED: "true"
+  RATE_LIMIT_PER_IP_RPM: "120"
+  RATE_LIMIT_PER_KEY_RPM: "600"
+  RATE_LIMIT_BURST: "20"
+  RATE_LIMIT_EXEMPT_PATHS: "/healthz,/readyz,/metrics,/blob"
+
+rateLimit:
+  # Token-bucket limits enforced by the API per-pod (in-process).
+  # Effective cluster limit = perIpRpm * replicaCount.api (worst case).
+  enabled: true
+  perIpRpm: 120
+  perKeyRpm: 600
+  burst: 20
+  exemptPaths: "/healthz,/readyz,/metrics,/blob"
 
 postgres:
   enabled: true
