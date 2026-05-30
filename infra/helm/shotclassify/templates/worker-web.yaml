@@ -11,31 +11,80 @@ spec:
     metadata:
       labels: { app: shotclassify-worker }
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: worker
           image: "{{ .Values.image.worker.repository }}:{{ .Values.image.worker.tag }}"
+          imagePullPolicy: {{ .Values.image.worker.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities: { drop: ["ALL"] }
           env:
             - { name: DATABASE_URL, value: "{{ .Values.postgres.url }}" }
             - { name: REDIS_URL,    value: "{{ .Values.redis.url }}" }
             {{- range $k, $v := .Values.env }}
             - { name: "{{ $k }}", value: "{{ $v }}" }
             {{- end }}
+            - name: APP_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: {{ include "shotclassify.fullname" . }}-secret, key: app-secret-key } }
+            {{- if .Values.sentry.enabled }}
+            - name: SENTRY_DSN
+              valueFrom: { secretKeyRef: { name: {{ include "shotclassify.fullname" . }}-secret, key: sentry-dsn } }
+            {{- end }}
+          # Liveness uses a Redis ping via python so the probe fails fast if the
+          # worker has lost its broker connection. RQ workers do not expose HTTP.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os,redis;redis.Redis.from_url(os.environ['REDIS_URL']).ping()"
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources: {{- toYaml .Values.resources.worker | nindent 12 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "shotclassify.fullname" . }}-web
+  labels: {{- include "shotclassify.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount.web }}
   selector: { matchLabels: { app: shotclassify-web } }
   template:
     metadata: { labels: { app: shotclassify-web } }
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: web
           image: "{{ .Values.image.web.repository }}:{{ .Values.image.web.tag }}"
+          imagePullPolicy: {{ .Values.image.web.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities: { drop: ["ALL"] }
           ports: [{containerPort: 3000}]
+          readinessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
           resources: {{- toYaml .Values.resources.web | nindent 12 }}
 ---
 apiVersion: v1

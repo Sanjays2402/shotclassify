@@ -433,7 +433,39 @@ to a writable directory and the endpoint will aggregate across workers via
 Production deployments use the Helm chart in `infra/helm/shotclassify`. The
 chart ships a multi-stage Dockerfile (`infra/docker/Dockerfile`), HPA, network
 policy, and configurable resource limits. CI runs lint + tests + build on every
-push via `.github/workflows/ci.yml`.
+push via `.github/workflows/ci.yml`, plus a dedicated `helm` job that runs
+`helm lint` and renders the chart with default and feature-flag value sets so
+templating regressions fail before merge.
+
+### Availability and pod security
+
+Every workload in the chart (`api`, `worker`, `web`) is hardened to the same
+baseline:
+
+- Pod `securityContext`: `runAsNonRoot: true`, uid/gid 10001, `fsGroup` 10001,
+  `seccompProfile.type: RuntimeDefault`.
+- Container `securityContext`: `allowPrivilegeEscalation: false`,
+  `capabilities.drop: ["ALL"]`.
+- CPU and memory `requests` and `limits` set in `values.yaml`
+  (`resources.api|worker|web`).
+- Liveness probe on every container. The API and web pods use HTTP probes
+  (`/healthz`, `/`); the RQ worker pod uses an `exec` probe that pings Redis
+  via `python -c "import os,redis;redis.Redis.from_url(os.environ['REDIS_URL']).ping()"`,
+  which fails fast if the broker connection is lost (RQ workers do not expose
+  HTTP).
+- PodDisruptionBudgets in `infra/helm/shotclassify/templates/pdb.yaml` keep at
+  least one `api` and one `worker` pod available during voluntary disruptions
+  (node drains, cluster upgrades, autoscaler evictions). Tune or disable per
+  workload via `pdb.<api|worker|web>.{enabled,minAvailable}` in `values.yaml`.
+  The `web` PDB is opt-in because most installs run a single replica.
+
+`tests/test_helm_chart.py` enforces these properties by running `helm lint`
+and `helm template`, then asserting that every rendered `Deployment` runs
+non-root with `ALL` capabilities dropped, declares resource requests and
+limits, has a `livenessProbe`, and that the default render contains the
+expected PodDisruptionBudgets. The suite skips cleanly if `helm` is not on
+PATH, and the CI `helm` job installs Helm v3 so the same checks run on
+every push.
 
 ### Health and readiness
 

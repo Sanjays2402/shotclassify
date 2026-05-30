@@ -88,6 +88,20 @@ metrics:
     scrapeTimeout: 10s
     labels: {}
 
+pdb:
+  # PodDisruptionBudgets keep at least one pod available during voluntary
+  # disruptions (node drains, cluster upgrades). Disable per workload if you
+  # intentionally run replicaCount=0 for maintenance.
+  api:
+    enabled: true
+    minAvailable: 1
+  worker:
+    enabled: true
+    minAvailable: 1
+  web:
+    enabled: false
+    minAvailable: 1
+
 resources:
   api:
     requests: { cpu: "100m", memory: "256Mi" }

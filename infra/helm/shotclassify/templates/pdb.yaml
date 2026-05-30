@@ -1,0 +1,41 @@
+{{- /*
+PodDisruptionBudgets guarantee at least one pod per workload stays available
+during voluntary disruptions (node drains, cluster upgrades, autoscaler evictions).
+We use minAvailable: 1 so single-replica installs still allow disruption when
+intentionally scaled to zero. Disable per workload via .Values.pdb.<name>.enabled=false.
+*/ -}}
+{{- if .Values.pdb.api.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "shotclassify.fullname" . }}-api
+  labels: {{- include "shotclassify.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.pdb.api.minAvailable }}
+  selector:
+    matchLabels: { app: shotclassify-api }
+{{- end }}
+{{- if .Values.pdb.worker.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "shotclassify.fullname" . }}-worker
+  labels: {{- include "shotclassify.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.pdb.worker.minAvailable }}
+  selector:
+    matchLabels: { app: shotclassify-worker }
+{{- end }}
+{{- if .Values.pdb.web.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "shotclassify.fullname" . }}-web
+  labels: {{- include "shotclassify.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.pdb.web.minAvailable }}
+  selector:
+    matchLabels: { app: shotclassify-web }
+{{- end }}

@@ -22,6 +22,24 @@ jobs:
                                    pygments langdetect typer rich rq redis fastapi itsdangerous authlib
       - run: pytest -q
 
+  helm:
+    if: ${{ vars.ENABLE_CI == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with: { version: v3.15.0 }
+      - name: helm lint
+        run: helm lint infra/helm/shotclassify
+      - name: helm template (default values)
+        run: helm template release infra/helm/shotclassify > /tmp/render.yaml
+      - name: helm template (sentry + ingress on)
+        run: |
+          helm template release infra/helm/shotclassify \
+            --set sentry.enabled=true \
+            --set secret.sentryDsn=https://example@sentry.example/1 \
+            --set ingress.enabled=true > /tmp/render-full.yaml
+
   web:
     if: ${{ vars.ENABLE_CI == 'true' }}
     runs-on: ubuntu-latest
