@@ -39,12 +39,17 @@ def _require_principal(request: Request) -> str:
 @router.get("/data")
 def export_my_data(request: Request) -> dict:
     principal = _require_principal(request)
+    tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
     audit = AuditRepository()
-    classifications = [r.model_dump(mode="json") for r in repo.list_by_principal(principal)]
-    audit_rows = audit.list_for_principal(principal)
+    classifications = [
+        r.model_dump(mode="json")
+        for r in repo.list_by_principal(principal, tenant_id=tenant_id)
+    ]
+    audit_rows = audit.list_for_principal(principal, tenant_id=tenant_id)
     return {
         "principal": principal,
+        "tenant_id": tenant_id,
         "exported_at": datetime.now(UTC).isoformat(),
         "request_id": getattr(request.state, "request_id", None),
         "counts": {
@@ -70,16 +75,12 @@ def delete_my_data(
             "Pass ?confirm=erase to permanently delete all stored data for the caller.",
         )
     principal = _require_principal(request)
-    classifications_removed = Repository().delete_by_principal(principal)
-    # Audit rows are erased after classifications so the audit trail of the
-    # erasure itself (written by AuditLogMiddleware on response) is preserved
-    # if the caller authenticates as a different principal next time. The
-    # row for THIS request will be written post-response and is intentionally
-    # left in place; it records that an erasure occurred without retaining
-    # any user payload.
-    audit_removed = AuditRepository().delete_for_principal(principal)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    classifications_removed = Repository().delete_by_principal(principal, tenant_id=tenant_id)
+    audit_removed = AuditRepository().delete_for_principal(principal, tenant_id=tenant_id)
     return {
         "principal": principal,
+        "tenant_id": tenant_id,
         "deleted": {
             "classifications": classifications_removed,
             "audit_log": audit_removed,

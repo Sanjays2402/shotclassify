@@ -36,7 +36,8 @@ async def classify(
         raise HTTPException(415, "Upload must be an image.")
     rid, path = _save_upload(file)
     principal = getattr(request.state, "principal", None)
-    return await asyncio.to_thread(process_image, path, note, True, rid, principal)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    return await asyncio.to_thread(process_image, path, note, True, rid, principal, tenant_id)
 
 
 @router.post("/classify/batch", response_model=list[ProcessResult])
@@ -49,8 +50,9 @@ async def classify_batch(
         raise HTTPException(400, "No files.")
     saved = [_save_upload(f) for f in files]
     principal = getattr(request.state, "principal", None)
+    tenant_id = getattr(request.state, "tenant_id", None)
     tasks = [
-        asyncio.to_thread(process_image, p, note, True, rid, principal)
+        asyncio.to_thread(process_image, p, note, True, rid, principal, tenant_id)
         for rid, p in saved
     ]
     return await asyncio.gather(*tasks)
@@ -61,23 +63,25 @@ async def reclassify(
     item_id: str, request: Request, note: str | None = Form(None)
 ) -> ProcessResult:
     repo = Repository()
-    record = repo.get(item_id)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    record = repo.get(item_id, tenant_id=tenant_id)
     if not record or not record.image_path or not Path(record.image_path).exists():
         raise HTTPException(404, "Original image not available for reclassification.")
     principal = getattr(request.state, "principal", None)
     return await asyncio.to_thread(
-        process_image, record.image_path, note, True, item_id, principal
+        process_image, record.image_path, note, True, item_id, principal, tenant_id
     )
 
 
 @router.post("/classify/{item_id}/correct")
-async def correct(item_id: str, category: str = Form(...)):
+async def correct(item_id: str, request: Request, category: str = Form(...)):
     repo = Repository()
     try:
         cat = Category(category)
     except ValueError as e:
         raise HTTPException(422, f"Invalid category: {e}")
-    record = repo.correct(item_id, cat)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    record = repo.correct(item_id, cat, tenant_id=tenant_id)
     if not record:
         raise HTTPException(404, "Not found.")
     return {"ok": True, "id": item_id, "user_corrected_to": cat.value}

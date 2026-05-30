@@ -35,6 +35,11 @@ class ClassificationRow(Base):
     # existing rows from before the migration remain valid; new rows are
     # tagged from request.state.principal by the classify route.
     principal: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    # Multi-tenancy: rows are scoped to a tenant. Resolved from the caller's
+    # principal via AUTH_TENANT_MAP (falls back to AUTH_DEFAULT_TENANT).
+    # Nullable so rows written before the migration remain readable; the
+    # repository normalizes NULL to the default tenant at query time.
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class ApiKeyRow(Base):
@@ -47,6 +52,7 @@ class ApiKeyRow(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class AuditLogRow(Base):
@@ -69,6 +75,7 @@ class AuditLogRow(Base):
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     elapsed_ms: Mapped[int] = mapped_column(default=0)
     target_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 

@@ -24,6 +24,7 @@ class Repository:
         result: ProcessResult,
         image_path: str | None = None,
         principal: str | None = None,
+        tenant_id: str | None = None,
     ) -> None:
         row = ClassificationRow(
             id=result.id,
@@ -38,22 +39,45 @@ class Repository:
             route=result.route.model_dump(mode="json"),
             elapsed_ms=result.elapsed_ms,
             principal=principal,
+            tenant_id=tenant_id,
         )
         with get_session() as s:
             s.merge(row)
             s.commit()
 
-    def list_by_principal(self, principal: str) -> list[ClassificationRecord]:
+    @staticmethod
+    def _scope_tenant(stmt, tenant_id: str | None):
+        """Apply a tenant filter unless ``tenant_id`` is ``None`` (admin cross-tenant).
+
+        Rows written before the multi-tenancy migration have ``tenant_id IS
+        NULL`` and are treated as belonging to whatever the caller's tenant
+        is, so that the upgrade is non-destructive for solo deployments.
+        """
+        if tenant_id is None:
+            return stmt
+        return stmt.where(
+            or_(
+                ClassificationRow.tenant_id == tenant_id,
+                ClassificationRow.tenant_id.is_(None),
+            )
+        )
+
+    def list_by_principal(
+        self, principal: str, tenant_id: str | None = None
+    ) -> list[ClassificationRecord]:
         stmt = (
             select(ClassificationRow)
             .where(ClassificationRow.principal == principal)
             .order_by(ClassificationRow.created_at.desc())
         )
+        stmt = self._scope_tenant(stmt, tenant_id)
         with get_session() as s:
             rows = list(s.execute(stmt).scalars())
         return [self._to_record(r) for r in rows]
 
-    def delete_by_principal(self, principal: str) -> int:
+    def delete_by_principal(
+        self, principal: str, tenant_id: str | None = None
+    ) -> int:
         """Hard-delete all classifications owned by a principal.
 
         Returns the number of rows removed. Also unlinks the associated blob
@@ -65,13 +89,11 @@ class Repository:
 
         storage_root = Path(get_settings().storage_local_dir).resolve()
         with get_session() as s:
-            rows = list(
-                s.execute(
-                    select(ClassificationRow).where(
-                        ClassificationRow.principal == principal
-                    )
-                ).scalars()
+            stmt = select(ClassificationRow).where(
+                ClassificationRow.principal == principal
             )
+            stmt = self._scope_tenant(stmt, tenant_id)
+            rows = list(s.execute(stmt).scalars())
             removed = 0
             for row in rows:
                 if row.image_path:
@@ -93,6 +115,7 @@ class Repository:
         limit: int = 50,
         category: Category | None = None,
         query: str | None = None,
+        tenant_id: str | None = None,
     ) -> list[ClassificationRecord]:
         stmt = select(ClassificationRow).order_by(ClassificationRow.created_at.desc())
         if category is not None:
@@ -105,37 +128,62 @@ class Repository:
                     ClassificationRow.filename.ilike(like),
                 )
             )
+        stmt = self._scope_tenant(stmt, tenant_id)
         stmt = stmt.limit(limit)
         with get_session() as s:
             rows = list(s.execute(stmt).scalars())
         return [self._to_record(r) for r in rows]
 
-    def get(self, item_id: str) -> ClassificationRecord | None:
+    def get(
+        self, item_id: str, tenant_id: str | None = None
+    ) -> ClassificationRecord | None:
         with get_session() as s:
             row = s.get(ClassificationRow, item_id)
-        return self._to_record(row) if row else None
+        if row is None:
+            return None
+        if tenant_id is not None and row.tenant_id not in (None, tenant_id):
+            return None
+        return self._to_record(row)
 
-    def correct(self, item_id: str, new_category: Category) -> ClassificationRecord | None:
+    def correct(
+        self,
+        item_id: str,
+        new_category: Category,
+        tenant_id: str | None = None,
+    ) -> ClassificationRecord | None:
         with get_session() as s:
             row = s.get(ClassificationRow, item_id)
             if not row:
                 return None
+            if tenant_id is not None and row.tenant_id not in (None, tenant_id):
+                return None
             row.user_corrected_to = new_category.value
             s.commit()
-        return self.get(item_id)
+        return self.get(item_id, tenant_id=tenant_id)
 
-    def delete(self, item_id: str) -> bool:
+    def delete(self, item_id: str, tenant_id: str | None = None) -> bool:
         with get_session() as s:
             row = s.get(ClassificationRow, item_id)
             if not row:
+                return False
+            if tenant_id is not None and row.tenant_id not in (None, tenant_id):
                 return False
             s.delete(row)
             s.commit()
         return True
 
-    def count(self) -> int:
+    def count(self, tenant_id: str | None = None) -> int:
         with get_session() as s:
-            return s.query(ClassificationRow).count()
+            q = s.query(ClassificationRow)
+            if tenant_id is not None:
+                from sqlalchemy import or_ as _or
+                q = q.filter(
+                    _or(
+                        ClassificationRow.tenant_id == tenant_id,
+                        ClassificationRow.tenant_id.is_(None),
+                    )
+                )
+            return q.count()
 
     def _to_record(self, row: ClassificationRow) -> ClassificationRecord:
         created_at = row.created_at

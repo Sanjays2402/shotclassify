@@ -69,6 +69,7 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 user_agent=request.headers.get("user-agent"),
                 elapsed_ms=elapsed_ms,
                 target_id=target_id,
+                tenant_id=getattr(request.state, "tenant_id", None),
             )
         except Exception as exc:  # pragma: no cover - never break the request path
             log.warning("audit_log_write_failed", error=str(exc), path=path)

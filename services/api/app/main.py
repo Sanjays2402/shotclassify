@@ -17,6 +17,7 @@ from .middleware.auth import APIKeyAndSessionAuth
 from .middleware.metrics import PrometheusMiddleware
 from .middleware.rate_limit import RateLimitMiddleware
 from .middleware.request_id import RequestIdMiddleware
+from .middleware.tenant import TenantResolutionMiddleware
 from .routes import audit as audit_routes
 from .routes import auth as auth_routes
 from .routes import classify as classify_routes
@@ -60,6 +61,12 @@ def create_app() -> FastAPI:
     # then Auth, then RequestId innermost so the request_id contextvar is set
     # before audit/auth log handlers fire.
     app.add_middleware(RequestIdMiddleware)
+    # Tenant resolution must run AFTER auth on the inbound path so it sees
+    # request.state.principal/role. Starlette runs LAST-added middleware
+    # OUTERMOST, so add Tenant before Auth (Tenant is inner -> runs after
+    # Auth on the way in). Audit and Prometheus stay outermost so they still
+    # observe 401s from auth.
+    app.add_middleware(TenantResolutionMiddleware)
     app.add_middleware(APIKeyAndSessionAuth)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(AuditLogMiddleware)

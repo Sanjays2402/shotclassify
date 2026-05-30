@@ -52,6 +52,9 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
             role = role_for_api_key(api_key)
             if role:
                 request.state.principal = "api-key"
+                # Stash the key so downstream tenant resolution can map keys
+                # to tenants without leaking the key into logs or audit rows.
+                request.state.auth_api_key = api_key
                 request.state.role = role
                 return await call_next(request)
         session = request.cookies.get("sc_session")

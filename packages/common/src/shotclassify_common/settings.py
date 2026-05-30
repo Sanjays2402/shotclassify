@@ -65,6 +65,16 @@ class Settings(BaseSettings):
     auth_role_map: str = ""
     auth_default_role: Literal["admin", "operator", "viewer"] = "viewer"
 
+    # Multi-tenancy. Every persisted row is tagged with a tenant_id and queries
+    # are scoped to the caller's tenant so no operator/viewer can read or
+    # mutate another tenant's data. Admins may opt into a cross-tenant view by
+    # passing ``X-Tenant: *`` on the request, or scope to a specific tenant by
+    # passing ``X-Tenant: <tenant_id>``. ``auth_tenant_map`` is a JSON object
+    # ``{principal: tenant_id}`` covering both API keys and OAuth logins.
+    # Anyone not matched falls through to ``auth_default_tenant``.
+    auth_tenant_map: str = ""
+    auth_default_tenant: str = "default"
+
     # Routing
     route_rules_path: str = "./packages/route/rules.example.yaml"
     route_dry_run: bool = True

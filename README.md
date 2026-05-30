@@ -288,6 +288,62 @@ alongside the existing `secret.apiKey`; the chart wires them through to the
 API Deployment as `AUTH_API_KEYS` and `AUTH_ROLE_MAP` secret env vars only
 when non-empty.
 
+### Multi-tenancy
+
+Every persisted row (classifications, audit_log, api_keys) carries a
+`tenant_id` column and every repository query is scoped to the caller's
+tenant. One tenant cannot read, list, mutate, or delete another tenant's
+data through the public API, even when they share an endpoint, principal
+name, or role.
+
+Tenant resolution runs as `TenantResolutionMiddleware` (in
+`services/api/app/middleware/tenant.py`) right after authentication. It
+sets `request.state.tenant_id` from this lookup order:
+
+1. `X-Tenant` request header, when the caller's role is `admin`. Admins may
+   pass `*` to opt into a cross-tenant view (the repository skips the
+   tenant filter entirely) or any specific tenant id to operate inside
+   that tenant. Non-admin callers cannot escape their tenant; the header
+   is ignored for them.
+2. `AUTH_TENANT_MAP`, a JSON object `{principal: tenant_id}` that maps
+   API keys and OAuth logins to a tenant. Example:
+
+   ```
+   AUTH_TENANT_MAP='{"acme-ops-key":"acme","globex-view-key":"globex","sanjay":"acme"}'
+   ```
+
+3. `AUTH_DEFAULT_TENANT` (defaults to `default`), used for any principal
+   not present in the map. This keeps single-tenant deployments working
+   without any new configuration.
+
+Writes tag rows with the resolved tenant id at insert time. The classify,
+batch, reclassify, correct, history, audit, and `/v1/me/data` routes all
+thread `request.state.tenant_id` into the repository call so the scoping
+is enforced at the SQL layer rather than relying on application-side
+filtering.
+
+Rows written before the multi-tenancy migration have `tenant_id IS NULL`.
+The repository treats them as belonging to whatever tenant the caller is
+scoped to, so the migration is non-destructive for existing solo
+deployments; backfill them with an `UPDATE ... SET tenant_id = 'default'`
+when you are ready to enforce strict isolation.
+
+Apply the schema change with the bundled Alembic migration:
+
+```sh
+cd packages/store && alembic upgrade head
+```
+
+The migration (`0004_tenant_id`) adds a nullable `tenant_id String(64)`
+column plus an index on each of `classifications`, `api_keys`, and
+`audit_log`. It is reversible.
+
+Coverage lives in `tests/test_multitenant.py`: tenant isolation on
+history listing, cross-tenant GET returning 404, cross-tenant DELETE
+blocked, tenant-scoped stats, admin cross-tenant header behavior, and a
+GDPR export that only returns the caller's tenant rows even when the
+principal name collides across tenants.
+
 ### Data lifecycle (GDPR)
 
 The API exposes a per-principal export and erasure endpoint under `/v1/me/data`.
