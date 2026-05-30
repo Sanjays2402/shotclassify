@@ -17,6 +17,7 @@ from .middleware.auth import APIKeyAndSessionAuth
 from .middleware.metrics import PrometheusMiddleware
 from .middleware.rate_limit import RateLimitMiddleware
 from .middleware.request_id import RequestIdMiddleware
+from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.tenant import TenantResolutionMiddleware
 from .routes import audit as audit_routes
 from .routes import auth as auth_routes
@@ -47,11 +48,28 @@ def create_app() -> FastAPI:
         description="Screenshot classifier with vision LLM + OCR.",
         lifespan=lifespan,
     )
+    # CORS allowlist. Wildcard origins are only honored in development; any
+    # other environment requires an explicit comma-separated list so we never
+    # ship a production API with ``Access-Control-Allow-Origin: *`` in front
+    # of authenticated routes.
+    raw_origins = [o.strip() for o in s.cors_allowed_origins.split(",") if o.strip()]
+    if s.app_env == "development":
+        origins = raw_origins or ["*"]
+    else:
+        origins = [o for o in raw_origins if o != "*"]
+        if not origins:
+            # Fail closed: no origins means no cross-origin browser traffic.
+            origins = []
+    allow_methods = [m.strip() for m in s.cors_allowed_methods.split(",") if m.strip()]
+    allow_headers = [h.strip() for h in s.cors_allowed_headers.split(",") if h.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=origins,
+        allow_credentials=s.cors_allow_credentials and "*" not in origins,
+        allow_methods=allow_methods,
+        allow_headers=allow_headers,
+        expose_headers=["X-Request-ID"],
+        max_age=600,
     )
     # Middleware execution order is outer-to-inner in the order added.
     # We want: RequestId (assign id) -> Auth (set principal) -> Audit (record)
@@ -71,6 +89,10 @@ def create_app() -> FastAPI:
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(AuditLogMiddleware)
     app.add_middleware(PrometheusMiddleware)
+    # SecurityHeadersMiddleware is added last so it ends up OUTERMOST and
+    # decorates every response (including 401s from auth and 429s from rate
+    # limiting) with the baseline security headers.
+    app.add_middleware(SecurityHeadersMiddleware)
     app.include_router(health_routes.router)
     app.include_router(metrics_routes.router)
     app.include_router(auth_routes.router)

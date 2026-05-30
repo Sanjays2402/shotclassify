@@ -449,6 +449,57 @@ When a bucket is empty the API responds with HTTP 429, a JSON body of
 `shotclassify_rate_limit_rejections_total{scope}` so you can alert on sustained
 throttling and distinguish abusive IPs from a noisy API key.
 
+### CORS and security headers
+
+The API ships a hardened CORS allowlist and a baseline set of HTTP security
+response headers, both driven by `Settings` so operators can tune them
+without code changes.
+
+CORS is configured via four env vars:
+
+| Variable                  | Default                                                              | Notes                                                                |
+| ------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `CORS_ALLOWED_ORIGINS`    | `*`                                                                  | Comma-separated origin list. Wildcard is only honored in `development`. |
+| `CORS_ALLOW_CREDENTIALS`  | `false`                                                              | When `true`, cookies and `Authorization` may cross origins. Ignored when origins contain `*`. |
+| `CORS_ALLOWED_METHODS`    | `GET,POST,PUT,PATCH,DELETE,OPTIONS`                                  | Methods echoed in the preflight response.                            |
+| `CORS_ALLOWED_HEADERS`    | `Authorization,Content-Type,X-API-Key,X-Request-ID,X-Tenant`         | Request headers allowed on cross-origin calls.                       |
+
+When `APP_ENV` is `staging` or `production`, any `*` entry in
+`CORS_ALLOWED_ORIGINS` is silently dropped. If the resulting allowlist is
+empty the API fails closed and no cross-origin browser traffic is accepted,
+so you must set an explicit list before deploying. `X-Request-ID` is exposed
+to browsers so client-side observability can correlate failures with server
+logs and traces.
+
+`SecurityHeadersMiddleware` is registered as the outermost middleware so
+every response, including 401s from auth and 429s from rate limiting,
+carries the baseline header set:
+
+| Header                          | Default value                                                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `Content-Security-Policy`       | `default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'` |
+| `X-Content-Type-Options`        | `nosniff`                                                                                                                  |
+| `X-Frame-Options`               | `DENY`                                                                                                                     |
+| `Referrer-Policy`               | `strict-origin-when-cross-origin`                                                                                          |
+| `Permissions-Policy`            | `accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()`            |
+| `Cross-Origin-Opener-Policy`    | `same-origin`                                                                                                              |
+| `Cross-Origin-Resource-Policy`  | `same-origin`                                                                                                              |
+| `Strict-Transport-Security`     | `max-age=31536000; includeSubDomains` (production only)                                                                    |
+
+HSTS is only emitted when `APP_ENV=production` so dev and staging clusters
+running on plain HTTP do not pin browsers onto HTTPS-only behavior. Each
+header is set with `setdefault`, so a downstream route or middleware that
+needs to override one (for example a relaxed CSP on an embeddable widget)
+can still do so. Set `SECURITY_HEADERS_ENABLED=false` to disable the
+middleware entirely; tune `SECURITY_CSP`, `SECURITY_HSTS_MAX_AGE`,
+`SECURITY_REFERRER_POLICY`, or `SECURITY_PERMISSIONS_POLICY` to override
+individual values.
+
+Regression coverage lives in `tests/test_security_headers.py`, which
+asserts the baseline headers on `/healthz`, verifies they still ride on 401
+responses, exercises the production-only HSTS gate, and confirms the
+staging/production CORS allowlist rejects wildcards and unknown origins.
+
 ### Metrics
 
 The API exposes Prometheus metrics on `GET /metrics` (public, unauthenticated,

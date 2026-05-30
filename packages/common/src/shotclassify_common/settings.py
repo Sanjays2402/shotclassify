@@ -80,6 +80,32 @@ class Settings(BaseSettings):
     route_dry_run: bool = True
     route_slack_webhook: str = ""
 
+    # CORS. Comma-separated allowlist of origins. ``*`` is only honored when
+    # app_env is ``development``; production/staging require an explicit list.
+    # ``cors_allow_credentials`` controls whether cookies/Authorization headers
+    # may cross origins.
+    cors_allowed_origins: str = "*"
+    cors_allow_credentials: bool = False
+    cors_allowed_methods: str = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    cors_allowed_headers: str = "Authorization,Content-Type,X-API-Key,X-Request-ID,X-Tenant"
+
+    # Security response headers. Applied to every HTTP response by
+    # SecurityHeadersMiddleware. HSTS is only emitted when app_env is
+    # ``production`` so dev/staging on plain HTTP do not pin browsers.
+    security_headers_enabled: bool = True
+    security_csp: str = (
+        "default-src 'self'; img-src 'self' data: blob:; "
+        "style-src 'self' 'unsafe-inline'; script-src 'self'; "
+        "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; "
+        "form-action 'self'"
+    )
+    security_hsts_max_age: int = 31_536_000
+    security_referrer_policy: str = "strict-origin-when-cross-origin"
+    security_permissions_policy: str = (
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
+        "magnetometer=(), microphone=(), payment=(), usb=()"
+    )
+
     # Rate limiting
     rate_limit_enabled: bool = True
     rate_limit_per_ip_rpm: int = 120
