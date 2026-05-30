@@ -640,11 +640,52 @@ every push.
 
 ### Health and readiness
 
-- `GET /healthz` returns liveness without touching dependencies.
-- `GET /readyz` checks DB connectivity and reports queue / LLM endpoints.
+Two probes with deliberately different contracts so Kubernetes does the right
+thing under partial outages.
 
-Wire these to your Kubernetes liveness/readiness probes (defaults already set in
-the Helm chart).
+- `GET /healthz` is liveness. It returns `200 {"status":"ok"}` as long as the
+  process can serve HTTP. It does not touch the database, Redis, or storage,
+  so a backing service blip will not cause the kubelet to restart the pod.
+- `GET /readyz` is a deep readiness probe. It actively checks each hard
+  dependency and returns **HTTP 503** with a per-check breakdown when any of
+  them is degraded, so the pod is pulled out of the Service endpoints until
+  it recovers. Checks:
+  - `db` runs `SELECT 1` against the configured `DATABASE_URL`.
+  - `storage` verifies `STORAGE_LOCAL_DIR` exists and is writable.
+  - `redis` pings `REDIS_URL` with a 2 second timeout. Required outside
+    `APP_ENV=development` so a missing queue fails the probe in staging and
+    production; treated as advisory in dev so a local laptop without Redis
+    still serves traffic.
+
+Example healthy response:
+
+```json
+{
+  "status": "ready",
+  "checks": {
+    "db": {"status": "ok"},
+    "storage": {"status": "ok"},
+    "redis": {"status": "ok"}
+  }
+}
+```
+
+Example degraded response (HTTP 503), exactly what an operator wants to see in
+a probe-failure event:
+
+```json
+{
+  "status": "degraded",
+  "checks": {
+    "db": {"status": "error", "detail": "OperationalError: connection refused"},
+    "storage": {"status": "ok"},
+    "redis": {"status": "ok"}
+  }
+}
+```
+
+The Helm chart already wires `/healthz` to `livenessProbe` and `/readyz` to
+`readinessProbe` on the API deployment, so no extra configuration is needed.
 
 ### Backup
 
