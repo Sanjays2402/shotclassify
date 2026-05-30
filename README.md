@@ -428,6 +428,43 @@ For multi-worker uvicorn/gunicorn deployments, set `PROMETHEUS_MULTIPROC_DIR`
 to a writable directory and the endpoint will aggregate across workers via
 `prometheus_client.multiprocess`.
 
+### Access logs and trace correlation
+
+Every HTTP request flows through `RequestIdMiddleware`, which:
+
+- Honours an inbound `x-request-id` header or mints a fresh hex uuid, then
+  echoes it back as `x-request-id` so clients can quote it in bug reports.
+- Binds `request_id`, `path`, and `method` into the structlog contextvars so
+  every downstream log line (auth, audit, application, errors) carries the
+  same correlation id without any extra plumbing.
+- When OpenTelemetry is enabled (`OTEL_ENABLED=true`) and a span is
+  recording for the request, also binds `trace_id` and `span_id` into the
+  log context and echoes `x-trace-id` on the response. This makes it a
+  single click in Grafana, Tempo, Jaeger, Honeycomb, or Sentry to jump
+  from a log line to the matching trace and back.
+- Emits exactly one `http.access` structured log per request after the
+  response is produced, including `status`, `latency_ms`, `principal`
+  (authenticated subject when present), and `client` (peer IP). The log
+  fires even when the handler raises, so 5xx storms are visible without
+  scraping uvicorn's stdout.
+
+Example line in `APP_LOG_FORMAT=json` mode:
+
+```json
+{"event": "http.access", "level": "info", "request_id": "7296f9b4...",
+ "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736", "span_id": "00f067aa0ba902b7",
+ "path": "/v1/classify", "method": "POST", "status": 200,
+ "latency_ms": 412.7, "principal": "apikey:operator", "client": "10.0.3.4"}
+```
+
+For on-call: when a user reports a slow or failed request, ask for the
+`x-request-id` (and `x-trace-id` if present) from their response headers,
+then grep logs by `request_id=` to pull the full per-request slice across
+the API, the audit middleware, and any RQ jobs that re-bind the same id.
+
+`tests/test_request_id.py` guards id propagation, the access log shape,
+and OTEL trace header emission.
+
 ### Deploy
 
 Production deployments use the Helm chart in `infra/helm/shotclassify`. The
