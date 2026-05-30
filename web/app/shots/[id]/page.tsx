@@ -1,6 +1,6 @@
 "use client";
 
-import { use } from "react";
+import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import {
@@ -59,6 +59,8 @@ export default function ShotDetail({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const { data, error, isLoading } = useSWR<Detail>(
     ENDPOINTS.historyItem(id),
     fetcher
@@ -145,6 +147,7 @@ export default function ShotDetail({
             <span className="num text-[11px] opacity-60">{CATEGORIES.length} classes</span>
           </div>
           <div style={{ width: "100%", height: 280 }}>
+            {mounted && (
             <ResponsiveContainer>
               <BarChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
                 <CartesianGrid stroke="rgba(11,15,12,0.08)" vertical={false} />
@@ -181,6 +184,7 @@ export default function ShotDetail({
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
+            )}
           </div>
 
           <ul className="mt-4 flex flex-col gap-1.5">

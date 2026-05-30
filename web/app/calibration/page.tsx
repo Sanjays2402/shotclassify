@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -19,6 +19,8 @@ import { sampleReliability } from "@/lib/sample";
 
 export default function CalibrationPage() {
   const data = useMemo(() => sampleReliability(), []);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   // Expected Calibration Error.
   const total = data.reduce((a, b) => a + b.n, 0);
@@ -55,6 +57,7 @@ export default function CalibrationPage() {
             <span className="num text-[11px] opacity-60">{data.length} bins · n={total}</span>
           </div>
           <div style={{ width: "100%", height: 340 }}>
+            {mounted && (
             <ResponsiveContainer>
               <ComposedChart data={chart} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
                 <CartesianGrid stroke="rgba(11,15,12,0.08)" />
@@ -125,6 +128,7 @@ export default function CalibrationPage() {
                 />
               </ComposedChart>
             </ResponsiveContainer>
+            )}
           </div>
           <div className="num text-[11px] opacity-60 mt-2">
             Yellow line: empirical accuracy per bin. Faint bars: sample volume per bin (right axis).
