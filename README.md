@@ -21,6 +21,7 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - `GET /v1/history/export?format=csv|json` streaming download of the classification history (honors `category`, `q`, and `limit` filters; up to 5000 rows). The shots page exposes an Export menu that hits the same endpoint.
 - `GET /v1/history/{id}` full record with OCR transcript and confidence distribution.
 - Web UI: upload page, shots list, per-shot detail with OCR transcript, `/stats` analytics dashboard with class mix, calibration histogram, ingest tempo, and latency percentiles, plus a calibration page with reliability diagram and ECE/Brier/Log loss.
+- Side-by-side compare view at `/compare?a=<id>&b=<id>`: pick any two shots from history (or pass IDs via URL), see class chips, full probability distributions, OCR text, and a delta summary (same-class, confidence delta, latency delta). Multi-select two rows on `/shots` and hit Compare to jump in.
 - Public share links at `/r/<shot-id>`: server-rendered, no-auth result pages with confidence distribution, OCR transcript, and a dynamic 1200x630 OpenGraph image for link previews on Slack, Twitter, iMessage, and LinkedIn. Each shot detail page has a one-click Copy share link button.
 
 ## Try the share feature

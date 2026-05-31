@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import useSWR from "swr";
+import { Scales } from "@phosphor-icons/react/dist/ssr";
 import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
 import { SampleBadge } from "@/components/SampleBadge";
@@ -41,9 +43,24 @@ function fmtTime(iso: string): string {
 }
 
 export default function ShotsPage() {
+  const router = useRouter();
   const [cat, setCat] = useState<"" | Category>("");
   const [q, setQ] = useState("");
   const [limit, setLimit] = useState(100);
+  const [picked, setPicked] = useState<string[]>([]);
+
+  const togglePick = (id: string) => {
+    setPicked((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      if (prev.length >= 2) return [prev[1], id];
+      return [...prev, id];
+    });
+  };
+
+  const goCompare = () => {
+    if (picked.length !== 2) return;
+    router.push(`/compare?a=${picked[0]}&b=${picked[1]}`);
+  };
 
   const { data, error, isLoading } = useSWR<any[]>(
     ENDPOINTS.history({
@@ -126,9 +143,24 @@ export default function ShotsPage() {
             setCat("");
             setQ("");
             setLimit(100);
+            setPicked([]);
           }}
         >
           Reset
+        </button>
+
+        <button
+          className="btn btn-ghost"
+          onClick={goCompare}
+          disabled={picked.length !== 2}
+          aria-label="Compare selected shots"
+          title={
+            picked.length === 2
+              ? "Open compare view"
+              : "Select two rows to compare"
+          }
+        >
+          <Scales size={14} weight="duotone" /> Compare ({picked.length}/2)
         </button>
 
         <div className="ml-auto">
@@ -160,6 +192,7 @@ export default function ShotsPage() {
             <table className="tbl">
               <thead>
                 <tr>
+                  <th className="w-[28px]" aria-label="Select for compare" />
                   <th>ID</th>
                   <th>Class</th>
                   <th>Confidence</th>
@@ -171,7 +204,15 @@ export default function ShotsPage() {
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id}>
+                  <tr key={r.id} data-picked={picked.includes(r.id)}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={picked.includes(r.id)}
+                        onChange={() => togglePick(r.id)}
+                        aria-label={`Select ${shortId(r.id)} to compare`}
+                      />
+                    </td>
                     <td>
                       <Link
                         href={`/shots/${r.id}`}
