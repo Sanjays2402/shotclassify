@@ -1,27 +1,42 @@
 import { ImageResponse } from "next/og";
 import { fetchShareRecord } from "@/lib/share";
-import { LONG, SHORT } from "@/lib/categories";
+import { CATEGORIES, LONG, SHORT, type Category } from "@/lib/categories";
 
 export const runtime = "nodejs";
-export const alt = "ShotClassify shared result";
+export const alt = "ShotClassify result";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-// Static category color map (mirrors --color-cat-* vars).
-const CAT_COLORS: Record<string, string> = {
-  receipt: "#0e5c3a",
-  code_snippet: "#1d3b8a",
-  error_stacktrace: "#a8261c",
-  chat_screenshot: "#7b2d8e",
-  meme: "#d97706",
-  document: "#374151",
-  ui_mockup: "#0891b2",
-  chart: "#16a34a",
-  other: "#525252",
+// Palette mirrors the broadcast theme tokens in globals.css so the share card
+// looks like a still frame pulled straight from the app.
+const COLORS = {
+  chalk: "#f5f1e8",
+  felt: "#0b3d2e",
+  feltRail: "#082a20",
+  ink: "#101010",
+  rule: "#d8d2c1",
+  amber: "#f3a712",
+  confHigh: "#1f8f4c",
+  confMid: "#d68910",
+  confLow: "#b03a2e",
 };
 
-export default async function OG({ params }: { params: { id: string } }) {
-  const rec = await fetchShareRecord(params.id);
+function confColor(score: number): string {
+  if (score >= 0.8) return COLORS.confHigh;
+  if (score >= 0.55) return COLORS.confMid;
+  return COLORS.confLow;
+}
+
+function truncate(s: string, n: number): string {
+  if (!s) return "";
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+type Params = { params: Promise<{ id: string }> };
+
+export default async function OgImage({ params }: Params) {
+  const { id } = await params;
+  const rec = await fetchShareRecord(id);
 
   if (!rec) {
     return new ImageResponse(
@@ -31,26 +46,39 @@ export default async function OG({ params }: { params: { id: string } }) {
             width: "100%",
             height: "100%",
             display: "flex",
+            flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
-            background: "#f6f3ec",
-            color: "#0b0f0c",
-            fontSize: 48,
+            background: COLORS.chalk,
+            color: COLORS.ink,
             fontFamily: "sans-serif",
           }}
         >
-          ShotClassify · result not found
+          <div style={{ fontSize: 36, opacity: 0.6, letterSpacing: 2 }}>
+            SHOTCLASSIFY
+          </div>
+          <div style={{ fontSize: 64, fontWeight: 700, marginTop: 20 }}>
+            Result not found
+          </div>
         </div>
       ),
-      size
+      { ...size },
     );
   }
 
-  const cat = rec.primary_category;
-  const color = CAT_COLORS[cat.split("_")[0]] ?? CAT_COLORS[cat] ?? "#0e5c3a";
-  const label = LONG[cat as keyof typeof LONG] ?? cat;
-  const short = SHORT[cat as keyof typeof SHORT] ?? cat.toUpperCase();
-  const conf = `${(rec.confidence * 100).toFixed(1)}%`;
+  const cat = (rec.primary_category as Category) ?? "other";
+  const label = LONG[cat] ?? rec.primary_category;
+  const short = SHORT[cat] ?? rec.primary_category.toUpperCase();
+  const confPct = (rec.confidence * 100).toFixed(1) + "%";
+  const cColor = confColor(rec.confidence);
+
+  const dist =
+    rec.classification?.confidences ??
+    CATEGORIES.map((c) => ({
+      category: c,
+      score: c === cat ? rec.confidence : (1 - rec.confidence) / (CATEGORIES.length - 1),
+    }));
+  const top = [...dist].sort((a, b) => b.score - a.score).slice(0, 4);
 
   return new ImageResponse(
     (
@@ -60,105 +88,242 @@ export default async function OG({ params }: { params: { id: string } }) {
           height: "100%",
           display: "flex",
           flexDirection: "column",
-          background: "#f6f3ec",
-          color: "#0b0f0c",
+          background: COLORS.chalk,
+          color: COLORS.ink,
           fontFamily: "sans-serif",
-          padding: 64,
+          padding: 56,
+          position: "relative",
         }}
       >
+        {/* Top bar: brand + ID */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            fontSize: 22,
-            letterSpacing: 2,
-            textTransform: "uppercase",
-            opacity: 0.7,
+            paddingBottom: 20,
+            borderBottom: `2px solid ${COLORS.rule}`,
           }}
         >
-          <span>ShotClassify</span>
-          <span>shared result</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: 9999,
+                background: COLORS.felt,
+                boxShadow: `inset 0 0 0 3px ${COLORS.chalk}, 0 0 0 2px ${COLORS.feltRail}`,
+              }}
+            />
+            <div
+              style={{
+                fontSize: 28,
+                fontWeight: 700,
+                letterSpacing: 2,
+              }}
+            >
+              SHOTCLASSIFY
+            </div>
+          </div>
+          <div
+            style={{
+              fontSize: 20,
+              fontFamily: "monospace",
+              color: "#666",
+              letterSpacing: 1,
+            }}
+          >
+            /r/{id.slice(0, 12)}
+          </div>
         </div>
 
+        {/* Main: category + confidence */}
         <div
           style={{
             display: "flex",
-            flexDirection: "column",
-            marginTop: 60,
-            gap: 24,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 48,
+            marginTop: 56,
           }}
         >
+          {/* Category badge */}
           <div
             style={{
               display: "flex",
+              flexDirection: "column",
               alignItems: "center",
-              gap: 24,
+              justifyContent: "center",
+              background: COLORS.felt,
+              color: COLORS.chalk,
+              width: 280,
+              height: 280,
+              borderRadius: 24,
+              boxShadow: `inset 0 0 0 6px ${COLORS.feltRail}`,
             }}
           >
+            <div style={{ fontSize: 18, letterSpacing: 3, opacity: 0.7 }}>
+              PRIMARY
+            </div>
             <div
               style={{
-                background: color,
-                color: "#fff",
-                padding: "12px 24px",
-                fontSize: 36,
-                fontWeight: 700,
-                letterSpacing: 2,
-                borderRadius: 4,
-                display: "flex",
+                fontSize: 56,
+                fontWeight: 800,
+                marginTop: 12,
+                letterSpacing: 1,
               }}
             >
               {short}
             </div>
+          </div>
+
+          {/* Label + confidence */}
+          <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
+            <div style={{ fontSize: 26, color: "#666", letterSpacing: 1 }}>
+              CLASSIFIED AS
+            </div>
             <div
               style={{
-                fontSize: 96,
-                fontWeight: 700,
-                color,
-                fontVariantNumeric: "tabular-nums",
-                display: "flex",
+                fontSize: 76,
+                fontWeight: 800,
+                lineHeight: 1.05,
+                marginTop: 6,
               }}
             >
-              {conf}
+              {label}
             </div>
-          </div>
-
-          <div
-            style={{
-              fontSize: 44,
-              fontWeight: 600,
-              maxWidth: 1000,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              display: "flex",
-            }}
-          >
-            {rec.filename}
-          </div>
-
-          <div style={{ fontSize: 26, opacity: 0.7, display: "flex" }}>
-            Classified as {label}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "baseline",
+                gap: 18,
+                marginTop: 26,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 92,
+                  fontWeight: 800,
+                  color: cColor,
+                  fontFamily: "monospace",
+                  lineHeight: 1,
+                }}
+              >
+                {confPct}
+              </div>
+              <div style={{ fontSize: 22, color: "#666", letterSpacing: 2 }}>
+                CONFIDENCE
+              </div>
+            </div>
           </div>
         </div>
 
+        {/* Distribution bars */}
         <div
           style={{
-            marginTop: "auto",
             display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-end",
-            fontSize: 20,
-            opacity: 0.6,
+            flexDirection: "column",
+            gap: 10,
+            marginTop: 44,
           }}
         >
-          <span>shotclassify · screenshot intelligence</span>
-          <span style={{ fontVariantNumeric: "tabular-nums" }}>
-            #{rec.id.slice(0, 8)}
-          </span>
+          {top.map((d) => {
+            const w = Math.max(0.02, d.score) * 100;
+            const isTop = d.category === cat;
+            return (
+              <div
+                key={d.category}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                  fontSize: 18,
+                }}
+              >
+                <div
+                  style={{
+                    width: 160,
+                    fontFamily: "monospace",
+                    letterSpacing: 1,
+                    color: isTop ? COLORS.ink : "#888",
+                    fontWeight: isTop ? 700 : 500,
+                  }}
+                >
+                  {SHORT[d.category as Category] ?? d.category.toUpperCase()}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flex: 1,
+                    height: 18,
+                    background: "#e6e0d0",
+                    borderRadius: 4,
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${w}%`,
+                      background: isTop ? cColor : "#b8b0a0",
+                    }}
+                  />
+                </div>
+                <div
+                  style={{
+                    width: 90,
+                    textAlign: "right",
+                    fontFamily: "monospace",
+                    color: isTop ? COLORS.ink : "#888",
+                    fontWeight: isTop ? 700 : 500,
+                  }}
+                >
+                  {(d.score * 100).toFixed(1)}%
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <div
+          style={{
+            position: "absolute",
+            bottom: 32,
+            left: 56,
+            right: 56,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            fontSize: 18,
+            color: "#666",
+            paddingTop: 16,
+            borderTop: `1px solid ${COLORS.rule}`,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: "monospace",
+              maxWidth: 720,
+              overflow: "hidden",
+              whiteSpace: "nowrap",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {truncate(rec.filename || "shot", 60)}
+          </div>
+          <div style={{ display: "flex", gap: 18, alignItems: "center" }}>
+            {rec.elapsed_ms ? (
+              <div style={{ fontFamily: "monospace" }}>
+                {rec.elapsed_ms < 1000
+                  ? `${rec.elapsed_ms} ms`
+                  : `${(rec.elapsed_ms / 1000).toFixed(2)} s`}
+              </div>
+            ) : null}
+            <div style={{ letterSpacing: 2 }}>shotclassify.app</div>
+          </div>
         </div>
       </div>
     ),
-    size
+    { ...size },
   );
 }
