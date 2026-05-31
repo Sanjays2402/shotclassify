@@ -8,6 +8,7 @@ import { QuotaMeter } from "@/components/QuotaMeter";
 import OnboardingTour from "@/components/OnboardingTour";
 import AuthMenu from "@/components/AuthMenu";
 import PwaInstaller from "@/components/PwaInstaller";
+import NotificationBell from "@/components/NotificationBell";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -95,6 +96,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/batch">Batch</NavLink>
               <NavLink href="/keys">API keys</NavLink>
               <NavLink href="/webhooks">Webhooks</NavLink>
+              <NavLink href="/notifications">Inbox</NavLink>
               <NavLink href="/usage">Usage</NavLink>
               <NavLink href="/account">Account</NavLink>
               <NavLink href="/signin">Sign in</NavLink>
@@ -102,6 +104,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </nav>
             <div className="ml-auto flex items-center gap-3">
               <QuotaMeter compact />
+              <NotificationBell />
               <span className="eyebrow hidden sm:inline">Press</span>
               <span className="kbd">U</span>
               <span className="eyebrow hidden sm:inline">to ingest</span>

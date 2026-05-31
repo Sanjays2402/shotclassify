@@ -7,6 +7,7 @@ import "server-only";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { notifyWebhookFailed } from "./notifications";
 
 export type Webhook = {
   id: string;
@@ -230,7 +231,15 @@ async function deliverWithRetries(
     await recordDelivery(delivery);
     await bumpCounters(hook.id, r.ok, now);
     if (r.ok) return;
-    if (attempt === MAX_ATTEMPTS) return;
+    if (attempt === MAX_ATTEMPTS) {
+      notifyWebhookFailed({
+        url: hook.url,
+        http_status: r.status,
+        error: r.error,
+        attempts: attempt,
+      }).catch(() => {});
+      return;
+    }
     const wait = RETRY_BACKOFF_MS[attempt - 1] ?? 30_000;
     await new Promise((res) => setTimeout(res, wait));
   }

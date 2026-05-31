@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dispatchEvent } from "@/lib/webhooks";
+import { notifyClassifyCompleted } from "@/lib/notifications";
 
 const API = process.env.SHOTCLASSIFY_API_BASE || "http://127.0.0.1:7441";
 const KEY = process.env.SHOTCLASSIFY_API_KEY || "";
@@ -21,6 +22,7 @@ export async function POST(req: NextRequest) {
         source: "/api/classify",
         result: parsed,
       }).catch(() => {});
+      notifyClassifyCompleted(parsed).catch(() => {});
     } catch {
       /* non-json upstream body, skip */
     }

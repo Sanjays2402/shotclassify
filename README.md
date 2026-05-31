@@ -2,7 +2,39 @@
 
 Screenshot classifier with vision LLM, OCR, structured extraction, and action routing.
 
-## What's new: saved views on your history
+## What's new: in-app notifications inbox
+
+A bell in the header lights up every time a classification finishes or a
+webhook delivery exhausts its retries. Click through to `/notifications`
+for the full inbox: filter by unread, mark read individually or in bulk,
+open straight into the shot or webhook that triggered it, and clear the
+log when you are done. New notifications also pop a small toast in the
+corner so a long-running batch tells you the moment it lands. Backed by
+an atomic file-backed store, capped at 200 entries, with unit tests in
+`web/lib/notifications.test.mts`.
+
+### Try it
+
+```bash
+# Boot both services
+make dev   # or: pnpm --dir web dev  +  uvicorn services.api.main:app --port 7441
+
+# Drop a classification through and watch the bell update:
+curl -sS -X POST http://localhost:3000/api/classify \
+  -F file=@samples/menu.png
+
+# Read the inbox via the same API the UI uses:
+curl -sS http://localhost:3000/api/notifications | jq
+
+# Mark everything read:
+curl -sS -X POST http://localhost:3000/api/notifications \
+  -H 'content-type: application/json' \
+  -d '{"action":"mark_all_read"}'
+```
+
+Open <http://localhost:3000/notifications> to see the page.
+
+## Previously shipped: saved views on your history
 
 The `/shots` page now ships **saved views**: name any combination of
 filters (class, search, date range, min confidence, tag, sort) and snap

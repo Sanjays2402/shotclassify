@@ -4,6 +4,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAndTouch } from "@/lib/keystore";
 import { dispatchEvent } from "@/lib/webhooks";
+import { notifyClassifyCompleted } from "@/lib/notifications";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -87,6 +88,7 @@ export async function POST(req: NextRequest) {
         api_key_id: key.id,
         result: parsed,
       }).catch(() => {});
+      notifyClassifyCompleted(parsed).catch(() => {});
     } catch {
       /* non-json upstream, skip */
     }
