@@ -2,6 +2,22 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: per-tenant cap on active API keys
+
+Unbounded service-credential sprawl is a procurement red flag. SOC 2 CC6.1 and NIST AC-2 both expect a documented, enforced cap on how many active credentials a single workspace can hold. ShotClassify now lets workspace admins set a per-tenant `api_key_max_active` cap from `Settings -> Security -> API key active cap` (or `PUT /v1/settings/security/api-key-max-active`). When the cap is set, `POST /v1/api-keys` (mint) is rejected with `HTTP 422 api_key_max_active_reached` once the workspace already holds that many non-revoked keys, and the rejection is recorded in the audit log alongside the actor and request id. Tightening the cap below the current active count never retroactively revokes existing keys; it only blocks the next mint until an admin frees a slot by revoking a stale one. The cap is tenant-scoped: one workspace's policy never affects another's, and the list response (`GET /v1/api-keys`) surfaces both the cap and the current in-use count so the admin UI can show `N of M`. Enforcement lives in `packages/store/src/shotclassify_store/api_keys.py::create_key`, so adding a new mint path cannot bypass it. Reads and writes are admin only, writes require MFA step-up. Coverage in `tests/test_api_key_max_active_policy.py`.
+
+Try it locally:
+
+```bash
+make dev   # API on http://127.0.0.1:7441, dashboard on http://127.0.0.1:3000
+
+# Cap this workspace at 10 active API keys.
+curl -X PUT http://127.0.0.1:7441/v1/settings/security/api-key-max-active \
+  -H "X-API-Key: $SHOTCLASSIFY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"max_active": 10}'
+```
+
 ## What's new: per-tenant API key inactivity (auto-revoke) policy
 
 A stale service credential is a deal-blocker for procurement: CC6.1 of SOC 2 and most enterprise security questionnaires ask, in some form, what happens to API keys that nobody uses any more. "We trust admins to clean them up" is no longer an acceptable answer. ShotClassify now lets workspace admins set a per-tenant `api_key_inactivity_days` cap from `Settings -> Security -> API key inactivity policy` (or `PUT /v1/settings/security/api-key-inactivity`). When a cap is set, any DB-backed API key whose effective last-use (falling back to `created_at` for never-used keys) is older than the cap is auto-revoked on its next presentation and the request is rejected with `HTTP 401 api_key_stale_inactive`. Enforcement lives in `services/api/app/middleware/auth.py`, so adding a new route cannot bypass it, and the auto-revocation lands in the tenant's tamper-evident audit log with the inbound request id, source IP, and key id. Existing keys are not retroactively shortened: a tightened policy only takes effect on the next request a stale key actually makes, so the change never breaks a live integration silently. Policy reads and writes are admin only, writes require MFA step-up, and the cap is tenant-scoped (one workspace's policy never affects another workspace's keys). Coverage in `tests/test_api_key_inactivity_policy.py`.

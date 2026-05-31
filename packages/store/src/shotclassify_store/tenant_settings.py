@@ -1178,3 +1178,100 @@ def set_api_key_inactivity_policy(
             row.updated_by = updated_by
         s.commit()
     return ApiKeyInactivityPolicy(tenant_id=tenant_id, inactivity_days=norm)
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant cap on the number of active (non-revoked) API keys
+# ---------------------------------------------------------------------------
+
+# Range chosen so the smallest meaningful policy (1 key) and a generous
+# upper bound (1000) both fit, while still being something an admin must
+# opt into. SOC 2 CC6.1 / NIST AC-2 want a documented cap, not infinity.
+API_KEY_MAX_ACTIVE_MIN = 1
+API_KEY_MAX_ACTIVE_MAX = 1000
+
+
+@dataclass(frozen=True)
+class ApiKeyMaxActivePolicy:
+    tenant_id: str
+    max_active: int | None  # None = no policy (legacy unbounded)
+
+    def to_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "max_active": self.max_active,
+            "min": API_KEY_MAX_ACTIVE_MIN,
+            "max": API_KEY_MAX_ACTIVE_MAX,
+        }
+
+
+def get_api_key_max_active_policy(tenant_id: str | None) -> ApiKeyMaxActivePolicy:
+    """Return the per-tenant cap on active (non-revoked) API keys.
+
+    Missing tenant or missing settings row return ``max_active=None`` so
+    existing deployments and unauthenticated paths keep working until an
+    admin opts in.
+    """
+    if not tenant_id:
+        return ApiKeyMaxActivePolicy(tenant_id="", max_active=None)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return ApiKeyMaxActivePolicy(tenant_id=tenant_id, max_active=None)
+        return ApiKeyMaxActivePolicy(
+            tenant_id=tenant_id,
+            max_active=getattr(row, "api_key_max_active", None),
+        )
+
+
+def set_api_key_max_active_policy(
+    tenant_id: str,
+    *,
+    max_active: int | None,
+    updated_by: str | None,
+) -> ApiKeyMaxActivePolicy:
+    """Persist (or clear) the per-tenant active-API-key cap.
+
+    ``None`` clears the policy and reverts to unbounded. Raises
+    :class:`ValueError` for non-integer or out-of-range values so the
+    API layer can return 422. Tightening the policy below the current
+    active count does NOT retroactively revoke existing keys: the cap
+    only takes effect on the next mint or rotation.
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    norm: int | None
+    if max_active is None:
+        norm = None
+    else:
+        if isinstance(max_active, bool) or not isinstance(max_active, int):
+            raise ValueError("max_active must be an integer or null")
+        if max_active < API_KEY_MAX_ACTIVE_MIN or max_active > API_KEY_MAX_ACTIVE_MAX:
+            raise ValueError(
+                f"max_active must be between {API_KEY_MAX_ACTIVE_MIN} "
+                f"and {API_KEY_MAX_ACTIVE_MAX}"
+            )
+        norm = max_active
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                api_key_max_active=norm,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.api_key_max_active = norm
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return ApiKeyMaxActivePolicy(tenant_id=tenant_id, max_active=norm)

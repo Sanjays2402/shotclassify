@@ -247,6 +247,13 @@ class TenantSettingsRow(Base):
     # layer and the request is rejected with 401 ``api_key_stale_inactive``.
     # NULL = no policy (legacy). Wired into security_settings + admin UI.
     api_key_inactivity_days: Mapped[int | None] = mapped_column(nullable=True)
+    # Per-tenant cap on the number of active (non-revoked) DB-backed API
+    # keys. When set, ``api_keys_store.create_key`` (and the rotation
+    # path, which mints a successor) reject with ``ValueError`` once the
+    # tenant already has this many active keys. NULL keeps legacy
+    # unbounded behaviour. Recorded by the security_settings route +
+    # admin UI under "API key active cap".
+    api_key_max_active: Mapped[int | None] = mapped_column(nullable=True)
     # Workspace-wide MFA enrollment policy. When True, every cookie-
     # authenticated request from a member of this tenant must have a
     # confirmed TOTP credential or the auth middleware rejects the call
@@ -772,6 +779,11 @@ def init_db() -> None:
                 if "api_key_inactivity_days" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN api_key_inactivity_days INTEGER"
+                    ))
+                # 0031 per-tenant cap on active (non-revoked) API keys.
+                if "api_key_max_active" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN api_key_max_active INTEGER"
                     ))
                 # 0024 workspace-wide MFA enrolment policy.
                 if "mfa_required_for_members" not in tcols:

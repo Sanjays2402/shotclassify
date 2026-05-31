@@ -14,11 +14,14 @@ from shotclassify_store import (
     API_KEY_MIN_TTL_DAYS,
     API_KEY_INACTIVITY_MAX_DAYS,
     API_KEY_INACTIVITY_MIN_DAYS,
+    API_KEY_MAX_ACTIVE_MAX,
+    API_KEY_MAX_ACTIVE_MIN,
     SESSION_TTL_MAX_MINUTES,
     SESSION_TTL_MIN_MINUTES,
     SESSION_IDLE_MAX_MINUTES,
     SESSION_IDLE_MIN_MINUTES,
     get_api_key_inactivity_policy,
+    get_api_key_max_active_policy,
     get_api_key_ttl_policy,
     get_cors_origins,
     get_ip_allowlist,
@@ -30,6 +33,7 @@ from shotclassify_store import (
     get_tenant_oidc,
     purge_expired_for_tenant,
     set_api_key_inactivity_policy,
+    set_api_key_max_active_policy,
     set_api_key_ttl_policy,
     set_cors_origins,
     set_ip_allowlist,
@@ -656,3 +660,68 @@ def put_api_key_inactivity_route(
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return cfg.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant cap on the number of active (non-revoked) API keys
+# ---------------------------------------------------------------------------
+
+
+def _count_active_keys(tenant_id: str) -> int:
+    """Helper: count non-revoked DB-backed API keys for a tenant.
+
+    Used to surface the "X of Y in use" hint alongside the policy so
+    admins can see how close they are to the cap before they tighten it.
+    """
+    from shotclassify_store import api_keys_store as _ak
+
+    records = _ak.list_keys(tenant_id=tenant_id, include_revoked=False)
+    return len(records)
+
+
+@router.get("/api-key-max-active", dependencies=[require_role("admin")])
+def get_api_key_max_active_route(request: Request) -> dict:
+    """Return the tenant's active-API-key cap and current usage."""
+    tenant_id = _tenant(request)
+    body = get_api_key_max_active_policy(tenant_id).to_dict()
+    body["current_active"] = _count_active_keys(tenant_id)
+    return body
+
+
+@router.put(
+    "/api-key-max-active",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_api_key_max_active_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Set or clear the cap on active (non-revoked) API keys for the tenant.
+
+    Body: ``{"max_active": int|null}``. ``null`` clears the policy and
+    reverts to unbounded. When set, mints (``POST /v1/api-keys``) and
+    rotations beyond the cap are rejected with 422 carrying
+    ``api_key_max_active_reached``. Tightening the cap below the current
+    active count does not retroactively revoke anyone; it only blocks
+    the next mint until an admin frees a slot.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "JSON object body required.")
+    if "max_active" not in payload:
+        raise HTTPException(
+            422, "Field 'max_active' is required (int or null)."
+        )
+    raw = payload["max_active"]
+    if raw is not None and (isinstance(raw, bool) or not isinstance(raw, int)):
+        raise HTTPException(422, "max_active must be an integer or null.")
+    actor = getattr(request.state, "principal", None)
+    try:
+        cfg = set_api_key_max_active_policy(
+            tenant_id, max_active=raw, updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    body = cfg.to_dict()
+    body["current_active"] = _count_active_keys(tenant_id)
+    return body

@@ -290,6 +290,7 @@ export default function SecuritySettingsPage() {
       <SessionPolicySection />
       <ApiKeyTtlPolicySection />
       <ApiKeyInactivityPolicySection />
+      <ApiKeyMaxActivePolicySection />
       <MfaPolicySection />
       <CorsOriginsSection />
       <SessionsSection />
@@ -2481,6 +2482,232 @@ function CorsOriginsSection() {
           </p>
         </>
       )}
+    </section>
+  );
+}
+
+type ApiKeyMaxActiveResponse = {
+  tenant_id: string;
+  max_active: number | null;
+  min: number;
+  max: number;
+  current_active: number;
+};
+
+function ApiKeyMaxActivePolicySection() {
+  const { data, error, isLoading, mutate } = useSWR<ApiKeyMaxActiveResponse>(
+    "/api/settings/security/api-key-max-active",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+
+  const [enforce, setEnforce] = useState<boolean>(false);
+  const [value, setValue] = useState<string>("");
+  const [otp, setOtp] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!data) return;
+    if (data.max_active != null) {
+      setEnforce(true);
+      setValue(String(data.max_active));
+    } else {
+      setEnforce(false);
+      setValue("10");
+    }
+  }, [data?.max_active]);
+
+  const status = error as ApiError | undefined;
+  const unauth = status?.status === 401;
+  const forbidden = status?.status === 403;
+
+  const presets: Array<{ label: string; n: number }> = [
+    { label: "3", n: 3 },
+    { label: "5", n: 5 },
+    { label: "10", n: 10 },
+    { label: "25", n: 25 },
+    { label: "50", n: 50 },
+  ];
+
+  async function save() {
+    if (!data) return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      let body: { max_active: number | null };
+      if (!enforce) {
+        body = { max_active: null };
+      } else {
+        const parsed = Math.trunc(Number(value));
+        if (!Number.isFinite(parsed)) {
+          setFlash({ kind: "err", msg: "Enter a whole number." });
+          setBusy(false);
+          return;
+        }
+        if (parsed < data.min || parsed > data.max) {
+          setFlash({
+            kind: "err",
+            msg: `Value must be between ${data.min} and ${data.max}.`,
+          });
+          setBusy(false);
+          return;
+        }
+        body = { max_active: parsed };
+      }
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (otp.trim()) headers["x-mfa-otp"] = otp.trim();
+      const res = await fetch("/api/settings/security/api-key-max-active", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setFlash({ kind: "err", msg: text || `Save failed (${res.status})` });
+        setBusy(false);
+        return;
+      }
+      const next: ApiKeyMaxActiveResponse = await res.json();
+      setFlash({ kind: "ok", msg: "Saved." });
+      setOtp("");
+      await mutate(next, { revalidate: false });
+    } catch (e) {
+      setFlash({ kind: "err", msg: (e as Error).message || "Save failed" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-center gap-2 mb-2">
+        <KeyIcon size={20} weight="duotone" className="text-amber-600" />
+        <h2 className="text-base font-semibold">API key active cap</h2>
+        {data?.tenant_id ? (
+          <span className="ml-auto rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+            tenant: {data.tenant_id}
+          </span>
+        ) : null}
+      </div>
+      <p className="text-sm text-zinc-500 mb-4">
+        Cap the number of non-revoked DB-backed API keys this workspace
+        can hold at once. Mints and rotations beyond the cap are
+        rejected at the store layer with HTTP 422 and recorded in the
+        audit log. Set a number you can defend in a security review;
+        clear the policy to revert to unbounded.
+      </p>
+
+      {isLoading ? (
+        <div className="space-y-2" aria-busy="true">
+          <div className="h-4 w-2/3 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+          <div className="h-9 w-full animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+        </div>
+      ) : unauth ? (
+        <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+          Sign in to manage the API key active cap.
+        </div>
+      ) : forbidden ? (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Admin role required.
+        </div>
+      ) : error ? (
+        <div className="rounded-md border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">
+          Could not load API key active cap.
+        </div>
+      ) : data ? (
+        <>
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+            <span className="text-zinc-700 dark:text-zinc-300">
+              Currently active: <strong>{data.current_active}</strong>
+              {data.max_active != null
+                ? ` of ${data.max_active}`
+                : " (no cap)"}
+            </span>
+            {data.max_active != null &&
+            data.current_active >= data.max_active ? (
+              <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-950 dark:text-rose-300">
+                at cap
+              </span>
+            ) : null}
+          </div>
+          <div className="mb-3 flex items-center gap-2">
+            <input
+              id="enforce-max-active"
+              type="checkbox"
+              checked={enforce}
+              onChange={(e) => setEnforce(e.target.checked)}
+              className="h-4 w-4 accent-amber-600"
+            />
+            <label htmlFor="enforce-max-active" className="text-sm">
+              Enforce a cap on active API keys
+            </label>
+          </div>
+          {enforce ? (
+            <>
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                {presets.map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => setValue(String(p.n))}
+                    className={`rounded-md border px-2.5 py-1 text-xs ${
+                      value === String(p.n)
+                        ? "border-amber-600 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200"
+                        : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300"
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <label className="block text-xs text-zinc-500 mb-1" htmlFor="max-active-days">
+                Max active keys ({data.min} to {data.max})
+              </label>
+              <input
+                id="max-active-days"
+                type="number"
+                inputMode="numeric"
+                min={data.min}
+                max={data.max}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                className="w-32 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-500 dark:border-zinc-700 dark:bg-zinc-950"
+              />
+            </>
+          ) : null}
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              autoComplete="one-time-code"
+              inputMode="numeric"
+              placeholder="MFA code (if required)"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value)}
+              className="w-40 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-500 dark:border-zinc-700 dark:bg-zinc-950"
+            />
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-amber-700 disabled:opacity-60"
+            >
+              <FloppyDisk size={16} weight="duotone" />
+              {busy ? "Saving" : "Save"}
+            </button>
+            {flash ? (
+              <span
+                className={`text-xs ${flash.kind === "ok" ? "text-emerald-600" : "text-rose-600"}`}
+                role="status"
+              >
+                {flash.msg}
+              </span>
+            ) : null}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }

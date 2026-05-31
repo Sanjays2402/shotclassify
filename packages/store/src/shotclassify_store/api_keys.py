@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Iterable
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from .db import ApiKeyRow, get_session
 from . import tenant_settings as _tenant_settings
@@ -245,6 +245,32 @@ def create_key(
                 f"ttl_days {ttl_days} exceeds tenant policy max of "
                 f"{policy_cap} days"
             )
+    # Enforce per-tenant active-key cap (0031). When the workspace
+    # already holds this many non-revoked keys, refuse to mint another.
+    # Tightening the cap below the current count never retroactively
+    # revokes anyone; it only blocks the next mint until an admin frees
+    # a slot by revoking a stale key.
+    if tenant_id:
+        max_active = _tenant_settings.get_api_key_max_active_policy(
+            tenant_id
+        ).max_active
+        if max_active is not None:
+            with get_session() as ses:
+                current = ses.scalar(
+                    select(func.count())
+                    .select_from(ApiKeyRow)
+                    .where(
+                        ApiKeyRow.tenant_id == tenant_id,
+                        ApiKeyRow.revoked_at.is_(None),
+                    )
+                )
+            if (current or 0) >= max_active:
+                raise ValueError(
+                    f"api_key_max_active_reached: tenant already has "
+                    f"{current} active keys at the configured cap of "
+                    f"{max_active}. Revoke an existing key before minting "
+                    f"a new one or raise the cap in Settings."
+                )
     token = _new_token()
     cidrs = normalize_cidrs(allowed_cidrs)
     row = ApiKeyRow(
