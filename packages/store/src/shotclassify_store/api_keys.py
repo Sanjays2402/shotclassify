@@ -477,3 +477,24 @@ def revoke(key_id: str, *, tenant_id: str | None) -> ApiKeyRecord | None:
             ses.commit()
             ses.refresh(row)
     return _row_to_record(row)
+
+
+def is_stale(record: "ApiKeyRecord", inactivity_days: int | None, *, now: datetime | None = None) -> bool:
+    """Return True when the key has been idle longer than ``inactivity_days``.
+
+    Uses ``last_used_at`` when present, else falls back to ``created_at`` so a
+    key minted-and-forgotten is also caught. ``inactivity_days=None`` (no
+    policy) always returns False. The check is timezone-safe: legacy rows
+    written without tzinfo are treated as UTC.
+    """
+    if inactivity_days is None or inactivity_days <= 0:
+        return False
+    ts = record.last_used_at or record.created_at
+    if ts is None:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    current = now or _now()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    return (current - ts) > timedelta(days=inactivity_days)

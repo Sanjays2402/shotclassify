@@ -203,6 +203,36 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
             # is a single UPDATE and does not require a redeploy.
             record = api_keys_store.get_active_by_token(api_key)
             if record is not None:
+                # Per-tenant API key inactivity cap. When the workspace has
+                # opted in to auto-revocation of dormant credentials, any
+                # key that has been idle longer than the cap is revoked
+                # right here and the request is rejected. The same token
+                # presented again will hit the "not active" branch above
+                # and 401 with the standard missing-key shape.
+                from shotclassify_store import get_api_key_inactivity_policy
+                policy = get_api_key_inactivity_policy(record.tenant_id)
+                if api_keys_store.is_stale(record, policy.inactivity_days):
+                    api_keys_store.revoke(record.id, tenant_id=record.tenant_id)
+                    # Stash a marker for the audit middleware so the
+                    # auto-revocation lands in the tenant audit log with
+                    # the inbound request id and source IP.
+                    request.state.tenant_id = record.tenant_id
+                    request.state.principal = f"api-key:{record.id}"
+                    request.state.auto_revoked_api_key_id = record.id
+                    return JSONResponse(
+                        {
+                            "error": "api_key_stale_inactive",
+                            "detail": (
+                                "This API key has been idle longer than "
+                                "the workspace inactivity policy and has "
+                                "been automatically revoked. Mint a new "
+                                "key to continue."
+                            ),
+                            "inactivity_days": policy.inactivity_days,
+                            "key_id": record.id,
+                        },
+                        status_code=401,
+                    )
                 # Per-key source-IP allowlist. When the key carries a
                 # non-empty CIDR list, the request's source IP must be
                 # contained by at least one range. This is the per-

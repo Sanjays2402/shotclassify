@@ -2,6 +2,22 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: per-tenant API key inactivity (auto-revoke) policy
+
+A stale service credential is a deal-blocker for procurement: CC6.1 of SOC 2 and most enterprise security questionnaires ask, in some form, what happens to API keys that nobody uses any more. "We trust admins to clean them up" is no longer an acceptable answer. ShotClassify now lets workspace admins set a per-tenant `api_key_inactivity_days` cap from `Settings -> Security -> API key inactivity policy` (or `PUT /v1/settings/security/api-key-inactivity`). When a cap is set, any DB-backed API key whose effective last-use (falling back to `created_at` for never-used keys) is older than the cap is auto-revoked on its next presentation and the request is rejected with `HTTP 401 api_key_stale_inactive`. Enforcement lives in `services/api/app/middleware/auth.py`, so adding a new route cannot bypass it, and the auto-revocation lands in the tenant's tamper-evident audit log with the inbound request id, source IP, and key id. Existing keys are not retroactively shortened: a tightened policy only takes effect on the next request a stale key actually makes, so the change never breaks a live integration silently. Policy reads and writes are admin only, writes require MFA step-up, and the cap is tenant-scoped (one workspace's policy never affects another workspace's keys). Coverage in `tests/test_api_key_inactivity_policy.py`.
+
+Try it locally:
+
+```bash
+make dev   # API on http://127.0.0.1:7441, dashboard on http://127.0.0.1:3000
+
+# Set a 30 day inactivity cap (admin key + MFA step-up disabled in dev).
+curl -X PUT http://127.0.0.1:7441/v1/settings/security/api-key-inactivity \
+  -H "X-API-Key: $SHOTCLASSIFY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"inactivity_days": 30}'
+```
+
 ## What's new: CSRF protection on cookie-authenticated mutations
 
 The `sc_session` cookie is sent automatically by the browser on every request to the API origin, which means any logged-in user visiting a malicious page on a different origin could be coaxed into issuing a state-changing POST or DELETE that succeeds purely on the basis of the ambient cookie. SameSite=Lax blocks top-level form posts but not cross-origin `fetch` from a same-site subdomain takeover or a relaxed CORS allowlist. ShotClassify now ships a `CSRFMiddleware` that enforces a double-submit token on every cookie-authenticated mutation that looks like it came from a browser (the request carries an `Origin` or `Sec-Fetch-Site` header). The token is an HMAC-SHA256 of the session id signed with `APP_SECRET_KEY`, mirrored into a `sc_csrf` cookie that JS can read, and refreshed on every authenticated response so it rolls forward with session renewal and force-logout-all. API-key callers, SCIM bearer callers, and non-browser tools (curl, CI) are exempt because they do not ride on ambient cookies. SPAs can fetch the current token from `GET /auth/csrf` at boot and attach it to every fetch as `X-CSRF-Token`. Coverage in `tests/test_csrf.py` (browser POST without token blocked, with correct token allowed, cross-session token rejected, API-key exempt, safe verb exempt, non-browser caller exempt, /auth/csrf returns matching token, cookie refresh).

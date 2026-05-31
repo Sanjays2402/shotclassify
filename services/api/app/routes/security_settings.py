@@ -12,10 +12,13 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from shotclassify_store import (
     API_KEY_MAX_TTL_DAYS,
     API_KEY_MIN_TTL_DAYS,
+    API_KEY_INACTIVITY_MAX_DAYS,
+    API_KEY_INACTIVITY_MIN_DAYS,
     SESSION_TTL_MAX_MINUTES,
     SESSION_TTL_MIN_MINUTES,
     SESSION_IDLE_MAX_MINUTES,
     SESSION_IDLE_MIN_MINUTES,
+    get_api_key_inactivity_policy,
     get_api_key_ttl_policy,
     get_cors_origins,
     get_ip_allowlist,
@@ -26,6 +29,7 @@ from shotclassify_store import (
     get_sso_config,
     get_tenant_oidc,
     purge_expired_for_tenant,
+    set_api_key_inactivity_policy,
     set_api_key_ttl_policy,
     set_cors_origins,
     set_ip_allowlist,
@@ -602,3 +606,53 @@ def put_session_idle_policy_route(
         "default_minutes": default_minutes,
         "effective_minutes": effective,
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant API key inactivity (auto-revoke) policy
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api-key-inactivity", dependencies=[require_role("admin")])
+def get_api_key_inactivity_route(request: Request) -> dict:
+    """Return the tenant's API key inactivity policy (days, or null = no policy)."""
+    tenant_id = _tenant(request)
+    return get_api_key_inactivity_policy(tenant_id).to_dict()
+
+
+@router.put(
+    "/api-key-inactivity",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_api_key_inactivity_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Set or clear the tenant's API key inactivity cap in days.
+
+    Body: ``{"inactivity_days": int|null}``. ``null`` clears the policy
+    and disables auto-revocation. When set, any DB-backed API key whose
+    effective last-use (falling back to creation time) is older than the
+    cap is auto-revoked the next time it is presented to the API and the
+    request is rejected with 401 ``api_key_stale_inactive``. Existing
+    keys are not retroactively shortened: a tightened policy only takes
+    effect on the next request that comes in with the stale key.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "JSON object body required.")
+    if "inactivity_days" not in payload:
+        raise HTTPException(
+            422, "Field 'inactivity_days' is required (int or null)."
+        )
+    raw = payload["inactivity_days"]
+    if raw is not None and (isinstance(raw, bool) or not isinstance(raw, int)):
+        raise HTTPException(422, "inactivity_days must be an integer or null.")
+    actor = getattr(request.state, "principal", None)
+    try:
+        cfg = set_api_key_inactivity_policy(
+            tenant_id, inactivity_days=raw, updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return cfg.to_dict()

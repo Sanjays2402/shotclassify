@@ -1081,3 +1081,100 @@ def origin_matches_allowlist(origin: str, allowlist: list[str]) -> bool:
     except ValueError:
         return False
     return normalized in set(allowlist)
+
+
+# --- API key inactivity (auto-revoke) policy ------------------------------
+
+# Smallest meaningful cap is 1 day (anything shorter would auto-revoke
+# legitimate weekly cron integrations). Upper bound is 10 years so
+# admins can document an intentionally lenient policy without code
+# changes.
+API_KEY_INACTIVITY_MIN_DAYS = 1
+API_KEY_INACTIVITY_MAX_DAYS = 3650
+
+
+@dataclass(frozen=True)
+class ApiKeyInactivityPolicy:
+    tenant_id: str
+    inactivity_days: int | None  # None = no policy (legacy)
+
+    def to_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "inactivity_days": self.inactivity_days,
+            "min_days": API_KEY_INACTIVITY_MIN_DAYS,
+            "max_days": API_KEY_INACTIVITY_MAX_DAYS,
+        }
+
+
+def get_api_key_inactivity_policy(tenant_id: str | None) -> ApiKeyInactivityPolicy:
+    """Return the per-tenant API key inactivity policy.
+
+    Missing tenant or missing settings row return ``inactivity_days=None``
+    so existing deployments and unauthenticated paths keep working until
+    an admin opts in.
+    """
+    if not tenant_id:
+        return ApiKeyInactivityPolicy(tenant_id="", inactivity_days=None)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return ApiKeyInactivityPolicy(tenant_id=tenant_id, inactivity_days=None)
+        return ApiKeyInactivityPolicy(
+            tenant_id=tenant_id,
+            inactivity_days=getattr(row, "api_key_inactivity_days", None),
+        )
+
+
+def set_api_key_inactivity_policy(
+    tenant_id: str,
+    *,
+    inactivity_days: int | None,
+    updated_by: str | None,
+) -> ApiKeyInactivityPolicy:
+    """Persist (or clear) the per-tenant API key inactivity cap in days.
+
+    ``None`` clears the policy and disables auto-revocation. Raises
+    :class:`ValueError` for non-integer or out-of-range values so the
+    API layer can return 422.
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    norm: int | None
+    if inactivity_days is None:
+        norm = None
+    else:
+        if isinstance(inactivity_days, bool) or not isinstance(inactivity_days, int):
+            raise ValueError("inactivity_days must be an integer or null")
+        if (
+            inactivity_days < API_KEY_INACTIVITY_MIN_DAYS
+            or inactivity_days > API_KEY_INACTIVITY_MAX_DAYS
+        ):
+            raise ValueError(
+                f"inactivity_days must be between {API_KEY_INACTIVITY_MIN_DAYS} "
+                f"and {API_KEY_INACTIVITY_MAX_DAYS} days"
+            )
+        norm = inactivity_days
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                api_key_inactivity_days=norm,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.api_key_inactivity_days = norm
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return ApiKeyInactivityPolicy(tenant_id=tenant_id, inactivity_days=norm)

@@ -241,6 +241,12 @@ class TenantSettingsRow(Base):
     # clamps the successor's expiry on ``rotate``. Recorded changes go
     # through the audit log via the security_settings route.
     api_key_max_ttl_days: Mapped[int | None] = mapped_column(nullable=True)
+    # Per-tenant API key inactivity cap. When set (days), a presented
+    # DB-backed API key whose effective last-use (falling back to
+    # ``created_at``) is older than this is auto-revoked at the auth
+    # layer and the request is rejected with 401 ``api_key_stale_inactive``.
+    # NULL = no policy (legacy). Wired into security_settings + admin UI.
+    api_key_inactivity_days: Mapped[int | None] = mapped_column(nullable=True)
     # Workspace-wide MFA enrollment policy. When True, every cookie-
     # authenticated request from a member of this tenant must have a
     # confirmed TOTP credential or the auth middleware rejects the call
@@ -761,6 +767,11 @@ def init_db() -> None:
                 if "api_key_max_ttl_days" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN api_key_max_ttl_days INTEGER"
+                    ))
+                # 0030 per-tenant API key inactivity (auto-revoke) policy.
+                if "api_key_inactivity_days" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN api_key_inactivity_days INTEGER"
                     ))
                 # 0024 workspace-wide MFA enrolment policy.
                 if "mfa_required_for_members" not in tcols:
