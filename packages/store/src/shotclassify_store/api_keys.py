@@ -32,7 +32,7 @@ from typing import Iterable
 
 from sqlalchemy import func, select, update
 
-from .db import ApiKeyRow, get_session
+from .db import ApiKeyMonthlyUsageRow, ApiKeyRow, get_session
 from . import tenant_settings as _tenant_settings
 
 # Canonical scope strings. ``admin`` is a superset shorthand the auth layer
@@ -159,6 +159,8 @@ class ApiKeyRecord:
     created_by: str | None
     rpm_override: int | None
     allowed_cidrs: list[str]
+    monthly_quota: int | None
+    monthly_usage: int = 0
 
     @property
     def is_active(self) -> bool:
@@ -190,10 +192,36 @@ class ApiKeyRecord:
             "active": self.is_active,
             "rpm_override": self.rpm_override,
             "allowed_cidrs": list(self.allowed_cidrs),
+            "monthly_quota": self.monthly_quota,
+            "monthly_usage": self.monthly_usage,
         }
 
 
-def _row_to_record(row: ApiKeyRow) -> ApiKeyRecord:
+def _current_year_month(now: datetime | None = None) -> str:
+    """Return the current UTC year-month bucket (``YYYY-MM``)."""
+    t = now or _now()
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=UTC)
+    return t.strftime("%Y-%m")
+
+
+def _seconds_until_next_month(now: datetime | None = None) -> int:
+    """Seconds remaining until the start of the next UTC month.
+
+    Used by the rate limit middleware to populate ``X-RateLimit-Reset`` and
+    ``Retry-After`` when a request is rejected by the per-key monthly cap.
+    Always returns at least 1 so clients never see ``Retry-After: 0``.
+    """
+    t = now or _now()
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=UTC)
+    year = t.year + (1 if t.month == 12 else 0)
+    month = 1 if t.month == 12 else t.month + 1
+    nxt = datetime(year, month, 1, tzinfo=UTC)
+    return max(1, int((nxt - t).total_seconds()))
+
+
+def _row_to_record(row: ApiKeyRow, *, monthly_usage: int = 0) -> ApiKeyRecord:
     return ApiKeyRecord(
         id=row.id,
         label=row.label,
@@ -206,6 +234,8 @@ def _row_to_record(row: ApiKeyRow) -> ApiKeyRecord:
         created_by=row.created_by,
         rpm_override=row.rpm_override,
         allowed_cidrs=list(row.allowed_cidrs or []),
+        monthly_quota=row.monthly_quota,
+        monthly_usage=monthly_usage,
     )
 
 
@@ -217,6 +247,7 @@ def create_key(
     created_by: str | None,
     ttl_days: int | None = None,
     allowed_cidrs: Iterable[str] | None = None,
+    monthly_quota: int | None = None,
 ) -> tuple[ApiKeyRecord, str]:
     """Mint a new key. Returns ``(record, plaintext_token)``.
 
@@ -271,6 +302,13 @@ def create_key(
                     f"{max_active}. Revoke an existing key before minting "
                     f"a new one or raise the cap in Settings."
                 )
+    if monthly_quota is not None:
+        if not isinstance(monthly_quota, int) or isinstance(monthly_quota, bool):
+            raise ValueError("monthly_quota must be an integer or null")
+        if monthly_quota < 1 or monthly_quota > _MAX_MONTHLY_QUOTA:
+            raise ValueError(
+                f"monthly_quota must be between 1 and {_MAX_MONTHLY_QUOTA}"
+            )
     token = _new_token()
     cidrs = normalize_cidrs(allowed_cidrs)
     row = ApiKeyRow(
@@ -282,6 +320,7 @@ def create_key(
         created_by=created_by,
         expires_at=(_now() + timedelta(days=ttl_days)) if ttl_days else None,
         allowed_cidrs=cidrs or None,
+        monthly_quota=monthly_quota,
     )
     with get_session() as ses:
         ses.add(row)
@@ -296,6 +335,7 @@ def list_keys(
     include_revoked: bool = False,
 ) -> list[ApiKeyRecord]:
     """List keys for a tenant. Pass ``tenant_id=None`` for cross-tenant (admin)."""
+    ym = _current_year_month()
     with get_session() as ses:
         stmt = select(ApiKeyRow).order_by(ApiKeyRow.created_at.desc())
         if tenant_id is not None:
@@ -303,7 +343,11 @@ def list_keys(
         if not include_revoked:
             stmt = stmt.where(ApiKeyRow.revoked_at.is_(None))
         rows = ses.scalars(stmt).all()
-    return [_row_to_record(r) for r in rows]
+        out: list[ApiKeyRecord] = []
+        for r in rows:
+            usage = _read_usage_locked(ses, r.id, ym) if r.monthly_quota is not None else 0
+            out.append(_row_to_record(r, monthly_usage=usage))
+    return out
 
 
 def get_active_by_token(token: str) -> ApiKeyRecord | None:
@@ -463,6 +507,7 @@ def rotate(
             expires_at=successor_expires,
             rpm_override=row.rpm_override,
             allowed_cidrs=list(row.allowed_cidrs) if row.allowed_cidrs else None,
+            monthly_quota=row.monthly_quota,
         )
         ses.add(new_row)
         # Shorten (never extend) the old key's TTL. SQLite strips tzinfo on
@@ -524,3 +569,149 @@ def is_stale(record: "ApiKeyRecord", inactivity_days: int | None, *, now: dateti
     if current.tzinfo is None:
         current = current.replace(tzinfo=UTC)
     return (current - ts) > timedelta(days=inactivity_days)
+
+
+# ---------------------------------------------------------------------------
+# Per-key monthly call quota (0033).
+# ---------------------------------------------------------------------------
+
+
+_MAX_MONTHLY_QUOTA = 1_000_000_000
+
+
+def set_monthly_quota(
+    key_id: str,
+    *,
+    tenant_id: str | None,
+    quota: int | None,
+) -> ApiKeyRecord | None:
+    """Set or clear the per-key monthly call quota.
+
+    ``quota=None`` clears the cap. Returns ``None`` when the key is missing
+    or belongs to another tenant so a tenant-scoped admin can't probe ids
+    across workspaces. Raises :class:`ValueError` on a non-positive or
+    absurdly large value.
+    """
+    if quota is not None:
+        if not isinstance(quota, int) or isinstance(quota, bool):
+            raise ValueError("quota must be an integer or null")
+        if quota < 1 or quota > _MAX_MONTHLY_QUOTA:
+            raise ValueError(
+                f"quota must be between 1 and {_MAX_MONTHLY_QUOTA}"
+            )
+    with get_session() as ses:
+        row = ses.scalar(select(ApiKeyRow).where(ApiKeyRow.id == key_id))
+        if row is None:
+            return None
+        if tenant_id is not None and row.tenant_id != tenant_id:
+            return None
+        row.monthly_quota = quota
+        ses.commit()
+        ses.refresh(row)
+        usage = _read_usage_locked(ses, row.id, _current_year_month())
+    return _row_to_record(row, monthly_usage=usage)
+
+
+def get_monthly_usage(key_id: str, *, year_month: str | None = None) -> int:
+    """Return the call count for ``key_id`` in the given UTC ``YYYY-MM``.
+
+    Defaults to the current UTC month. Returns 0 when no row exists yet.
+    Never raises; storage hiccups degrade to 0 so callers can render UIs
+    without surfacing internal errors.
+    """
+    ym = year_month or _current_year_month()
+    try:
+        with get_session() as ses:
+            return _read_usage_locked(ses, key_id, ym)
+    except Exception:  # pragma: no cover - defensive
+        return 0
+
+
+def _read_usage_locked(ses, key_id: str, ym: str) -> int:
+    row = ses.scalar(
+        select(ApiKeyMonthlyUsageRow).where(
+            ApiKeyMonthlyUsageRow.key_id == key_id,
+            ApiKeyMonthlyUsageRow.year_month == ym,
+        )
+    )
+    return int(row.count) if row is not None else 0
+
+
+@dataclass(frozen=True)
+class MonthlyConsumeResult:
+    allowed: bool
+    quota: int | None
+    used: int
+    remaining: int
+    reset_seconds: int
+
+
+def try_consume_monthly_quota(
+    record: ApiKeyRecord,
+    *,
+    now: datetime | None = None,
+) -> MonthlyConsumeResult:
+    """Atomically charge one request against the key's monthly quota.
+
+    When the key has no ``monthly_quota`` set this is a no-op that reports
+    ``allowed=True`` and ``quota=None``. When a quota is set we increment
+    the counter row inside a single transaction and only commit when the
+    new value would not exceed the cap, so concurrent requests cannot
+    race past the configured limit.
+
+    Returns a :class:`MonthlyConsumeResult` describing the post-charge
+    state. The middleware uses ``reset_seconds`` to populate
+    ``X-RateLimit-Reset`` and ``Retry-After`` on a 429 response.
+    """
+    quota = record.monthly_quota
+    reset = _seconds_until_next_month(now)
+    if quota is None:
+        return MonthlyConsumeResult(
+            allowed=True, quota=None, used=0, remaining=-1, reset_seconds=reset
+        )
+    ym = _current_year_month(now)
+    try:
+        with get_session() as ses:
+            row = ses.scalar(
+                select(ApiKeyMonthlyUsageRow).where(
+                    ApiKeyMonthlyUsageRow.key_id == record.id,
+                    ApiKeyMonthlyUsageRow.year_month == ym,
+                )
+            )
+            if row is None:
+                row = ApiKeyMonthlyUsageRow(
+                    key_id=record.id, year_month=ym, count=0
+                )
+                ses.add(row)
+                ses.flush()
+            current = int(row.count)
+            if current >= quota:
+                # Refuse: do not commit any change so the counter accurately
+                # reflects accepted requests only.
+                ses.rollback()
+                return MonthlyConsumeResult(
+                    allowed=False,
+                    quota=quota,
+                    used=current,
+                    remaining=0,
+                    reset_seconds=reset,
+                )
+            row.count = current + 1
+            row.updated_at = _now()
+            ses.commit()
+            new_used = current + 1
+            return MonthlyConsumeResult(
+                allowed=True,
+                quota=quota,
+                used=new_used,
+                remaining=max(0, quota - new_used),
+                reset_seconds=reset,
+            )
+    except Exception:  # pragma: no cover - defensive; fail open on storage glitch
+        return MonthlyConsumeResult(
+            allowed=True,
+            quota=quota,
+            used=0,
+            remaining=quota,
+            reset_seconds=reset,
+        )

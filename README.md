@@ -70,6 +70,28 @@ curl http://127.0.0.1:7441/v1/trust/legal/status -H "X-API-Key: $SHOTCLASSIFY_AP
 
 The dashboard view is at <http://127.0.0.1:3000/admin/legal>.
 
+## What's new: per-API-key monthly call quota
+
+Per-minute caps (`rpm_override`) stop bursts; they do not stop a steady 24/7 draw that runs up a five-figure bill before anyone notices. Enterprise procurement asks for the matching control: a hard ceiling on how many calls a single integration credential can make in a billing period, without revoking the key outright. Each DB-backed API key now carries an optional `monthly_quota`. When set, the rate limit middleware atomically charges a per-key `api_key_monthly_usage` counter on every request and refuses the next call with `HTTP 429 monthly_quota_exceeded` once the cap is reached, with `X-RateLimit-Scope: api_key_month`, `X-RateLimit-Limit`, `X-RateLimit-Remaining: 0`, and a `Retry-After` plus `X-RateLimit-Reset` pointing at the start of the next UTC month. The cap is per-key (not per-tenant) so a noisy integration cannot starve a quiet one in the same workspace, rotation inherits the cap so a rotated key cannot quietly escape it, and the admin console can read live usage with `GET /v1/api-keys/{id}/monthly-usage`. NULL preserves the legacy unlimited behaviour. Admin only, MFA step-up required on writes. Coverage in `tests/test_api_key_monthly_quota.py`.
+
+Try it locally:
+
+```bash
+# Mint a key capped at 50000 calls / month.
+curl -sS -X POST http://127.0.0.1:7441/v1/api-keys \
+  -H "X-API-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"label":"partner-batch","scopes":["write:classifications"],"monthly_quota":50000}'
+
+# Inspect this month's usage.
+curl -sS http://127.0.0.1:7441/v1/api-keys/<key-id>/monthly-usage \
+  -H "X-API-Key: $ADMIN_KEY"
+
+# Raise the cap later, or pass quota:null to clear it entirely.
+curl -sS -X PATCH http://127.0.0.1:7441/v1/api-keys/<key-id>/monthly-quota \
+  -H "X-API-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"quota":100000}'
+```
+
 ## What's new: per-tenant cap on active API keys
 
 Unbounded service-credential sprawl is a procurement red flag. SOC 2 CC6.1 and NIST AC-2 both expect a documented, enforced cap on how many active credentials a single workspace can hold. ShotClassify now lets workspace admins set a per-tenant `api_key_max_active` cap from `Settings -> Security -> API key active cap` (or `PUT /v1/settings/security/api-key-max-active`). When the cap is set, `POST /v1/api-keys` (mint) is rejected with `HTTP 422 api_key_max_active_reached` once the workspace already holds that many non-revoked keys, and the rejection is recorded in the audit log alongside the actor and request id. Tightening the cap below the current active count never retroactively revokes existing keys; it only blocks the next mint until an admin frees a slot by revoking a stale one. The cap is tenant-scoped: one workspace's policy never affects another's, and the list response (`GET /v1/api-keys`) surfaces both the cap and the current in-use count so the admin UI can show `N of M`. Enforcement lives in `packages/store/src/shotclassify_store/api_keys.py::create_key`, so adding a new mint path cannot bypass it. Reads and writes are admin only, writes require MFA step-up. Coverage in `tests/test_api_key_max_active_policy.py`.

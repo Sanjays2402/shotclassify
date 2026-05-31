@@ -16,6 +16,13 @@ Individual API keys may override the per-key ceiling via the
 ``api_keys.rpm_override`` column so workspace admins can grant elevated
 quotas to trusted integrations without lifting the global default.
 
+Individual API keys may additionally carry a per-month call quota via
+``api_keys.monthly_quota``. When set, the middleware atomically charges
+the matching ``api_key_monthly_usage`` counter on every request and
+returns 429 with ``X-RateLimit-Scope: api_key_month`` once the cap is
+reached. ``Retry-After`` and ``X-RateLimit-Reset`` are populated with
+the number of seconds remaining until the start of the next UTC month.
+
 Every response carries the standard ``X-RateLimit-Limit``,
 ``X-RateLimit-Remaining``, ``X-RateLimit-Reset``, and ``X-RateLimit-Scope``
 headers so clients can back off proactively. Rejected requests additionally
@@ -220,6 +227,38 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 resp, scope=scope, limit=limit, remaining=0, retry=retry
             )
             return resp
+
+        # Per-API-key monthly call quota (0033). Only applies when the request
+        # is authenticated by a DB-backed key that has an explicit quota set;
+        # NULL preserves the legacy unbounded behaviour. Charged AFTER the
+        # token-bucket admit so a request that would have been rejected for
+        # bursting does not also burn a monthly slot.
+        if key_record is not None and key_record.monthly_quota is not None:
+            try:
+                from shotclassify_store import api_keys_store as _aks
+
+                result = _aks.try_consume_monthly_quota(key_record)
+            except Exception:
+                result = None
+            if result is not None and not result.allowed:
+                RATE_LIMIT_REJECTIONS.labels(scope="api_key_month").inc()
+                resp = JSONResponse(
+                    {
+                        "error": "monthly_quota_exceeded",
+                        "detail": (
+                            "API key has reached its monthly call quota of "
+                            f"{result.quota}. Quota resets at the start of "
+                            "the next UTC month."
+                        ),
+                    },
+                    status_code=429,
+                    headers={"Retry-After": str(result.reset_seconds)},
+                )
+                resp.headers["X-RateLimit-Scope"] = "api_key_month"
+                resp.headers["X-RateLimit-Limit"] = str(result.quota)
+                resp.headers["X-RateLimit-Remaining"] = "0"
+                resp.headers["X-RateLimit-Reset"] = str(result.reset_seconds)
+                return resp
 
         response = await call_next(request)
         # Headers on every successful response so clients can back off

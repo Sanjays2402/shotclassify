@@ -41,6 +41,16 @@ class CreateKeyRequest(BaseModel):
             "from an IP outside the allowlist are rejected with HTTP 403."
         ),
     )
+    monthly_quota: int | None = Field(
+        default=None,
+        ge=1,
+        le=1_000_000_000,
+        description=(
+            "Optional per-API-key monthly call cap. When set, the rate "
+            "limit middleware rejects requests with HTTP 429 once the key "
+            "reaches this many calls in the current UTC month."
+        ),
+    )
 
 
 def _effective_tenant(request: Request, requested: str | None) -> str | None:
@@ -112,6 +122,7 @@ def create_my_key(
             created_by=created_by,
             ttl_days=payload.ttl_days,
             allowed_cidrs=payload.allowed_cidrs,
+            monthly_quota=payload.monthly_quota,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -337,3 +348,98 @@ def set_key_allowed_cidrs(
         raise HTTPException(404, "API key not found.")
     request.state.audit_target_id = record.id
     return {"key": record.to_dict()}
+
+
+class MonthlyQuotaRequest(BaseModel):
+    quota: int | None = Field(
+        default=None,
+        ge=1,
+        le=1_000_000_000,
+        description=(
+            "Per-API-key monthly call quota. Pass null to clear the cap and "
+            "fall back to unlimited (the legacy default). When set, the "
+            "rate limit middleware atomically charges a counter and returns "
+            "429 with X-RateLimit-Scope=api_key_month once the cap is hit. "
+            "The counter resets at the start of the next UTC month."
+        ),
+    )
+
+
+@router.patch(
+    "/{key_id}/monthly-quota",
+    dependencies=[require_mfa_step_up(), require_scope("admin")],
+)
+def set_key_monthly_quota(
+    key_id: str,
+    payload: MonthlyQuotaRequest,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+    _: str = require_role("admin"),
+):
+    """Set or clear the per-key monthly call quota.
+
+    ``quota=null`` clears the cap so the key falls back to unlimited.
+    Returns 404 for unknown ids or keys belonging to another tenant so
+    admins cannot probe ids across workspaces. Returns 422 when the
+    requested quota is outside the supported range.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if dry_run:
+        keys = api_keys_store.list_keys(tenant_id=tenant_id, include_revoked=True)
+        record = next((k for k in keys if k.id == key_id), None)
+        if record is None:
+            return mark_dry_run(request, would_set=None)
+        request.state.audit_target_id = record.id
+        return mark_dry_run(
+            request,
+            would_set={
+                "id": record.id,
+                "label": record.label,
+                "current_monthly_quota": record.monthly_quota,
+                "new_monthly_quota": payload.quota,
+            },
+        )
+    try:
+        record = api_keys_store.set_monthly_quota(
+            key_id, tenant_id=tenant_id, quota=payload.quota
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if record is None:
+        raise HTTPException(404, "API key not found.")
+    request.state.audit_target_id = record.id
+    return {"key": record.to_dict()}
+
+
+@router.get(
+    "/{key_id}/monthly-usage",
+    dependencies=[require_scope("admin")],
+)
+def get_key_monthly_usage(
+    key_id: str,
+    request: Request,
+    _: str = require_role("admin"),
+):
+    """Return the current month's call count and remaining quota for the key.
+
+    Useful for the admin console and for end-user dashboards that want to
+    surface "you have N calls left this month" without making the client
+    parse rate-limit headers. Returns 404 for unknown ids or keys in
+    another tenant.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    keys = api_keys_store.list_keys(tenant_id=tenant_id, include_revoked=True)
+    record = next((k for k in keys if k.id == key_id), None)
+    if record is None:
+        raise HTTPException(404, "API key not found.")
+    usage = api_keys_store.get_monthly_usage(record.id)
+    remaining = None
+    if record.monthly_quota is not None:
+        remaining = max(0, record.monthly_quota - usage)
+    return {
+        "key_id": record.id,
+        "label": record.label,
+        "monthly_quota": record.monthly_quota,
+        "monthly_usage": usage,
+        "remaining": remaining,
+    }

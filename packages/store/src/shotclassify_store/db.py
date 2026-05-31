@@ -81,6 +81,33 @@ class ApiKeyRow(Base):
     # by at least one range. Enforced in the auth middleware so adding
     # a new route cannot accidentally bypass it.
     allowed_cidrs: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Optional per-key monthly call quota. NULL means unlimited (the legacy
+    # default). When set, the rate limit middleware atomically increments a
+    # row in ``api_key_monthly_usage`` keyed on (key_id, YYYY-MM in UTC) and
+    # rejects the request with 429 once the increment would exceed this
+    # value. Procurement uses this to cap the spend a single integration
+    # credential can incur in a billing period without revoking it outright.
+    monthly_quota: Mapped[int | None] = mapped_column(nullable=True)
+
+
+class ApiKeyMonthlyUsageRow(Base):
+    """Atomic counter row for the per-API-key monthly quota.
+
+    One row per (key_id, year_month). Incremented under a row-level lock
+    by ``api_keys.try_consume_monthly_quota`` so a burst of concurrent
+    requests cannot race past the configured cap. The row is created on
+    first use of the month and lives forever as the historical record;
+    archival/purge is a separate concern handled by the retention job.
+    """
+
+    __tablename__ = "api_key_monthly_usage"
+
+    key_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    year_month: Mapped[str] = mapped_column(String(7), primary_key=True)
+    count: Mapped[int] = mapped_column(default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
 
 
 class AuditLogRow(Base):
@@ -732,6 +759,15 @@ def init_db() -> None:
             return
         cols = {c["name"] for c in insp.get_columns("classifications")}
         with engine.begin() as conn:
+            # 0033 per-API-key monthly call quota + usage counter table.
+            if insp.has_table("api_keys"):
+                kcols = {c["name"] for c in insp.get_columns("api_keys")}
+                if "monthly_quota" not in kcols:
+                    conn.execute(text(
+                        "ALTER TABLE api_keys ADD COLUMN monthly_quota INTEGER"
+                    ))
+            if not insp.has_table("api_key_monthly_usage"):
+                Base.metadata.tables["api_key_monthly_usage"].create(bind=conn)
             if "label" not in cols:
                 conn.execute(text("ALTER TABLE classifications ADD COLUMN label VARCHAR(256)"))
             if "tags" not in cols:
