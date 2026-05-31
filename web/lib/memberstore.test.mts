@@ -113,3 +113,32 @@ test("removeMember deletes a member and returns false for unknown emails", async
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test("concurrent writes to distinct files do not share the EMPTY store", async () => {
+  // Regression: when readStore returned a shallow clone of a module-level
+  // EMPTY sentinel, two concurrent upserts against different files both
+  // pushed into the same array and corrupted the smaller of the two
+  // stores. Distinct files must stay distinct even when the read happens
+  // for a fresh (ENOENT) store on both sides at the same time.
+  const a = await tmpStore();
+  const b = await tmpStore();
+  try {
+    await Promise.all([
+      upsertMemberAt(a.file, { email: "a@x.com", role: "admin" }),
+      upsertMemberAt(b.file, { email: "b@x.com", role: "admin" }),
+    ]);
+    const aMembers = await listMembersAt(a.file);
+    const bMembers = await listMembersAt(b.file);
+    assert.deepEqual(
+      aMembers.map((m) => m.email),
+      ["a@x.com"],
+    );
+    assert.deepEqual(
+      bMembers.map((m) => m.email),
+      ["b@x.com"],
+    );
+  } finally {
+    await fs.rm(a.dir, { recursive: true, force: true });
+    await fs.rm(b.dir, { recursive: true, force: true });
+  }
+});

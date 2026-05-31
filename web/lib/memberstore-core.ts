@@ -49,7 +49,7 @@ type Store = {
   invitations: Invitation[];
 };
 
-const EMPTY: Store = { members: [], invitations: [] };
+const EMPTY = (): Store => ({ members: [], invitations: [] });
 
 export function defaultMembersStorePath(): string {
   return (
@@ -83,13 +83,13 @@ async function readStore(file: string): Promise<Store> {
   try {
     const raw = await fs.readFile(file, "utf8");
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return { ...EMPTY };
+    if (!parsed || typeof parsed !== "object") return EMPTY();
     return {
       members: Array.isArray(parsed.members) ? parsed.members : [],
       invitations: Array.isArray(parsed.invitations) ? parsed.invitations : [],
     };
   } catch (err: any) {
-    if (err?.code === "ENOENT") return { ...EMPTY };
+    if (err?.code === "ENOENT") return EMPTY();
     throw err;
   }
 }
