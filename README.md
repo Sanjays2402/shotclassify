@@ -2,7 +2,34 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, and an admin dashboard.
 
-## What's new: sandbox / dry-run mode on every destructive endpoint
+## What's new: unified admin console at /admin
+
+Workspace admins now have a single landing page that aggregates the
+state procurement teams ask about before signing: member count by
+role, pending invitations, active sessions, API keys with last-used
+timestamps, recent audit events, and total classifications. The page
+is admin-role gated by the FastAPI backend (`/v1/admin/overview` with
+`require_role("admin")`), tenant-scoped to the caller's workspace,
+and read-only. Non-admins see a denied state instead of a half-broken
+UI; lower-privilege accounts that try the JSON endpoint get a 403.
+Deep links from every card go to the existing management surfaces
+(Members, Sessions, API keys, Audit, Usage).
+
+### Try it
+
+```bash
+# Admin overview as JSON (admin role required).
+curl -s 'http://localhost:7441/v1/admin/overview' \
+  -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme" | jq .
+
+# Same call with a viewer key -> 403.
+curl -si 'http://localhost:7441/v1/admin/overview' \
+  -H "x-api-key: $ACME_VIEWER_KEY" -H "x-tenant: acme" | head -1
+```
+
+UI lives at `/admin` in the web app.
+
+## Previously: sandbox / dry-run mode on every destructive endpoint
 
 Every mutating endpoint that deletes, revokes, or removes state now
 accepts `?dry_run=true`. The API returns the counts that would change

@@ -42,6 +42,7 @@ from .routes import mfa as mfa_routes
 from .routes import api_keys as api_keys_routes
 from .routes import memberships as memberships_routes
 from .routes import workspace_data as workspace_data_routes
+from .routes import admin as admin_routes
 
 
 @asynccontextmanager
@@ -132,6 +133,7 @@ def create_app() -> FastAPI:
     app.include_router(api_keys_routes.router)
     app.include_router(memberships_routes.router)
     app.include_router(workspace_data_routes.router)
+    app.include_router(admin_routes.router)
     storage_root = Path(s.storage_local_dir)
     storage_root.mkdir(parents=True, exist_ok=True)
     app.mount("/blob", StaticFiles(directory=str(storage_root)), name="blob")
