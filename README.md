@@ -55,6 +55,7 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - Usage & free-tier quota at `/usage`: per-principal monthly meter (read from `GET /v1/me/usage`) with progress bar, remaining count, plan comparison, and an upgrade CTA. The header carries a compact live meter on every page. Classify endpoints return `402 quota_exceeded` once the per-principal `SHOTCLASSIFY_FREE_MONTHLY_LIMIT` (default 200) is hit for the calendar month so customers see the wall before they hit it in code.
 
 - First run onboarding at `/welcome`: a three step tour (classify a screenshot, browse history, get an API key) auto-opens once per browser via a dismissable overlay, and can be replayed from the Account page or the `/welcome` deep link.
+- Installable PWA with offline shell: `web/public/manifest.webmanifest` plus a service worker at `web/public/sw.js` precache the app shell and serve a friendly `/offline` page when the network drops. The header carries a one-time install prompt (Android/desktop Chromium) and an iOS Add-to-Home-Screen hint that respects a 14 day dismiss. API and `/v1` requests are never intercepted, so live classifier traffic always hits the backend. Try it: load `http://localhost:3000`, open DevTools > Application > Manifest to confirm install, then toggle the Network panel to Offline and reload to land on `/offline`.
 
 ## Try paginated history
 

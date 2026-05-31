@@ -1,0 +1,61 @@
+{
+  "name": "ShotClassify",
+  "short_name": "ShotClassify",
+  "description": "Real-time screenshot classification with confidence scoring, OCR, and field extraction.",
+  "id": "/",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f5ef",
+  "theme_color": "#1f4d2b",
+  "categories": ["productivity", "utilities", "developer"],
+  "lang": "en",
+  "dir": "ltr",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Upload a shot",
+      "short_name": "Upload",
+      "url": "/upload",
+      "description": "Classify a single screenshot"
+    },
+    {
+      "name": "Batch run",
+      "short_name": "Batch",
+      "url": "/batch",
+      "description": "Classify many shots at once"
+    },
+    {
+      "name": "History",
+      "short_name": "Shots",
+      "url": "/shots",
+      "description": "Browse your saved runs"
+    }
+  ]
+}

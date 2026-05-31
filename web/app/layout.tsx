@@ -7,6 +7,7 @@ import HotKeys from "@/components/HotKeys";
 import { QuotaMeter } from "@/components/QuotaMeter";
 import OnboardingTour from "@/components/OnboardingTour";
 import AuthMenu from "@/components/AuthMenu";
+import PwaInstaller from "@/components/PwaInstaller";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -29,6 +30,28 @@ export const metadata: Metadata = {
   title: "ShotClassify · live screenshot classifier",
   description:
     "Real-time screenshot classification with confidence scoring, OCR, and field extraction.",
+  manifest: "/manifest.webmanifest",
+  applicationName: "ShotClassify",
+  appleWebApp: {
+    capable: true,
+    title: "ShotClassify",
+    statusBarStyle: "default",
+  },
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
+  },
+};
+
+export const viewport = {
+  themeColor: "#1f4d2b",
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover" as const,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -37,6 +60,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <HotKeys />
         <OnboardingTour />
+        <PwaInstaller />
         <Ticker />
         <header
           className="border-b"
