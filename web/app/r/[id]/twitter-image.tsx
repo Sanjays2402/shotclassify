@@ -1,1 +1,8 @@
-export { default, runtime, alt, size, contentType } from "./opengraph-image";
+// Twitter card image. Reuses the OpenGraph image renderer so the two stay in sync.
+export {
+  default,
+  runtime,
+  contentType,
+  size,
+  alt,
+} from "./opengraph-image";

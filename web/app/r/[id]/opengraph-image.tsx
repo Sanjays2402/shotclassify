@@ -1,43 +1,34 @@
 import { ImageResponse } from "next/og";
 import { fetchShareRecord } from "@/lib/share";
-import { CATEGORIES, LONG, SHORT, type Category } from "@/lib/categories";
+import { LONG, type Category } from "@/lib/categories";
+import {
+  ogTierColor,
+  ogFmtFilename,
+  ogTopThree,
+  ogBarWidthPct,
+} from "@/lib/og-share";
+
+// Dynamic Open Graph image for public share pages at /r/<id>.
+// Rendered server-side by Next 15 / Vercel OG. Linked automatically into
+// <meta property="og:image"> and <meta name="twitter:image"> by Next.
 
 export const runtime = "nodejs";
-export const alt = "ShotClassify result";
-export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
-
-// Palette mirrors the broadcast theme tokens in globals.css so the share card
-// looks like a still frame pulled straight from the app.
-const COLORS = {
-  chalk: "#f5f1e8",
-  felt: "#0b3d2e",
-  feltRail: "#082a20",
-  ink: "#101010",
-  rule: "#d8d2c1",
-  amber: "#f3a712",
-  confHigh: "#1f8f4c",
-  confMid: "#d68910",
-  confLow: "#b03a2e",
-};
-
-function confColor(score: number): string {
-  if (score >= 0.8) return COLORS.confHigh;
-  if (score >= 0.55) return COLORS.confMid;
-  return COLORS.confLow;
-}
-
-function truncate(s: string, n: number): string {
-  if (!s) return "";
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
-}
+export const size = { width: 1200, height: 630 };
+export const alt = "ShotClassify result";
 
 type Params = { params: Promise<{ id: string }> };
 
-export default async function OgImage({ params }: Params) {
+const BG = "#0b0d10";
+const FG = "#f4f4f5";
+const MUTED = "#9ca3af";
+const ACCENT = "#a3e635";
+
+export default async function Image({ params }: Params) {
   const { id } = await params;
   const rec = await fetchShareRecord(id);
 
+  // Render a clean "not found" card rather than failing the metadata fetch.
   if (!rec) {
     return new ImageResponse(
       (
@@ -47,18 +38,16 @@ export default async function OgImage({ params }: Params) {
             height: "100%",
             display: "flex",
             flexDirection: "column",
-            alignItems: "center",
             justifyContent: "center",
-            background: COLORS.chalk,
-            color: COLORS.ink,
-            fontFamily: "sans-serif",
+            alignItems: "center",
+            background: BG,
+            color: FG,
+            fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
           }}
         >
-          <div style={{ fontSize: 36, opacity: 0.6, letterSpacing: 2 }}>
-            SHOTCLASSIFY
-          </div>
-          <div style={{ fontSize: 64, fontWeight: 700, marginTop: 20 }}>
-            Result not found
+          <div style={{ fontSize: 56, fontWeight: 700 }}>Result not found</div>
+          <div style={{ fontSize: 28, color: MUTED, marginTop: 16 }}>
+            ShotClassify
           </div>
         </div>
       ),
@@ -66,19 +55,14 @@ export default async function OgImage({ params }: Params) {
     );
   }
 
-  const cat = (rec.primary_category as Category) ?? "other";
-  const label = LONG[cat] ?? rec.primary_category;
-  const short = SHORT[cat] ?? rec.primary_category.toUpperCase();
-  const confPct = (rec.confidence * 100).toFixed(1) + "%";
-  const cColor = confColor(rec.confidence);
-
-  const dist =
-    rec.classification?.confidences ??
-    CATEGORIES.map((c) => ({
-      category: c,
-      score: c === cat ? rec.confidence : (1 - rec.confidence) / (CATEGORIES.length - 1),
-    }));
-  const top = [...dist].sort((a, b) => b.score - a.score).slice(0, 4);
+  const label = LONG[rec.primary_category as Category] ?? rec.primary_category;
+  const confPct = `${(rec.confidence * 100).toFixed(1)}%`;
+  const tier = ogTierColor(rec.confidence);
+  const top = ogTopThree(rec.classification?.confidences);
+  const filename = ogFmtFilename(rec.filename);
+  const corrected = rec.user_corrected_to
+    ? LONG[rec.user_corrected_to as Category] ?? rec.user_corrected_to
+    : null;
 
   return new ImageResponse(
     (
@@ -88,183 +72,131 @@ export default async function OgImage({ params }: Params) {
           height: "100%",
           display: "flex",
           flexDirection: "column",
-          background: COLORS.chalk,
-          color: COLORS.ink,
-          fontFamily: "sans-serif",
-          padding: 56,
-          position: "relative",
+          background: BG,
+          color: FG,
+          padding: 64,
+          fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
         }}
       >
-        {/* Top bar: brand + ID */}
+        {/* Header */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            paddingBottom: 20,
-            borderBottom: `2px solid ${COLORS.rule}`,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <div
               style={{
-                width: 18,
-                height: 18,
-                borderRadius: 9999,
-                background: COLORS.felt,
-                boxShadow: `inset 0 0 0 3px ${COLORS.chalk}, 0 0 0 2px ${COLORS.feltRail}`,
-              }}
-            />
-            <div
-              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 12,
+                background: ACCENT,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#0b0d10",
                 fontSize: 28,
-                fontWeight: 700,
-                letterSpacing: 2,
+                fontWeight: 800,
               }}
             >
-              SHOTCLASSIFY
+              S
+            </div>
+            <div style={{ fontSize: 28, fontWeight: 600, letterSpacing: -0.5 }}>
+              ShotClassify
             </div>
           </div>
-          <div
-            style={{
-              fontSize: 20,
-              fontFamily: "monospace",
-              color: "#666",
-              letterSpacing: 1,
-            }}
-          >
-            /r/{id.slice(0, 12)}
-          </div>
+          <div style={{ fontSize: 22, color: MUTED }}>{filename}</div>
         </div>
 
-        {/* Main: category + confidence */}
+        {/* Main result */}
         <div
           style={{
             display: "flex",
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 48,
-            marginTop: 56,
+            flexDirection: "column",
+            marginTop: 72,
+            gap: 14,
           }}
         >
-          {/* Category badge */}
+          <div style={{ fontSize: 28, color: MUTED }}>Primary category</div>
           <div
             style={{
               display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              background: COLORS.felt,
-              color: COLORS.chalk,
-              width: 280,
-              height: 280,
-              borderRadius: 24,
-              boxShadow: `inset 0 0 0 6px ${COLORS.feltRail}`,
+              alignItems: "baseline",
+              gap: 28,
+              flexWrap: "wrap",
             }}
           >
-            <div style={{ fontSize: 18, letterSpacing: 3, opacity: 0.7 }}>
-              PRIMARY
-            </div>
             <div
               style={{
-                fontSize: 56,
+                fontSize: 96,
                 fontWeight: 800,
-                marginTop: 12,
-                letterSpacing: 1,
-              }}
-            >
-              {short}
-            </div>
-          </div>
-
-          {/* Label + confidence */}
-          <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
-            <div style={{ fontSize: 26, color: "#666", letterSpacing: 1 }}>
-              CLASSIFIED AS
-            </div>
-            <div
-              style={{
-                fontSize: 76,
-                fontWeight: 800,
-                lineHeight: 1.05,
-                marginTop: 6,
+                letterSpacing: -2,
+                lineHeight: 1,
               }}
             >
               {label}
             </div>
             <div
               style={{
-                display: "flex",
-                alignItems: "baseline",
-                gap: 18,
-                marginTop: 26,
+                fontSize: 64,
+                fontWeight: 700,
+                color: tier,
+                lineHeight: 1,
               }}
             >
-              <div
-                style={{
-                  fontSize: 92,
-                  fontWeight: 800,
-                  color: cColor,
-                  fontFamily: "monospace",
-                  lineHeight: 1,
-                }}
-              >
-                {confPct}
-              </div>
-              <div style={{ fontSize: 22, color: "#666", letterSpacing: 2 }}>
-                CONFIDENCE
-              </div>
+              {confPct}
             </div>
           </div>
+          {corrected && (
+            <div style={{ fontSize: 24, color: MUTED, marginTop: 4 }}>
+              User corrected to {corrected}
+            </div>
+          )}
         </div>
 
-        {/* Distribution bars */}
+        {/* Top-3 bars */}
         <div
           style={{
             display: "flex",
             flexDirection: "column",
-            gap: 10,
-            marginTop: 44,
+            gap: 14,
+            marginTop: 48,
           }}
         >
-          {top.map((d) => {
-            const w = Math.max(0.02, d.score) * 100;
-            const isTop = d.category === cat;
+          {top.map((c) => {
+            const lbl = LONG[c.category as Category] ?? c.category;
+            const w = ogBarWidthPct(c.score);
             return (
               <div
-                key={d.category}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 14,
-                  fontSize: 18,
-                }}
+                key={c.category}
+                style={{ display: "flex", alignItems: "center", gap: 20 }}
               >
                 <div
                   style={{
-                    width: 160,
-                    fontFamily: "monospace",
-                    letterSpacing: 1,
-                    color: isTop ? COLORS.ink : "#888",
-                    fontWeight: isTop ? 700 : 500,
+                    width: 220,
+                    fontSize: 24,
+                    color: MUTED,
                   }}
                 >
-                  {SHORT[d.category as Category] ?? d.category.toUpperCase()}
+                  {lbl}
                 </div>
                 <div
                   style={{
-                    display: "flex",
                     flex: 1,
                     height: 18,
-                    background: "#e6e0d0",
-                    borderRadius: 4,
-                    overflow: "hidden",
+                    background: "#1f2226",
+                    borderRadius: 9,
+                    display: "flex",
                   }}
                 >
                   <div
                     style={{
                       width: `${w}%`,
-                      background: isTop ? cColor : "#b8b0a0",
+                      height: "100%",
+                      background: ogTierColor(c.score),
+                      borderRadius: 9,
                     }}
                   />
                 </div>
@@ -272,55 +204,34 @@ export default async function OgImage({ params }: Params) {
                   style={{
                     width: 90,
                     textAlign: "right",
-                    fontFamily: "monospace",
-                    color: isTop ? COLORS.ink : "#888",
-                    fontWeight: isTop ? 700 : 500,
+                    fontSize: 22,
+                    color: FG,
                   }}
                 >
-                  {(d.score * 100).toFixed(1)}%
+                  {(c.score * 100).toFixed(1)}%
                 </div>
               </div>
             );
           })}
         </div>
 
+        {/* Footer spacer */}
+        <div style={{ flex: 1 }} />
+
         {/* Footer */}
         <div
           style={{
-            position: "absolute",
-            bottom: 32,
-            left: 56,
-            right: 56,
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
-            fontSize: 18,
-            color: "#666",
-            paddingTop: 16,
-            borderTop: `1px solid ${COLORS.rule}`,
+            fontSize: 22,
+            color: MUTED,
+            borderTop: "1px solid #1f2226",
+            paddingTop: 20,
           }}
         >
-          <div
-            style={{
-              fontFamily: "monospace",
-              maxWidth: 720,
-              overflow: "hidden",
-              whiteSpace: "nowrap",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {truncate(rec.filename || "shot", 60)}
-          </div>
-          <div style={{ display: "flex", gap: 18, alignItems: "center" }}>
-            {rec.elapsed_ms ? (
-              <div style={{ fontFamily: "monospace" }}>
-                {rec.elapsed_ms < 1000
-                  ? `${rec.elapsed_ms} ms`
-                  : `${(rec.elapsed_ms / 1000).toFixed(2)} s`}
-              </div>
-            ) : null}
-            <div style={{ letterSpacing: 2 }}>shotclassify.app</div>
-          </div>
+          <div>shotclassify · screenshot classifier</div>
+          <div>/r/{id.slice(0, 12)}</div>
         </div>
       </div>
     ),

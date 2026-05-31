@@ -329,7 +329,14 @@ The response is the standard `ProcessResult` JSON. Revoke the key from `/keys` a
 
 1. `pnpm --filter web dev` (or `cd web && npm run dev`) and open http://localhost:3000.
 2. Upload a screenshot at http://localhost:3000/upload, open it from `/shots`, click Copy share link.
-3. Paste the link in an incognito window. The public page renders without auth. Paste it in Slack to see the OG card.
+3. Paste the link in an incognito window. The public page renders without auth. Paste it in Slack or Twitter to see the dynamic 1200x630 OG card.
+
+The preview image is rendered on demand by `web/app/r/[id]/opengraph-image.tsx` (Next 15 file convention, no extra dependency). It shows the primary label, confidence bar with tier color, top 3 categories, filename, and any user correction. Inspect it directly:
+
+```
+curl -I http://localhost:3000/r/<shot-id>/opengraph-image
+curl -o card.png http://localhost:3000/r/<shot-id>/opengraph-image
+```
 
 Direct curl against the FastAPI service that backs the share page:
 
