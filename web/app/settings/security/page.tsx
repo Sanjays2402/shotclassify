@@ -286,6 +286,7 @@ export default function SecuritySettingsPage() {
 
       <RetentionSection />
       <SsoSection />
+      <TenantOidcSection />
       <SessionPolicySection />
       <SessionsSection />
     </div>
@@ -945,7 +946,6 @@ function SsoSection() {
     </section>
   );
 }
-
 type SessionPolicyResponse = {
   tenant_id: string;
   session_ttl_minutes: number | null;
@@ -1175,6 +1175,256 @@ function SessionPolicySection() {
               ) : (
                 <Warning size={14} weight="duotone" />
               )}
+              {flash.msg}
+            </p>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+type TenantOidcConfig = {
+  tenant_id: string;
+  configured: boolean;
+  issuer: string | null;
+  client_id: string | null;
+  scopes: string | null;
+  client_secret_fingerprint: string | null;
+  client_secret_last_four: string | null;
+  updated_at: string | null;
+};
+
+function TenantOidcSection() {
+  const { data, error, isLoading, mutate } = useSWR<TenantOidcConfig>(
+    "/api/settings/security/oidc",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+
+  const [issuer, setIssuer] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [scopes, setScopes] = useState("openid email profile");
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
+
+  useEffect(() => {
+    if (data) {
+      setIssuer(data.issuer ?? "");
+      setClientId(data.client_id ?? "");
+      setScopes(data.scopes ?? "openid email profile");
+      setClientSecret("");
+    }
+  }, [data]);
+
+  const status = error as (Error & { status?: number }) | undefined;
+  const unauth = status?.status === 401;
+  const forbidden = status?.status === 403;
+
+  const save = async () => {
+    setBusy(true);
+    setFlash(null);
+    try {
+      const body: Record<string, string | null> = {
+        issuer: issuer.trim() || null,
+        client_id: clientId.trim() || null,
+        scopes: scopes.trim() || null,
+      };
+      if (clientSecret) body.client_secret = clientSecret;
+      const res = await fetch("/api/settings/security/oidc", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `${res.status} ${res.statusText}`);
+      }
+      const next = (await res.json()) as TenantOidcConfig;
+      setFlash({
+        kind: "ok",
+        msg: next.configured
+          ? "Saved. Sign-ins for your SSO domain will now use your own identity provider."
+          : "Saved. Per-tenant OIDC is cleared; sign-ins fall back to the deployment IdP.",
+      });
+      setClientSecret("");
+      mutate();
+    } catch (e) {
+      setFlash({ kind: "err", msg: e instanceof Error ? e.message : "Save failed." });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async () => {
+    if (!confirm("Clear this workspace's OIDC identity provider? Sign-ins will fall back to the deployment IdP.")) return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      const res = await fetch("/api/settings/security/oidc", { method: "DELETE" });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `${res.status} ${res.statusText}`);
+      }
+      setIssuer("");
+      setClientId("");
+      setScopes("openid email profile");
+      setClientSecret("");
+      setFlash({ kind: "ok", msg: "Cleared." });
+      mutate();
+    } catch (e) {
+      setFlash({ kind: "err", msg: e instanceof Error ? e.message : "Clear failed." });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <header className="mb-4 flex items-start gap-3">
+        <KeyIcon size={22} weight="duotone" className="mt-0.5 text-indigo-600" />
+        <div className="flex-1">
+          <h2 className="text-lg font-semibold tracking-tight">Your own identity provider</h2>
+          <p className="text-sm text-zinc-500">
+            Register your workspace&apos;s own OIDC application (Okta, Azure AD,
+            Google Workspace, Auth0, Keycloak). When a user signs in with an
+            email in your SSO domain, we redirect them to your IdP instead of
+            ours. Your client secret is stored encrypted at rest and never
+            shown to anyone, including operators.
+          </p>
+        </div>
+        {data ? (
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+              data.configured
+                ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+                : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400"
+            }`}
+          >
+            {data.configured ? "Configured" : "Not configured"}
+          </span>
+        ) : null}
+      </header>
+
+      {isLoading ? (
+        <div className="h-32 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+      ) : unauth ? (
+        <div className="flex items-center gap-2 rounded-md bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          <Lock size={16} weight="duotone" />
+          Sign in to manage your identity provider.
+        </div>
+      ) : forbidden ? (
+        <div className="flex items-center gap-2 rounded-md bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          <Lock size={16} weight="duotone" />
+          Only workspace admins can configure the identity provider.
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <label className="block text-sm">
+              <span className="mb-1 block text-zinc-600 dark:text-zinc-400">Issuer URL</span>
+              <input
+                type="url"
+                value={issuer}
+                onChange={(e) => setIssuer(e.target.value)}
+                placeholder="https://your-tenant.okta.com"
+                className="w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-900"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1 block text-zinc-600 dark:text-zinc-400">Client ID</span>
+              <input
+                type="text"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                placeholder="0oab1c2d3e4f5g6h7i"
+                className="w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-900"
+              />
+            </label>
+            <label className="block text-sm md:col-span-2">
+              <span className="mb-1 block text-zinc-600 dark:text-zinc-400">
+                Client secret
+                {data?.configured ? (
+                  <span className="ml-2 text-xs text-zinc-400">
+                    Stored. Leave blank to keep existing.
+                    {data.client_secret_last_four
+                      ? ` Ends in ${data.client_secret_last_four}.`
+                      : ""}
+                  </span>
+                ) : null}
+              </span>
+              <input
+                type="password"
+                value={clientSecret}
+                onChange={(e) => setClientSecret(e.target.value)}
+                placeholder={data?.configured ? "(unchanged)" : "Paste the client secret"}
+                autoComplete="new-password"
+                className="w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 font-mono text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-900"
+              />
+            </label>
+            <label className="block text-sm md:col-span-2">
+              <span className="mb-1 block text-zinc-600 dark:text-zinc-400">Scopes</span>
+              <input
+                type="text"
+                value={scopes}
+                onChange={(e) => setScopes(e.target.value)}
+                placeholder="openid email profile"
+                className="w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 font-mono text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-900"
+              />
+            </label>
+          </div>
+
+          {data?.client_secret_fingerprint ? (
+            <p className="mt-3 text-xs text-zinc-500">
+              SHA-256 fingerprint of stored secret:{" "}
+              <code className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-900">
+                {data.client_secret_fingerprint.slice(0, 16)}&hellip;
+                {data.client_secret_fingerprint.slice(-8)}
+              </code>
+            </p>
+          ) : null}
+
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy || (!issuer.trim() && !clientId.trim() && !clientSecret)}
+              className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FloppyDisk size={16} weight="duotone" />
+              {busy ? "Saving" : "Save"}
+            </button>
+            {data?.configured ? (
+              <button
+                type="button"
+                onClick={clear}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900"
+              >
+                <Trash size={16} weight="duotone" />
+                Clear
+              </button>
+            ) : null}
+            <span className="ml-auto text-xs text-zinc-500">
+              Redirect URI to register at your IdP:{" "}
+              <code className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-900">
+                {typeof window !== "undefined"
+                  ? `${window.location.origin}/api/auth/sso/callback`
+                  : "/api/auth/sso/callback"}
+              </code>
+            </span>
+          </div>
+
+          {flash ? (
+            <p
+              className={`mt-3 text-sm ${
+                flash.kind === "ok"
+                  ? "text-emerald-700 dark:text-emerald-300"
+                  : "text-rose-700 dark:text-rose-300"
+              }`}
+              role="status"
+            >
               {flash.msg}
             </p>
           ) : null}

@@ -2,6 +2,37 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: per-tenant OIDC identity provider
+
+Large customers refuse to hand their corporate Okta or Azure AD credentials to a shared vendor SSO client. Each workspace can now register its own OIDC application from `Settings -> Security -> Your own identity provider` (or `PUT /v1/settings/security/oidc`). When a user signs in with an email in the workspace's SSO domain, `/auth/sso/login` resolves the tenant, looks up its issuer + client_id + client_secret, and runs the authorization-code flow against that tenant's IdP instead of the deployment-level shared client. The deployment-level `AUTH_SSO_*` config remains as a fallback for workspaces that have not configured their own IdP. Client secrets are stored opaquely, never returned by any API; only a SHA-256 fingerprint and last-four are surfaced for operator confirmation. Admin-only, MFA step-up required, audit-logged by the existing tamper-evident chain. Coverage in `tests/test_tenant_oidc.py`.
+
+### Try it
+
+```bash
+# 1. Bind your email domain to your tenant (one time).
+curl -s -X PUT -H "X-API-Key: $ADMIN_KEY" -H "X-MFA-OTP: 123456" \
+  -H "content-type: application/json" \
+  -d '{"enforced": false, "domain": "acme.com", "provider": "Okta"}' \
+  http://localhost:7441/v1/settings/security/sso
+
+# 2. Register your own OIDC application.
+curl -s -X PUT -H "X-API-Key: $ADMIN_KEY" -H "X-MFA-OTP: 123456" \
+  -H "content-type: application/json" \
+  -d '{
+        "issuer": "https://your-tenant.okta.com",
+        "client_id": "0oab1c2d3e4f5g6h7i",
+        "client_secret": "<paste from Okta>",
+        "scopes": "openid email profile"
+      }' \
+  http://localhost:7441/v1/settings/security/oidc
+
+# 3. The sign-in page now offers your IdP for emails in acme.com.
+curl -s 'http://localhost:7441/auth/sso/config?email=user@acme.com' | jq
+# {"enabled": true, "issuer": "https://your-tenant.okta.com", "source": "tenant", "tenant_id": "acme"}
+```
+
+Dashboard UI: <http://localhost:3000/settings/security>.
+
 ## What's new: trust center sub-processor registry
 
 Procurement and security reviewers can now pull the live sub-processor catalog without credentials at `GET /v1/trust/subprocessors` (public web page at `/trust`), and workspace admins can record a binding acknowledgement at `/settings/trust`. The catalog version is a deterministic SHA-256 over the canonicalized list so any change to a processor automatically re-arms the unacknowledged banner for every workspace. Acknowledgements capture the actor, IP, user agent, and version, are tenant-scoped at the query layer, and the mutating POST is picked up by the existing tamper-evident audit chain. Coverage in `tests/test_trust_subprocessors.py`.

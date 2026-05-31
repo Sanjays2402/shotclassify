@@ -32,7 +32,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from shotclassify_common import get_settings
 from shotclassify_store import tenant_for_sso_domain
 from shotclassify_store.memberships import role_for_member, upsert_member
-from shotclassify_store.tenant_settings import get_sso_config
+from shotclassify_store.tenant_settings import (
+    get_sso_config,
+    get_tenant_oidc,
+    get_tenant_oidc_secret,
+)
 
 from ..middleware.auth import issue_session
 from ..middleware.tenant import tenant_for_principal
@@ -83,45 +87,112 @@ def _redirect_uri(request: Request) -> str:
 
 
 @router.get("/config")
-def sso_config():
-    """Public summary used by the sign-in page to render the SSO button."""
+def sso_config(email: str | None = Query(default=None, max_length=320)):
+    """Public summary used by the sign-in page to render the SSO button.
+
+    When ``email`` is supplied and the domain matches a tenant with its own
+    OIDC IdP configured, we report that tenant's issuer (no secrets) so
+    the dashboard can show a "Sign in with Acme SSO" affordance even when
+    the deployment-level shared IdP is disabled.
+    """
     s = get_settings()
+    if email and "@" in email:
+        domain = email.split("@", 1)[1].lower().strip()
+        tid = tenant_for_sso_domain(domain)
+        if tid:
+            tcfg = get_tenant_oidc(tid)
+            if tcfg.configured:
+                return {
+                    "enabled": True,
+                    "issuer": tcfg.issuer,
+                    "source": "tenant",
+                    "tenant_id": tid,
+                }
     return {
         "enabled": bool(s.auth_sso_enabled and s.auth_sso_issuer and s.auth_sso_client_id),
         "issuer": s.auth_sso_issuer or None,
+        "source": "deployment",
     }
+
+
+def _resolve_idp(email: str | None) -> tuple[str, str, str, str, str | None]:
+    """Pick the OIDC IdP for this sign-in attempt.
+
+    Returns ``(issuer, client_id, client_secret, scopes, tenant_id)``.
+    ``tenant_id`` is the tenant whose per-tenant IdP was selected, or
+    ``None`` when we fell back to the deployment-level shared IdP.
+
+    Resolution order:
+      1. ``email`` provided AND domain matches a tenant with a fully
+         configured per-tenant OIDC IdP -> use that.
+      2. Otherwise fall back to the deployment ``AUTH_SSO_*`` env config.
+    """
+    s = get_settings()
+    if email and "@" in email:
+        domain = email.split("@", 1)[1].lower().strip()
+        tid = tenant_for_sso_domain(domain)
+        if tid:
+            tcfg = get_tenant_oidc(tid)
+            if tcfg.configured and tcfg.issuer and tcfg.client_id:
+                secret = get_tenant_oidc_secret(tid) or ""
+                if secret:
+                    return (
+                        tcfg.issuer,
+                        tcfg.client_id,
+                        secret,
+                        tcfg.scopes or s.auth_sso_scopes,
+                        tid,
+                    )
+    if not (s.auth_sso_enabled and s.auth_sso_issuer and s.auth_sso_client_id):
+        raise HTTPException(
+            400,
+            "No OIDC IdP configured for this sign-in. Either provide an email "
+            "whose domain is registered to a tenant with its own OIDC IdP, or "
+            "set AUTH_SSO_* on the deployment.",
+        )
+    return (
+        s.auth_sso_issuer,
+        s.auth_sso_client_id,
+        s.auth_sso_client_secret or "",
+        s.auth_sso_scopes,
+        None,
+    )
 
 
 @router.get("/login")
 def login(request: Request, email: str | None = Query(default=None, max_length=320)):
     s = get_settings()
-    if not (s.auth_sso_enabled and s.auth_sso_issuer and s.auth_sso_client_id):
-        return HTMLResponse(
-            "<h1>SSO not configured</h1>"
-            "<p>Set AUTH_SSO_ENABLED=true, AUTH_SSO_ISSUER, AUTH_SSO_CLIENT_ID, "
-            "AUTH_SSO_CLIENT_SECRET to enable OIDC sign-in.</p>",
-            status_code=200,
-        )
     try:
-        disc = _discovery(s.auth_sso_issuer)
+        issuer, client_id, _client_secret, scopes, tenant_idp = _resolve_idp(email)
+    except HTTPException:
+        if not (s.auth_sso_enabled and s.auth_sso_issuer and s.auth_sso_client_id):
+            return HTMLResponse(
+                "<h1>SSO not configured</h1>"
+                "<p>Set AUTH_SSO_ENABLED=true, AUTH_SSO_ISSUER, AUTH_SSO_CLIENT_ID, "
+                "AUTH_SSO_CLIENT_SECRET on the deployment, or configure a per-tenant "
+                "OIDC IdP via PUT /v1/settings/security/oidc and sign in with an email "
+                "whose domain matches that tenant's SSO domain.</p>",
+                status_code=200,
+            )
+        raise
+    try:
+        disc = _discovery(issuer)
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"OIDC discovery failed: {exc}") from exc
     state = secrets.token_urlsafe(24)
     nonce = secrets.token_urlsafe(24)
-    # Hint: if the caller pasted an email we route to that tenant's
-    # configured provider label via a cookie the callback can read. This
-    # lets a single deployment present "Sign in with SSO" without exposing
-    # tenant ids in the URL.
-    tenant_hint: str | None = None
-    if email and "@" in email:
+    # Tenant routing: per-tenant IdP wins; otherwise fall back to
+    # email-domain SSO routing for the shared deployment IdP.
+    tenant_hint: str | None = tenant_idp
+    if not tenant_hint and email and "@" in email:
         domain = email.split("@", 1)[1].lower().strip()
         tenant_hint = tenant_for_sso_domain(domain)
     redirect_uri = _redirect_uri(request)
     params = {
-        "client_id": s.auth_sso_client_id,
+        "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": s.auth_sso_scopes,
+        "scope": scopes,
         "state": state,
         "nonce": nonce,
     }
@@ -135,6 +206,11 @@ def login(request: Request, email: str | None = Query(default=None, max_length=3
     resp.set_cookie("sc_sso_nonce", nonce, **cookie_opts)
     if tenant_hint:
         resp.set_cookie("sc_sso_tenant", tenant_hint, **cookie_opts)
+    if tenant_idp:
+        # The callback must redirect to the IdP's token endpoint with the
+        # *same* client used at /authorize. Persist the tenant whose IdP
+        # we selected so the callback can re-resolve issuer + secret.
+        resp.set_cookie("sc_sso_idp_tenant", tenant_idp, **cookie_opts)
     return resp
 
 
@@ -154,10 +230,34 @@ def callback(
     cookie_state = request.cookies.get("sc_sso_state")
     cookie_nonce = request.cookies.get("sc_sso_nonce")
     cookie_tenant_hint = request.cookies.get("sc_sso_tenant")
+    cookie_idp_tenant = request.cookies.get("sc_sso_idp_tenant")
     if not cookie_state or not secrets.compare_digest(cookie_state, state):
         raise HTTPException(400, "Invalid SSO state.")
+    # Resolve which IdP we sent the user to at /login. If we minted a
+    # per-tenant IdP cookie, reuse those creds. Otherwise the deployment
+    # client. Falling through to the deployment client when a tenant
+    # cookie is present would be a confused-deputy bug: the IdP issued
+    # the code for a different audience and our token exchange would
+    # be rejected (or worse, accepted under the wrong client).
+    idp_issuer: str
+    idp_client_id: str
+    idp_client_secret: str
+    if cookie_idp_tenant:
+        tcfg = get_tenant_oidc(cookie_idp_tenant)
+        secret = get_tenant_oidc_secret(cookie_idp_tenant)
+        if not (tcfg.configured and tcfg.issuer and tcfg.client_id and secret):
+            raise HTTPException(400, "Per-tenant OIDC config was removed mid-flow.")
+        idp_issuer = tcfg.issuer
+        idp_client_id = tcfg.client_id
+        idp_client_secret = secret
+    else:
+        if not (s.auth_sso_enabled and s.auth_sso_issuer and s.auth_sso_client_id):
+            raise HTTPException(400, "OIDC not configured.")
+        idp_issuer = s.auth_sso_issuer
+        idp_client_id = s.auth_sso_client_id
+        idp_client_secret = s.auth_sso_client_secret or ""
     try:
-        disc = _discovery(s.auth_sso_issuer)
+        disc = _discovery(idp_issuer)
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"OIDC discovery failed: {exc}") from exc
     redirect_uri = _redirect_uri(request)
@@ -168,8 +268,8 @@ def callback(
                 "grant_type": "authorization_code",
                 "code": code,
                 "redirect_uri": redirect_uri,
-                "client_id": s.auth_sso_client_id,
-                "client_secret": s.auth_sso_client_secret,
+                "client_id": idp_client_id,
+                "client_secret": idp_client_secret,
             },
             headers={"Accept": "application/json"},
         )
@@ -186,13 +286,13 @@ def callback(
         raise HTTPException(400, f"id_token verification failed: {exc}") from exc
     # Standard OIDC claim validation.
     iss = claims.get("iss")
-    if iss and iss.rstrip("/") != s.auth_sso_issuer.rstrip("/"):
+    if iss and iss.rstrip("/") != idp_issuer.rstrip("/"):
         raise HTTPException(400, f"Issuer mismatch: {iss}")
     aud = claims.get("aud")
     if isinstance(aud, list):
-        aud_ok = s.auth_sso_client_id in aud
+        aud_ok = idp_client_id in aud
     else:
-        aud_ok = aud == s.auth_sso_client_id
+        aud_ok = aud == idp_client_id
     if not aud_ok:
         raise HTTPException(400, "Audience mismatch.")
     now = int(time.time())
@@ -252,7 +352,7 @@ def callback(
     resp.set_cookie(
         "sc_session", cookie, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30
     )
-    for c in ("sc_sso_state", "sc_sso_nonce", "sc_sso_tenant"):
+    for c in ("sc_sso_state", "sc_sso_nonce", "sc_sso_tenant", "sc_sso_idp_tenant"):
         resp.delete_cookie(c, path="/auth/sso")
     return resp
 

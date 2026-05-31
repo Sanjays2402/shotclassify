@@ -156,6 +156,28 @@ class TenantSettingsRow(Base):
     # default we recommend; ``admin`` is rejected at the API layer to prevent
     # a self-service privilege escalation path through DNS-controlled email.
     sso_auto_join_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Per-tenant OIDC IdP. The deployment-level OIDC client (env
+    # ``AUTH_SSO_*``) is shared across tenants; large customers refuse
+    # this because their identity team will not hand their Okta /
+    # Azure AD credentials to a SaaS vendor. These columns let each
+    # tenant register its own OIDC application. When ``oidc_issuer``
+    # and ``oidc_client_id`` are populated, ``/auth/sso/login`` routes
+    # a sign-in attempt for that tenant's ``sso_domain`` to the
+    # tenant's own IdP, exchanging the code with ``oidc_client_secret``
+    # against the tenant's own token endpoint. NULL = fall back to the
+    # deployment-level OIDC client (existing behaviour).
+    #
+    # ``oidc_client_secret`` is treated as a secret: never returned by
+    # any API; only a SHA-256 fingerprint + last-four are surfaced for
+    # operator confirmation. Stored as-is at rest because we do not yet
+    # have an in-tree key wrapping primitive; documented in security.md.
+    oidc_issuer: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    oidc_client_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    oidc_client_secret: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    oidc_scopes: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    oidc_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # PII redaction: list of modes (email, phone, ssn, credit_card, ip, iban)
     # applied to OCR text and extracted text fields before persistence and
     # before any outbound webhook delivery. Empty/NULL means no redaction
@@ -508,6 +530,27 @@ def init_db() -> None:
                 if "sso_auto_join_role" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN sso_auto_join_role VARCHAR(16)"
+                    ))
+                # 0022 per-tenant OIDC IdP columns.
+                if "oidc_issuer" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN oidc_issuer VARCHAR(256)"
+                    ))
+                if "oidc_client_id" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN oidc_client_id VARCHAR(256)"
+                    ))
+                if "oidc_client_secret" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN oidc_client_secret VARCHAR(512)"
+                    ))
+                if "oidc_scopes" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN oidc_scopes VARCHAR(256)"
+                    ))
+                if "oidc_updated_at" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN oidc_updated_at TIMESTAMP"
                     ))
                 if "pii_redact_modes" not in tcols:
                     conn.execute(text(

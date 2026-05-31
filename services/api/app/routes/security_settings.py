@@ -17,12 +17,14 @@ from shotclassify_store import (
     get_retention_days,
     get_session_policy,
     get_sso_config,
+    get_tenant_oidc,
     purge_expired_for_tenant,
     set_ip_allowlist,
     set_privacy_settings,
     set_retention_days,
     set_session_policy,
     set_sso_config,
+    set_tenant_oidc,
 )
 from datetime import timedelta
 from shotclassify_store.sessions import SESSION_TTL, clip_active_for_tenant
@@ -332,3 +334,76 @@ def lift_legal_hold_route(
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return hold.to_dict()
+
+
+@router.get("/oidc", dependencies=[require_role("admin")])
+def get_tenant_oidc_route(request: Request) -> dict:
+    """Return this tenant's per-tenant OIDC IdP config.
+
+    The client secret is never returned. A SHA-256 fingerprint and the
+    last four characters are surfaced so an operator can confirm the
+    expected value is in place without re-entering it.
+    """
+    tenant_id = _tenant(request)
+    return get_tenant_oidc(tenant_id).to_dict()
+
+
+@router.put(
+    "/oidc",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_tenant_oidc_route(request: Request, payload: dict = Body(...)) -> dict:
+    """Replace this tenant's per-tenant OIDC IdP config.
+
+    Body: ``{"issuer": str|null, "client_id": str|null, "client_secret": str|null, "scopes": str|null}``.
+
+    Pass all four to configure or update. Pass ``issuer`` and ``client_id``
+    as null/empty to clear. When editing an existing config, ``client_secret``
+    may be omitted to keep the existing secret in place. Admin-only with a
+    fresh MFA step-up because it changes who can sign into the workspace.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "Body must be a JSON object.")
+    for field in ("issuer", "client_id", "client_secret", "scopes"):
+        if payload.get(field) is not None and not isinstance(payload.get(field), str):
+            raise HTTPException(422, f"'{field}' must be a string or null.")
+    actor = getattr(request.state, "principal", None)
+    try:
+        cfg = set_tenant_oidc(
+            tenant_id,
+            issuer=payload.get("issuer") or None,
+            client_id=payload.get("client_id") or None,
+            client_secret=payload.get("client_secret") or None,
+            scopes=payload.get("scopes") or None,
+            updated_by=actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return cfg.to_dict()
+
+
+@router.delete(
+    "/oidc",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def delete_tenant_oidc_route(request: Request) -> dict:
+    """Clear this tenant's per-tenant OIDC IdP config.
+
+    After this call, ``/auth/sso/login`` for an email in this tenant's
+    domain falls back to the deployment-level shared IdP (if configured).
+    """
+    tenant_id = _tenant(request)
+    actor = getattr(request.state, "principal", None)
+    try:
+        cfg = set_tenant_oidc(
+            tenant_id,
+            issuer=None,
+            client_id=None,
+            client_secret=None,
+            scopes=None,
+            updated_by=actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return cfg.to_dict()

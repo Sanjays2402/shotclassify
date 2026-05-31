@@ -491,3 +491,220 @@ def set_session_policy(
             row.updated_by = updated_by
         s.commit()
     return SessionPolicy(tenant_id=tenant_id, session_ttl_minutes=norm)
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant OIDC identity provider.
+#
+# Large customers reject SaaS that requires them to hand their corporate
+# Okta / Azure AD / Google Workspace OIDC client credentials to the vendor's
+# shared deployment client. These helpers let each tenant register its own
+# OIDC application; ``/auth/sso/login`` consults this config (keyed by the
+# email domain via ``tenant_for_sso_domain``) before falling back to the
+# deployment-level ``AUTH_SSO_*`` env config.
+#
+# ``client_secret`` is treated as a secret: never echoed back by any API.
+# Reads return a SHA-256 fingerprint + last-four for operator confirmation.
+# ---------------------------------------------------------------------------
+
+import hashlib as _hashlib
+
+OIDC_DEFAULT_SCOPES = "openid email profile"
+
+
+@dataclass(frozen=True)
+class TenantOidcConfig:
+    tenant_id: str
+    configured: bool
+    issuer: str | None
+    client_id: str | None
+    scopes: str | None
+    client_secret_fingerprint: str | None  # sha256 hex of secret, or None
+    client_secret_last_four: str | None
+    updated_at: datetime | None
+
+    def to_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "configured": self.configured,
+            "issuer": self.issuer,
+            "client_id": self.client_id,
+            "scopes": self.scopes,
+            "client_secret_fingerprint": self.client_secret_fingerprint,
+            "client_secret_last_four": self.client_secret_last_four,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+def _normalize_issuer(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    if not s.startswith("https://"):
+        raise ValueError("oidc_issuer must be an https:// URL")
+    if len(s) > 256:
+        raise ValueError("oidc_issuer is too long (max 256 chars)")
+    return s.rstrip("/")
+
+
+def _normalize_scopes(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    s = " ".join(raw.split())
+    if not s:
+        return None
+    if len(s) > 256:
+        raise ValueError("oidc_scopes is too long (max 256 chars)")
+    parts = s.split(" ")
+    if "openid" not in parts:
+        raise ValueError("oidc_scopes must include 'openid'")
+    return s
+
+
+def _fingerprint(secret: str | None) -> tuple[str | None, str | None]:
+    if not secret:
+        return None, None
+    digest = _hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    last_four = secret[-4:] if len(secret) >= 4 else None
+    return digest, last_four
+
+
+def get_tenant_oidc(tenant_id: str) -> TenantOidcConfig:
+    """Return the per-tenant OIDC IdP config; never returns the secret itself."""
+    if not tenant_id:
+        return TenantOidcConfig(
+            tenant_id="", configured=False, issuer=None, client_id=None,
+            scopes=None, client_secret_fingerprint=None, client_secret_last_four=None,
+            updated_at=None,
+        )
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return TenantOidcConfig(
+                tenant_id=tenant_id, configured=False, issuer=None, client_id=None,
+                scopes=None, client_secret_fingerprint=None, client_secret_last_four=None,
+                updated_at=None,
+            )
+        secret = getattr(row, "oidc_client_secret", None)
+        fp, l4 = _fingerprint(secret)
+        issuer = getattr(row, "oidc_issuer", None)
+        client_id = getattr(row, "oidc_client_id", None)
+        configured = bool(issuer and client_id and secret)
+        return TenantOidcConfig(
+            tenant_id=tenant_id,
+            configured=configured,
+            issuer=issuer,
+            client_id=client_id,
+            scopes=getattr(row, "oidc_scopes", None),
+            client_secret_fingerprint=fp,
+            client_secret_last_four=l4,
+            updated_at=getattr(row, "oidc_updated_at", None),
+        )
+
+
+def get_tenant_oidc_secret(tenant_id: str) -> str | None:
+    """Internal: return the raw client_secret. Auth code-exchange only.
+
+    This is the only function that returns the plaintext secret. Callers
+    must never log or echo this value. Used by the OIDC callback to POST
+    to the IdP's token endpoint.
+    """
+    if not tenant_id:
+        return None
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        return getattr(row, "oidc_client_secret", None)
+
+
+def set_tenant_oidc(
+    tenant_id: str,
+    *,
+    issuer: str | None,
+    client_id: str | None,
+    client_secret: str | None,
+    scopes: str | None,
+    updated_by: str | None,
+) -> TenantOidcConfig:
+    """Replace the per-tenant OIDC IdP config.
+
+    Pass all four core fields (issuer, client_id, client_secret, scopes)
+    or pass them all as None to clear. A partial config is rejected so a
+    tenant can never end up with a half-broken IdP that authenticates
+    against the wrong issuer or leaks a stale client_id.
+
+    ``client_secret`` is required when ``issuer`` is set, but if ``issuer``
+    is unchanged and the caller passes ``client_secret=None`` we keep the
+    existing secret rather than wiping it. This lets the admin UI update
+    just the issuer label without re-entering the secret every time.
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    norm_issuer = _normalize_issuer(issuer)
+    norm_client_id = (client_id or "").strip() or None
+    if norm_client_id and len(norm_client_id) > 256:
+        raise ValueError("oidc_client_id is too long (max 256 chars)")
+    norm_scopes = _normalize_scopes(scopes) if scopes else (OIDC_DEFAULT_SCOPES if norm_issuer else None)
+
+    # All-or-nothing: either fully configure or fully clear.
+    clearing = not (norm_issuer or norm_client_id)
+    if not clearing:
+        if not (norm_issuer and norm_client_id):
+            raise ValueError("oidc_issuer and oidc_client_id are both required")
+
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        # Decide what to do with the secret. New configs require an explicit
+        # secret. Edits of an existing config preserve the stored secret
+        # when the caller omits it.
+        existing_secret = getattr(row, "oidc_client_secret", None) if row else None
+        if clearing:
+            new_secret: str | None = None
+        else:
+            if client_secret:
+                cs = client_secret.strip()
+                if not cs or len(cs) > 512:
+                    raise ValueError("oidc_client_secret must be 1..512 chars")
+                new_secret = cs
+            else:
+                if not existing_secret:
+                    raise ValueError("oidc_client_secret is required to configure OIDC")
+                new_secret = existing_secret
+
+        now = datetime.now(UTC)
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                oidc_issuer=norm_issuer,
+                oidc_client_id=norm_client_id,
+                oidc_client_secret=new_secret,
+                oidc_scopes=norm_scopes,
+                oidc_updated_at=now,
+                updated_at=now,
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.oidc_issuer = norm_issuer
+            row.oidc_client_id = norm_client_id
+            row.oidc_client_secret = new_secret
+            row.oidc_scopes = norm_scopes
+            row.oidc_updated_at = now
+            row.updated_at = now
+            row.updated_by = updated_by
+        s.commit()
+
+    return get_tenant_oidc(tenant_id)
