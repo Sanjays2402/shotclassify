@@ -17,17 +17,40 @@ def test_token_bucket_drains_and_refills():
     t = 1000.0
     # Drain the full capacity at t=1000.
     for _ in range(60):
-        ok, _ = b.allow("x", now=t)
+        ok, _, _, _ = b.allow("x", now=t)
         assert ok
-    ok, retry = b.allow("x", now=t)
+    ok, retry, remaining, limit = b.allow("x", now=t)
     assert not ok
     assert retry > 0
+    assert remaining == 0
+    assert limit == 60
     # 10 seconds later we should have refilled ~10 tokens.
-    ok, _ = b.allow("x", now=t + 10.0)
+    ok, _, _, _ = b.allow("x", now=t + 10.0)
     assert ok
     # Distinct keys have independent buckets.
-    ok, _ = b.allow("y", now=t)
+    ok, _, _, _ = b.allow("y", now=t)
     assert ok
+
+
+def test_token_bucket_rpm_override_lifts_capacity():
+    # Default rpm=10, but a single key passes rpm_override=120 so it should
+    # drain 120 tokens before being rejected. Other keys still see the
+    # default capacity.
+    b = TokenBucketLimiter(rpm=10, burst=0)
+    t = 5000.0
+    for _ in range(120):
+        ok, _, _, lim = b.allow("vip", now=t, rpm_override=120)
+        assert ok
+        assert lim == 120
+    ok, _, _, _ = b.allow("vip", now=t, rpm_override=120)
+    assert not ok
+    # A different key with no override still uses the default.
+    for _ in range(10):
+        ok, _, _, lim = b.allow("normal", now=t)
+        assert ok
+        assert lim == 10
+    ok, _, _, _ = b.allow("normal", now=t)
+    assert not ok
 
 
 def _client(monkeypatch, tmp_path, **env):
@@ -107,3 +130,43 @@ def test_rate_limit_disabled(monkeypatch, tmp_path):
     # With limiter disabled, requests pass through to auth (401), never 429.
     for _ in range(10):
         assert c.get("/v1/history").status_code == 401
+
+
+def test_standard_headers_on_every_response(monkeypatch, tmp_path):
+    # Every response (success or rejection) carries X-RateLimit-Limit /
+    # X-RateLimit-Remaining / X-RateLimit-Reset / X-RateLimit-Scope so
+    # well-behaved clients can back off without waiting for a 429.
+    c = _client(
+        monkeypatch,
+        tmp_path,
+        RATE_LIMIT_PER_IP_RPM="5",
+        RATE_LIMIT_PER_KEY_RPM="5",
+        RATE_LIMIT_BURST="0",
+    )
+    r = c.get("/v1/history")
+    assert r.headers.get("X-RateLimit-Limit") == "5"
+    assert r.headers.get("X-RateLimit-Scope") in ("ip", "api_key", "workspace")
+    assert r.headers.get("X-RateLimit-Reset") is not None
+    remaining = int(r.headers["X-RateLimit-Remaining"])
+    assert 0 <= remaining <= 5
+
+
+def test_per_workspace_bucket_aggregates_across_keys(monkeypatch, tmp_path):
+    # When callers present X-Tenant, the workspace bucket fires before the
+    # per-key bucket. Two distinct keys sharing one workspace should both
+    # count against the same workspace quota.
+    c = _client(
+        monkeypatch,
+        tmp_path,
+        RATE_LIMIT_PER_IP_RPM="1000",
+        RATE_LIMIT_PER_KEY_RPM="1000",
+        RATE_LIMIT_PER_WORKSPACE_RPM="3",
+        RATE_LIMIT_BURST="0",
+    )
+    headers = {"X-API-Key": "k", "X-Tenant": "acme"}
+    statuses = [c.get("/v1/history", headers=headers).status_code for _ in range(5)]
+    assert 429 in statuses
+    # The first three should succeed and the fourth must be throttled by
+    # the workspace bucket, not the per-key bucket.
+    last_429 = next(r for r in statuses if r == 429)
+    assert last_429 == 429

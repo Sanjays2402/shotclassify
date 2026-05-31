@@ -70,6 +70,11 @@ class ApiKeyRow(Base):
     # Principal that minted the key. Recorded so the audit trail can answer
     # "who issued this credential" without joining against the audit log.
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Optional per-key requests/minute override. NULL means inherit the
+    # workspace/global default from settings; setting a value lets admins
+    # carve out elevated quotas for trusted integrations without lifting
+    # the ceiling for everyone else.
+    rpm_override: Mapped[int | None] = mapped_column(nullable=True)
 
 
 class AuditLogRow(Base):

@@ -121,3 +121,54 @@ def test_cannot_revoke_another_tenants_key(monkeypatch, tmp_path):
     # Our own key still works.
     r = c.delete(f"/v1/api-keys/{kid}", headers={"X-API-Key": "admin-key"})
     assert r.status_code == 200
+
+
+def test_set_per_key_rate_limit_override_round_trip(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    payload = _mint(c, label="vip-integration", scopes=["admin"])
+    key_id = payload["id"]
+    # Default override is null.
+    assert payload["rpm_override"] is None
+    # Set a custom rpm. Tenant-scoped admin uses their own session credential.
+    r = c.patch(
+        f"/v1/api-keys/{key_id}/rate-limit",
+        headers={"X-API-Key": "admin-key"},
+        json={"rpm": 5000},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["key"]["rpm_override"] == 5000
+    # List reflects the override.
+    listing = c.get("/v1/api-keys", headers={"X-API-Key": "admin-key"}).json()
+    row = next(k for k in listing["keys"] if k["id"] == key_id)
+    assert row["rpm_override"] == 5000
+    # Clearing works.
+    r = c.patch(
+        f"/v1/api-keys/{key_id}/rate-limit",
+        headers={"X-API-Key": "admin-key"},
+        json={"rpm": None},
+    )
+    assert r.status_code == 200
+    assert r.json()["key"]["rpm_override"] is None
+
+
+def test_rate_limit_override_isolated_across_tenants(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # Create a key bound to a *different* tenant directly via the store, so
+    # we can prove the tenant-a admin can't touch it via the API.
+    from shotclassify_store import api_keys_store
+
+    other, _tok = api_keys_store.create_key(
+        label="foreign",
+        tenant_id="tenant-b",
+        scopes=["admin"],
+        created_by="test",
+    )
+    r = c.patch(
+        f"/v1/api-keys/{other.id}/rate-limit",
+        headers={"X-API-Key": "admin-key"},
+        json={"rpm": 99},
+    )
+    assert r.status_code == 404, r.text
+    # The override was not applied.
+    keys = api_keys_store.list_keys(tenant_id="tenant-b")
+    assert next(k for k in keys if k.id == other.id).rpm_override is None

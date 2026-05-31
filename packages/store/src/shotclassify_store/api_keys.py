@@ -96,6 +96,7 @@ class ApiKeyRecord:
     expires_at: datetime | None
     revoked_at: datetime | None
     created_by: str | None
+    rpm_override: int | None
 
     @property
     def is_active(self) -> bool:
@@ -118,6 +119,7 @@ class ApiKeyRecord:
             "revoked_at": self.revoked_at.isoformat() if self.revoked_at else None,
             "created_by": self.created_by,
             "active": self.is_active,
+            "rpm_override": self.rpm_override,
         }
 
 
@@ -132,6 +134,7 @@ def _row_to_record(row: ApiKeyRow) -> ApiKeyRecord:
         expires_at=row.expires_at,
         revoked_at=row.revoked_at,
         created_by=row.created_by,
+        rpm_override=row.rpm_override,
     )
 
 
@@ -221,6 +224,35 @@ def touch_last_used(key_id: str) -> None:
             ses.commit()
     except Exception:  # pragma: no cover - defensive
         pass
+
+
+def set_rpm_override(
+    key_id: str,
+    *,
+    tenant_id: str | None,
+    rpm: int | None,
+) -> ApiKeyRecord | None:
+    """Set or clear the per-key requests/minute override.
+
+    ``rpm=None`` clears the override and falls back to the workspace default.
+    Returns ``None`` when the key is missing or belongs to another tenant so
+    a tenant-scoped admin can't probe ids across workspaces.
+    """
+    if rpm is not None:
+        if not isinstance(rpm, int) or isinstance(rpm, bool):
+            raise ValueError("rpm must be an integer or null")
+        if rpm < 1 or rpm > 1_000_000:
+            raise ValueError("rpm must be between 1 and 1000000")
+    with get_session() as ses:
+        row = ses.scalar(select(ApiKeyRow).where(ApiKeyRow.id == key_id))
+        if row is None:
+            return None
+        if tenant_id is not None and row.tenant_id != tenant_id:
+            return None
+        row.rpm_override = rpm
+        ses.commit()
+        ses.refresh(row)
+    return _row_to_record(row)
 
 
 def revoke(key_id: str, *, tenant_id: str | None) -> ApiKeyRecord | None:

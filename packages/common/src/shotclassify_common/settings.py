@@ -124,6 +124,7 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_per_ip_rpm: int = 120
     rate_limit_per_key_rpm: int = 600
+    rate_limit_per_workspace_rpm: int = 2400
     rate_limit_burst: int = 20
     rate_limit_exempt_paths: str = "/healthz,/readyz,/metrics,/blob"
 

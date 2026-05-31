@@ -16,7 +16,6 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from shotclassify_store import api_keys_store
-
 from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
 from ..middleware.rbac import require_role
@@ -131,3 +130,54 @@ def revoke_my_key(
         raise HTTPException(404, "API key not found.")
     request.state.audit_target_id = record.id
     return {"revoked": True, "key": record.to_dict()}
+
+
+class RateLimitOverrideRequest(BaseModel):
+    rpm: int | None = Field(
+        default=None,
+        ge=1,
+        le=1_000_000,
+        description="Requests per minute. Pass null to clear the override.",
+    )
+
+
+@router.patch("/{key_id}/rate-limit", dependencies=[require_mfa_step_up()])
+def set_key_rate_limit(
+    key_id: str,
+    payload: RateLimitOverrideRequest,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+    _: str = require_role("admin"),
+):
+    """Set or clear the per-key requests/minute override.
+
+    ``rpm=null`` reverts the key to the workspace default. Returns 404 for
+    unknown ids or keys belonging to another tenant so admins cannot probe
+    ids across workspaces.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if dry_run:
+        keys = api_keys_store.list_keys(tenant_id=tenant_id, include_revoked=True)
+        record = next((k for k in keys if k.id == key_id), None)
+        if record is None:
+            return mark_dry_run(request, would_set=None)
+        request.state.audit_target_id = record.id
+        return mark_dry_run(
+            request,
+            would_set={
+                "id": record.id,
+                "label": record.label,
+                "current_rpm_override": record.rpm_override,
+                "new_rpm_override": payload.rpm,
+            },
+        )
+    try:
+        record = api_keys_store.set_rpm_override(
+            key_id, tenant_id=tenant_id, rpm=payload.rpm
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if record is None:
+        raise HTTPException(404, "API key not found.")
+    request.state.audit_target_id = record.id
+    return {"key": record.to_dict()}

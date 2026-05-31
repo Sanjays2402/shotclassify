@@ -1571,15 +1571,43 @@ Defaults (override via env or Helm `rateLimit.*` / `env.RATE_LIMIT_*`):
 | --- | --- | --- |
 | `RATE_LIMIT_ENABLED` | `true` | Master switch. |
 | `RATE_LIMIT_PER_IP_RPM` | `120` | Sustained requests per minute per source IP. |
-| `RATE_LIMIT_PER_KEY_RPM` | `600` | Sustained rpm per `X-API-Key`. |
+| `RATE_LIMIT_PER_KEY_RPM` | `600` | Sustained rpm per `X-API-Key`. Overridable per key (see below). |
+| `RATE_LIMIT_PER_WORKSPACE_RPM` | `2400` | Aggregate sustained rpm across all keys in a workspace. |
 | `RATE_LIMIT_BURST` | `20` | Extra tokens above the sustained rate for short bursts. |
 | `RATE_LIMIT_EXEMPT_PATHS` | `/healthz,/readyz,/metrics,/blob` | Comma-separated path prefixes the limiter ignores. |
 
-When a bucket is empty the API responds with HTTP 429, a JSON body of
-`{"error":"rate_limited"}`, a `Retry-After` seconds header, and
-`X-RateLimit-Scope: ip|api_key`. Rejections increment
-`shotclassify_rate_limit_rejections_total{scope}` so you can alert on sustained
-throttling and distinguish abusive IPs from a noisy API key.
+Every response, success or rejection, carries the standard rate-limit
+headers so well-behaved clients can back off proactively:
+`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` (seconds
+until the next token), and `X-RateLimit-Scope: ip|api_key|workspace`. When
+a bucket is empty the API responds with HTTP 429, a JSON body of
+`{"error":"rate_limited"}`, and a `Retry-After` header. Rejections
+increment `shotclassify_rate_limit_rejections_total{scope}` so you can
+alert on sustained throttling and distinguish abusive IPs from a noisy API
+key from a workspace nearing its plan ceiling.
+
+Workspace admins can lift or tighten the sustained rpm for an individual
+API key without rolling the global default, which is the common ask when
+onboarding a high-throughput enterprise integration:
+
+```bash
+# Grant key kr_abc... a 5000 rpm ceiling. MFA step-up required.
+curl -X PATCH http://localhost:8000/v1/api-keys/kr_abc.../rate-limit \
+  -H "X-API-Key: $ADMIN_KEY" -H "X-MFA-Token: $MFA" \
+  -H "content-type: application/json" \
+  -d '{"rpm": 5000}'
+
+# Clear the override and fall back to RATE_LIMIT_PER_KEY_RPM.
+curl -X PATCH http://localhost:8000/v1/api-keys/kr_abc.../rate-limit \
+  -H "X-API-Key: $ADMIN_KEY" -H "X-MFA-Token: $MFA" \
+  -H "content-type: application/json" \
+  -d '{"rpm": null}'
+```
+
+The endpoint is RBAC-gated to workspace admins, scoped to the caller's
+tenant (cross-tenant id probes return 404), supports `?dry_run=true`, and
+lands in the audit log. The override lives on `api_keys.rpm_override`
+(nullable integer, added by migration `0015_api_key_rpm_override`).
 
 ### CORS and security headers
 
