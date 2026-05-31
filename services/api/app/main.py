@@ -19,6 +19,7 @@ from shotclassify_store import init_db
 
 from .middleware.audit import AuditLogMiddleware
 from .middleware.auth import APIKeyAndSessionAuth
+from .middleware.csrf import CSRFMiddleware
 from .middleware.ip_allowlist import IPAllowlistMiddleware
 from .middleware.metrics import PrometheusMiddleware
 from .middleware.origin_allowlist import OriginAllowlistMiddleware
@@ -121,6 +122,11 @@ def create_app() -> FastAPI:
     # Auth on the way in). Audit and Prometheus stay outermost so they still
     # observe 401s from auth.
     app.add_middleware(TenantResolutionMiddleware)
+    # CSRF must run AFTER auth on the inbound path so it can read
+    # request.state.session_id and distinguish cookie sessions from
+    # API keys. Starlette runs LAST-added OUTERMOST, so add CSRF
+    # BEFORE Auth (CSRF ends up inner, runs after Auth inbound).
+    app.add_middleware(CSRFMiddleware)
     app.add_middleware(APIKeyAndSessionAuth)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(AuditLogMiddleware)

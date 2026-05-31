@@ -2,6 +2,36 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: CSRF protection on cookie-authenticated mutations
+
+The `sc_session` cookie is sent automatically by the browser on every request to the API origin, which means any logged-in user visiting a malicious page on a different origin could be coaxed into issuing a state-changing POST or DELETE that succeeds purely on the basis of the ambient cookie. SameSite=Lax blocks top-level form posts but not cross-origin `fetch` from a same-site subdomain takeover or a relaxed CORS allowlist. ShotClassify now ships a `CSRFMiddleware` that enforces a double-submit token on every cookie-authenticated mutation that looks like it came from a browser (the request carries an `Origin` or `Sec-Fetch-Site` header). The token is an HMAC-SHA256 of the session id signed with `APP_SECRET_KEY`, mirrored into a `sc_csrf` cookie that JS can read, and refreshed on every authenticated response so it rolls forward with session renewal and force-logout-all. API-key callers, SCIM bearer callers, and non-browser tools (curl, CI) are exempt because they do not ride on ambient cookies. SPAs can fetch the current token from `GET /auth/csrf` at boot and attach it to every fetch as `X-CSRF-Token`. Coverage in `tests/test_csrf.py` (browser POST without token blocked, with correct token allowed, cross-session token rejected, API-key exempt, safe verb exempt, non-browser caller exempt, /auth/csrf returns matching token, cookie refresh).
+
+### Try it
+
+With the API on `http://127.0.0.1:7441` and a valid `sc_session` cookie in a browser tab:
+
+```sh
+make api
+
+# Fetch the CSRF token for the current cookie session
+curl -s http://127.0.0.1:7441/auth/csrf \
+  -b 'sc_session=<paste from devtools>'
+
+# A browser-shaped DELETE without the token is rejected
+curl -i -X DELETE http://127.0.0.1:7441/v1/sessions/<sid> \
+  -b 'sc_session=<paste>' \
+  -H 'Origin: https://app.example.com'
+# -> HTTP/1.1 403 csrf_token_invalid
+
+# Same call with the token succeeds
+curl -i -X DELETE http://127.0.0.1:7441/v1/sessions/<sid> \
+  -b 'sc_session=<paste>' \
+  -H 'Origin: https://app.example.com' \
+  -H 'X-CSRF-Token: <token from /auth/csrf>'
+```
+
+API-key flows are unaffected: `curl -H 'X-API-Key: ...'` continues to work for every mutation without a CSRF header.
+
 ## What's new: per-tenant browser-origin allowlist
 
 The workspace IP allowlist already gates server-to-server callers, but two tenants behind the same corporate egress IP cannot use it to keep each other's web apps off their data. Enterprise procurement (SOC 2 CC6.6, most security questionnaires) now expects a per-workspace browser-origin allowlist as a separate control. ShotClassify adds one: workspace admins can list the exact `scheme://host[:port]` values that are allowed to call the API from a browser, and `OriginAllowlistMiddleware` rejects any request that carries a non-matching `Origin` header with HTTP 403 `origin_not_allowed` before the route handler runs. Server-to-server callers (SDKs, curl, CI) never send an `Origin` so they are unaffected, which is the same backward-compatible default the IP allowlist uses. Manage at `Settings -> Security -> Browser origin allowlist` or via `GET/PUT /v1/settings/security/cors-origins`. Admin only, MFA step-up on writes, audit-logged by the existing tamper-evident chain. Origins are normalised (lowercased scheme and host, default ports stripped, wildcards rejected) so an admin cannot accidentally weaken the policy with a typo. Coverage in `tests/test_origin_allowlist.py`.

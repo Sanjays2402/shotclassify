@@ -98,3 +98,23 @@ def logout(request: Request):
 @router.get("/whoami")
 def whoami(request: Request):
     return {"principal": getattr(request.state, "principal", None)}
+
+
+@router.get("/csrf")
+def csrf_token(request: Request):
+    """Expose the current double-submit CSRF token for cookie callers.
+
+    SPA clients call this once at boot to fetch the token, then attach
+    it to every state-changing fetch via ``X-CSRF-Token``. API-key
+    callers never need this endpoint: they are exempt from CSRF
+    enforcement because they do not ride on ambient browser cookies.
+    """
+    sid = getattr(request.state, "session_id", None)
+    if not sid:
+        # API-key principals reach this branch when they hit the
+        # endpoint by accident. Returning a CSRF token to them would
+        # be misleading: it would not match anything.
+        return {"csrf_token": None, "detail": "No cookie session on this request."}
+    from ..middleware.csrf import token_for_session
+
+    return {"csrf_token": token_for_session(sid)}
