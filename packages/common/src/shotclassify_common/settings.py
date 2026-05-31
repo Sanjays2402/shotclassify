@@ -128,6 +128,25 @@ class Settings(BaseSettings):
     rate_limit_burst: int = 20
     rate_limit_exempt_paths: str = "/healthz,/readyz,/metrics,/blob"
 
+    # Outbound webhook egress hardening. Webhook URLs are tenant-controlled,
+    # which makes the dispatcher a textbook SSRF sink: a malicious or
+    # mis-typed URL pointing at 127.0.0.1, 169.254.169.254 (cloud metadata),
+    # 10.0.0.0/8 or fd00::/8 would let a tenant probe the internal network or
+    # exfiltrate IAM credentials from the host. We resolve the hostname before
+    # connecting and reject any address that lands in a non-public range.
+    #
+    # ``webhook_egress_allow_http`` permits plain http://. Forced to False in
+    # production: receivers must terminate TLS so HMAC signatures aren't
+    # observable on the wire.
+    # ``webhook_egress_allow_private`` opens the dispatcher up to private/
+    # loopback ranges. Only set this True in development against a local
+    # echo server.
+    # ``webhook_egress_extra_blocked_cidrs`` is a comma-separated denylist
+    # operators can extend without a code change (e.g. block your VPC CIDR).
+    webhook_egress_allow_http: bool = False
+    webhook_egress_allow_private: bool = False
+    webhook_egress_extra_blocked_cidrs: str = ""
+
     # Per-tenant IP allowlist. Enforced by IPAllowlistMiddleware when
     # enabled. The actual CIDR list is stored per-tenant in the database
     # so workspace owners can manage it from the dashboard without a redeploy.

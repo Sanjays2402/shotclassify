@@ -26,6 +26,11 @@ from fastapi.testclient import TestClient
 def _client(monkeypatch, tmp_path):
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("AUTH_API_KEY", "admin-key")
+    # Tests use 127.0.0.1 listeners and example.com placeholders that may
+    # not resolve in sandboxed CI; the webhook egress allowlist is exercised
+    # directly in tests/test_webhook_egress.py.
+    monkeypatch.setenv("WEBHOOK_EGRESS_ALLOW_HTTP", "true")
+    monkeypatch.setenv("WEBHOOK_EGRESS_ALLOW_PRIVATE", "true")
     monkeypatch.setenv(
         "AUTH_API_KEYS",
         json.dumps(
@@ -188,6 +193,8 @@ def _spawn_listener():
 def test_dispatch_signs_and_delivers(monkeypatch, tmp_path):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'dispatch.db'}")
     monkeypatch.setenv("STORAGE_LOCAL_DIR", str(tmp_path / "storage"))
+    monkeypatch.setenv("WEBHOOK_EGRESS_ALLOW_HTTP", "true")
+    monkeypatch.setenv("WEBHOOK_EGRESS_ALLOW_PRIVATE", "true")
     from shotclassify_common.settings import get_settings
     from shotclassify_store import db, webhooks_store
 
@@ -234,6 +241,8 @@ def test_dispatch_signs_and_delivers(monkeypatch, tmp_path):
 def test_dispatch_records_failure_after_retries(monkeypatch, tmp_path):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'fail.db'}")
     monkeypatch.setenv("STORAGE_LOCAL_DIR", str(tmp_path / "storage"))
+    monkeypatch.setenv("WEBHOOK_EGRESS_ALLOW_HTTP", "true")
+    monkeypatch.setenv("WEBHOOK_EGRESS_ALLOW_PRIVATE", "true")
     from shotclassify_common.settings import get_settings
     from shotclassify_store import db, webhooks_store
 

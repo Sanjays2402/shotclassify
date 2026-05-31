@@ -32,9 +32,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
 
-import httpx
+import httpx  # noqa: F401  # re-exported for backwards compat
+
+from shotclassify_common import get_settings
+from .webhook_egress import EgressBlocked, safe_post, validate_target
 import structlog
 from sqlalchemy import desc, select
 
@@ -165,13 +167,23 @@ def _new_id(prefix: str) -> str:
 
 
 def validate_url(url: str) -> str:
-    if not url or len(url) > 1024:
-        raise ValueError("URL is required and must be under 1024 chars.")
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError("URL must use http or https.")
-    if not parsed.netloc:
-        raise ValueError("URL must include a host.")
+    """Validate a tenant-supplied webhook URL.
+
+    Rejects SSRF-prone targets at subscription create time so tenants
+    get an immediate, actionable 400 instead of silent delivery failures
+    in the audit log. The dispatcher re-validates at delivery time too
+    (DNS records can change between create and fire).
+    """
+    s = get_settings()
+    try:
+        validate_target(
+            url,
+            allow_http=s.webhook_egress_allow_http,
+            allow_private=s.webhook_egress_allow_private,
+            extra_blocked_cidrs=s.webhook_egress_extra_blocked_cidrs,
+        )
+    except EgressBlocked as exc:
+        raise ValueError(f"URL rejected: {exc}") from exc
     return url
 
 
@@ -428,15 +440,30 @@ def _post_with_retries(
     last_status: int | None = None
     last_error: str | None = None
     total_started = time.perf_counter()
+    s = get_settings()
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            with httpx.Client(timeout=timeout, follow_redirects=False) as client:
-                resp = client.post(url, content=body, headers=headers)
+            resp = safe_post(
+                url,
+                content=body,
+                headers=headers,
+                timeout=timeout,
+                allow_http=s.webhook_egress_allow_http,
+                allow_private=s.webhook_egress_allow_private,
+                extra_blocked_cidrs=s.webhook_egress_extra_blocked_cidrs,
+            )
             last_status = resp.status_code
             if 200 <= resp.status_code < 300:
                 elapsed_ms = int((time.perf_counter() - total_started) * 1000)
                 return True, last_status, None, attempt, elapsed_ms
             last_error = f"HTTP {resp.status_code}"
+        except EgressBlocked as exc:
+            # Egress denials are deterministic: a private/loopback/metadata
+            # target will not become safe on retry. Record once and abort
+            # the backoff loop so we don't burn delivery attempts on a
+            # config error.
+            elapsed_ms = int((time.perf_counter() - total_started) * 1000)
+            return False, None, f"egress blocked: {exc}"[:500], attempt, elapsed_ms
         except Exception as exc:  # noqa: BLE001
             last_status = None
             last_error = (str(exc) or exc.__class__.__name__)[:500]

@@ -2,7 +2,37 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
-## What's new: SCIM 2.0 provisioning for Okta, Azure AD, Google Workspace
+## What's new: SSRF-safe outbound webhook egress
+
+Webhook destinations are tenant controlled, which makes the dispatcher the most common SSRF sink in any SaaS. Before every delivery (and at subscription create time) the URL is parsed, the hostname is resolved, and every A/AAAA record is checked. Loopback, private (RFC1918, IPv6 ULA), link-local, multicast, CGNAT, cloud-metadata (169.254.0.0/16), and operator-configured CIDR ranges are refused. Plain `http://` is refused unless explicitly enabled. Egress denials skip the retry loop and surface as `egress blocked: <reason>` in the audit-replay UI so tenants get an actionable error without leaking internal network topology.
+
+Knobs (`shotclassify_common.settings.Settings`):
+
+- `WEBHOOK_EGRESS_ALLOW_HTTP` (default `false`): permit plain `http://` targets.
+- `WEBHOOK_EGRESS_ALLOW_PRIVATE` (default `false`): permit loopback/private targets. Dev only.
+- `WEBHOOK_EGRESS_EXTRA_BLOCKED_CIDRS` (default empty): comma-separated extra denylist (e.g. your VPC supernet `10.0.0.0/8`).
+
+All three behaviors and the hardcoded blocks (cloud metadata stays blocked even in dev mode) are covered by `tests/test_webhook_egress.py`.
+
+### Try it
+
+```bash
+# A loopback target is rejected at create time.
+curl -s -X POST http://localhost:7441/v1/webhooks \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"url":"http://127.0.0.1:8080/hook","events":["classify.completed"]}'
+# => 422 {"detail":"URL rejected: loopback address"}
+
+# A cloud-metadata target is rejected even with WEBHOOK_EGRESS_ALLOW_PRIVATE=true.
+curl -s -X POST http://localhost:7441/v1/webhooks \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"url":"http://169.254.169.254/latest/meta-data/","events":["*"]}'
+# => 422 {"detail":"URL rejected: address in blocked range 169.254.0.0/16"}
+```
+
+Full threat-model write-up: [`docs/security.md`](docs/security.md).
+
+## Previous: SCIM 2.0 provisioning for Okta, Azure AD, Google Workspace
 
 The FastAPI service now speaks SCIM 2.0 (RFC 7644) so enterprise IdPs can auto provision and de provision workspace members without API key handouts. Each workspace mints its own bearer token, only the SHA-256 is stored, and lookups go through that hash index so the plaintext never appears in logs or backups. Disabling SCIM in the admin console breaks glass immediately: every subsequent SCIM call returns 401 even before the admin rotates.
 
