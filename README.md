@@ -2,6 +2,28 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: legal hold registry
+
+Workspace admins can place a legal hold from `/admin/legal-holds` or `POST /v1/settings/security/legal-holds` to freeze evidence during litigation, regulator inquiry, or compliance review. While at least one hold is active, every destructive code path in the API refuses with HTTP 423 Locked and the matter names that caused the block: per-shot `DELETE /v1/history/{id}`, bulk `POST /v1/history/bulk` with `action=delete`, `DELETE /v1/me/data`, `DELETE /v1/workspace/data`, and the scheduled retention purge (which returns `held: true` instead of removing rows). Lifting a hold writes `lifted_at` and `lifted_by` instead of deleting the row, so the e-discovery audit trail survives. Holds are tenant-scoped at the query layer; one workspace's hold never blocks another's deletes. Coverage in `tests/test_legal_hold.py`.
+
+### Try it
+
+```bash
+# Place a hold (admin role + MFA step-up enforced server-side).
+curl -s -X POST -H "X-API-Key: $ADMIN_KEY" -H "X-MFA-OTP: 123456" \
+  -H "content-type: application/json" \
+  -d '{"matter":"SEC Inquiry 12-345","reason":"preserve all evidence"}' \
+  http://localhost:7441/v1/settings/security/legal-holds
+
+# Any subsequent delete now fails with 423 Locked.
+curl -i -X DELETE -H "X-API-Key: $ADMIN_KEY" \
+  http://localhost:7441/v1/history/some-shot-id
+# HTTP/1.1 423 Locked
+# {"detail":{"error":"legal_hold_active","matters":["SEC Inquiry 12-345"], ...}}
+```
+
+Manage from the admin console at <http://localhost:3000/admin/legal-holds>.
+
 ## What's new: per-workspace seat limits
 
 Workspaces now have a configurable seat cap (`seat_limit` on `tenant_settings`). A seat is one active member plus one pending invitation, so the count an admin sees in `/settings/members` matches what billing would charge. Enforcement lives in the store layer (`memberships.upsert_member` and `memberships.create_invitation`) so every path that adds a seat is gated identically: manual invites return HTTP 402 with `{"error":"seat_limit_exceeded", "seat_limit", "seats_in_use"}`, SCIM provisioning returns 507 `tooMany` so Okta/Azure AD retry cleanly, and SSO auto-join silently declines so a sign-in at the cap still succeeds without granting a role. Lowering the cap below current usage is allowed and only blocks new seats. Role changes on existing members never consume a seat. Coverage in `tests/test_seat_limits.py`.

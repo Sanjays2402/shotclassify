@@ -263,3 +263,72 @@ def put_session_policy_route(request: Request, payload: dict = Body(...)) -> dic
         "effective_minutes": effective,
         "clipped": clipped,
     }
+
+
+# ---------------------------------------------------------------------------
+# Legal holds
+# ---------------------------------------------------------------------------
+#
+# Active legal holds freeze every destructive code path for the workspace:
+# scheduled retention purge, per-shot DELETE, bulk history DELETE, per-user
+# /me/data erasure, and workspace-wide /workspace/data erasure all refuse
+# with HTTP 423 Locked while at least one matter is active. Lifting a hold
+# writes lifted_at / lifted_by instead of deleting the row so the
+# e-discovery trail survives.
+from shotclassify_store import legal_holds_store as _legal_holds
+
+
+@router.get("/legal-holds", dependencies=[require_role("admin")])
+def list_legal_holds_route(
+    request: Request, active_only: bool = False
+) -> dict:
+    tenant_id = _tenant(request)
+    holds = _legal_holds.list_holds(tenant_id, active_only=active_only)
+    return {
+        "tenant_id": tenant_id,
+        "active": any(h.active for h in holds),
+        "active_count": sum(1 for h in holds if h.active),
+        "holds": [h.to_dict() for h in holds],
+    }
+
+
+@router.post(
+    "/legal-holds",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def create_legal_hold_route(request: Request, payload: dict = Body(...)) -> dict:
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "Body must be a JSON object.")
+    actor = getattr(request.state, "principal", None)
+    try:
+        hold = _legal_holds.create_hold(
+            tenant_id,
+            payload.get("matter"),
+            payload.get("reason"),
+            created_by=actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return hold.to_dict()
+
+
+@router.post(
+    "/legal-holds/{hold_id}/lift",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def lift_legal_hold_route(
+    hold_id: str, request: Request, payload: dict | None = Body(default=None)
+) -> dict:
+    tenant_id = _tenant(request)
+    actor = getattr(request.state, "principal", None)
+    reason = (payload or {}).get("reason") if isinstance(payload, dict) else None
+    try:
+        hold = _legal_holds.lift_hold(
+            tenant_id, hold_id, reason, lifted_by=actor
+        )
+    except KeyError:
+        raise HTTPException(404, "Legal hold not found for this workspace.")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return hold.to_dict()

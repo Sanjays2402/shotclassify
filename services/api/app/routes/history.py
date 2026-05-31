@@ -10,7 +10,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from shotclassify_common import Category, ClassificationRecord
-from shotclassify_store import Repository
+from shotclassify_store import LegalHoldActive, Repository
 
 from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.rbac import require_role, require_scope
@@ -227,6 +227,20 @@ def bulk(request: Request, payload: dict = Body(...), dry_run: bool = dry_run_qu
     repo = Repository()
     affected = 0
     missing: list[str] = []
+    if not dry_run and action == "delete":
+        from shotclassify_store.legal_holds import tenant_has_active_hold
+
+        if tenant_has_active_hold(tenant_id or ""):
+            raise HTTPException(
+                status_code=423,
+                detail={
+                    "error": "legal_hold_active",
+                    "message": (
+                        "Workspace is under legal hold; bulk deletes are "
+                        "blocked until every active hold is lifted."
+                    ),
+                },
+            )
     for rid in ids:
         if action == "delete":
             if dry_run:
@@ -315,7 +329,21 @@ def delete(item_id: str, request: Request, dry_run: bool = dry_run_query()):
             request,
             would_delete={"id": item_id, "filename": getattr(rec, "filename", None)},
         )
-    if not repo.delete(item_id, tenant_id=tenant_id):
+    try:
+        ok = repo.delete(item_id, tenant_id=tenant_id)
+    except LegalHoldActive as exc:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "legal_hold_active",
+                "message": (
+                    "Workspace is under legal hold; this shot cannot be "
+                    "deleted until every active hold is lifted."
+                ),
+                "matters": exc.matters,
+            },
+        )
+    if not ok:
         raise HTTPException(404, "Not found.")
     return {"ok": True}
 

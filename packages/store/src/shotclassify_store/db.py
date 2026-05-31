@@ -389,6 +389,34 @@ class WebhookDeliveryRow(Base):
     )
 
 
+class LegalHoldRow(Base):
+    """Active or lifted legal hold on a workspace.
+
+    While at least one row exists for a tenant with ``lifted_at IS NULL``,
+    every hard-delete and retention-purge code path must refuse to remove
+    rows for that tenant. Lifting a hold sets ``lifted_at`` / ``lifted_by``
+    instead of deleting the row so the e-discovery audit trail survives.
+    """
+
+    __tablename__ = "legal_holds"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    matter: Mapped[str] = mapped_column(String(256), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    lifted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lifted_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lifted_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()
@@ -509,6 +537,8 @@ def init_db() -> None:
                 Base.metadata.tables["webhook_subscriptions"].create(bind=conn)
             if not insp.has_table("webhook_deliveries"):
                 Base.metadata.tables["webhook_deliveries"].create(bind=conn)
+            if not insp.has_table("legal_holds"):
+                Base.metadata.tables["legal_holds"].create(bind=conn)
     except Exception:
         # Best-effort. Real schema management lives in alembic.
         pass

@@ -35,12 +35,14 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from shotclassify_store import (
     AuditRepository,
+    LegalHoldActive,
     Repository,
     SavedViewRepository,
     api_keys_store,
     get_ip_allowlist,
     get_retention_days,
     get_sso_config,
+    legal_holds_store,
     memberships_store,
 )
 
@@ -197,9 +199,26 @@ def delete_workspace_data(
                 "saved_views": len(views.list_by_tenant(tenant_id)),
             },
             "preserved": ["memberships", "api_keys", "sso", "ip_allowlist"],
+            "legal_hold": {
+                "active": legal_holds_store.tenant_has_active_hold(tenant_id),
+                "matters": legal_holds_store.active_hold_matters(tenant_id),
+            },
         }
 
-    classifications_removed = repo.delete_by_tenant(tenant_id)
+    try:
+        classifications_removed = repo.delete_by_tenant(tenant_id)
+    except LegalHoldActive as exc:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "legal_hold_active",
+                "message": (
+                    "Workspace is under legal hold; lift all active holds "
+                    "before deleting workspace data."
+                ),
+                "matters": exc.matters,
+            },
+        )
     saved_views_removed = views.delete_by_tenant(tenant_id)
     # Delete audit rows LAST so the audit row this very request writes via
     # AuditLogMiddleware (on response) survives in the new empty log. We

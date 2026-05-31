@@ -37,6 +37,7 @@ class PurgeResult:
     retention_days: int
     cutoff: datetime
     removed: int
+    held: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -44,6 +45,7 @@ class PurgeResult:
             "retention_days": self.retention_days,
             "cutoff": self.cutoff.isoformat(),
             "removed": self.removed,
+            "held": self.held,
         }
 
 
@@ -132,8 +134,21 @@ def purge_expired_for_tenant(
     """
     if not tenant_id:
         raise ValueError("tenant_id is required")
+    # Legal hold short-circuit: when a workspace is on hold the retention
+    # scheduler MUST NOT erase any of its rows, even ones outside the
+    # window. We import lazily to avoid an import cycle in older callers.
+    from .legal_holds import tenant_has_active_hold
+
     days = get_retention_days(tenant_id)
     now = now or datetime.now(UTC)
+    if tenant_has_active_hold(tenant_id):
+        return PurgeResult(
+            tenant_id=tenant_id,
+            retention_days=days or 0,
+            cutoff=now,
+            removed=0,
+            held=True,
+        )
     if not days:
         return PurgeResult(tenant_id=tenant_id, retention_days=0, cutoff=now, removed=0)
     cutoff = now - timedelta(days=days)

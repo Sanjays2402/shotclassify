@@ -100,11 +100,17 @@ class Repository:
 
         Returns the number of rows removed. Also unlinks the associated blob
         files when they live under the configured local storage dir.
+
+        Raises :class:`shotclassify_store.legal_holds.LegalHoldActive` if
+        the resolved tenant has any active legal hold.
         """
         from pathlib import Path
 
         from shotclassify_common import get_settings
 
+        from .legal_holds import guard_destructive
+
+        guard_destructive(tenant_id)
         storage_root = Path(get_settings().storage_local_dir).resolve()
         with get_session() as s:
             stmt = select(ClassificationRow).where(
@@ -150,13 +156,19 @@ class Repository:
         Mirrors :meth:`delete_by_principal` but at workspace scope: used by
         the workspace-wide GDPR erasure endpoint. Also unlinks blob files
         inside the configured local storage root. Returns the row count.
+
+        Raises :class:`shotclassify_store.legal_holds.LegalHoldActive` if
+        the workspace has any active legal hold.
         """
         from pathlib import Path
 
         from shotclassify_common import get_settings
 
+        from .legal_holds import guard_destructive
+
         if not tenant_id:
             raise ValueError("tenant_id is required for tenant-wide deletion.")
+        guard_destructive(tenant_id)
         storage_root = Path(get_settings().storage_local_dir).resolve()
         with get_session() as s:
             stmt = select(ClassificationRow)
@@ -364,6 +376,9 @@ class Repository:
         return self.get(item_id, tenant_id=tenant_id)
 
     def delete(self, item_id: str, tenant_id: str | None = None) -> bool:
+        from .legal_holds import guard_destructive
+
+        guard_destructive(tenant_id)
         with get_session() as s:
             row = s.get(ClassificationRow, item_id)
             if not row:

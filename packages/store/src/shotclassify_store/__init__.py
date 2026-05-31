@@ -39,6 +39,9 @@ from .retention import (
     purge_expired_for_tenant,
     set_retention_days,
 )
+from . import legal_holds as legal_holds_store
+from .legal_holds import LegalHold, LegalHoldActive, tenant_has_active_hold
+from .db import LegalHoldRow
 from .tenant_settings import (
     AUTO_JOIN_ROLES,
     PII_REDACT_MODES,
@@ -114,4 +117,9 @@ __all__ = [
     "webhooks_store",
     "WebhookSubscriptionRow",
     "WebhookDeliveryRow",
+    "legal_holds_store",
+    "LegalHold",
+    "LegalHoldActive",
+    "LegalHoldRow",
+    "tenant_has_active_hold",
 ]

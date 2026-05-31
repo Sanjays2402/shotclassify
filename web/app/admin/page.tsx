@@ -18,6 +18,7 @@ import {
   Lock,
   ArrowSquareOut,
   WebhooksLogo,
+  Gavel,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -254,6 +255,13 @@ export default function AdminConsolePage() {
           value="Manage"
           href="/admin/api-webhooks"
           sub="signed deliveries"
+        />
+        <StatCard
+          icon={<Gavel size={18} weight="duotone" />}
+          label="Legal holds"
+          value="Manage"
+          href="/admin/legal-holds"
+          sub="freeze deletes"
         />
       </div>
 

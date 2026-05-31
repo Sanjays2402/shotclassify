@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from shotclassify_store import AuditRepository, Repository
+from shotclassify_store import AuditRepository, LegalHoldActive, Repository
 
 from ..dryrun import dry_run_query, mark_dry_run
 
@@ -91,7 +91,20 @@ def delete_my_data(
                 "audit_log": len(audit.list_for_principal(principal, tenant_id=tenant_id)),
             },
         )
-    classifications_removed = Repository().delete_by_principal(principal, tenant_id=tenant_id)
+    try:
+        classifications_removed = Repository().delete_by_principal(principal, tenant_id=tenant_id)
+    except LegalHoldActive as exc:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "legal_hold_active",
+                "message": (
+                    "Workspace is under legal hold; ask an admin to lift "
+                    "the hold before erasing your data."
+                ),
+                "matters": exc.matters,
+            },
+        )
     audit_removed = AuditRepository().delete_for_principal(principal, tenant_id=tenant_id)
     return {
         "principal": principal,
