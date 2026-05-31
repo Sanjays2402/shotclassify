@@ -10,8 +10,19 @@ import {
   Warning,
   ArrowsClockwise,
   Trash,
+  Lifebuoy,
+  DownloadSimple,
+  CopySimple,
+  LockKey,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
+
+type RecoveryCodes = {
+  total: number;
+  remaining: number;
+  generated_at: string | null;
+  last_used_at: string | null;
+};
 
 type Status = {
   enrolled: boolean;
@@ -21,6 +32,7 @@ type Status = {
   last_used_at: string | null;
   session_verified_at: string | null;
   principal: string;
+  recovery_codes?: RecoveryCodes;
 };
 
 type Enrollment = {
@@ -62,6 +74,8 @@ export default function MfaPage() {
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
+  const [issuedCodes, setIssuedCodes] = useState<string[] | null>(null);
+  const [recoveryCode, setRecoveryCode] = useState("");
   const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(
     null,
   );
@@ -153,6 +167,84 @@ export default function MfaPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function regenerateRecovery() {
+    if (
+      !confirm(
+        "Generate a new set of 10 recovery codes? The previous codes will stop working.",
+      )
+    )
+      return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      const r = await fetch("/api/mfa/recovery-codes", { method: "POST" });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body?.detail || `${r.status}`);
+      setIssuedCodes(body.codes as string[]);
+      setFlash({
+        kind: "ok",
+        msg: "Recovery codes generated. Save them now; they will not be shown again.",
+      });
+      mutate();
+    } catch (e) {
+      setFlash({ kind: "err", msg: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function redeemRecovery() {
+    if (!recoveryCode.trim()) return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      const r = await fetch("/api/mfa/recovery", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: recoveryCode.trim() }),
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body?.detail || `${r.status}`);
+      setRecoveryCode("");
+      setFlash({
+        kind: "ok",
+        msg: `Recovery code accepted. ${body.remaining} remaining. Rotate from a secure device when you can.`,
+      });
+      mutate();
+    } catch (e) {
+      setFlash({ kind: "err", msg: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyCodes() {
+    if (!issuedCodes) return;
+    try {
+      await navigator.clipboard.writeText(issuedCodes.join("\n"));
+      setFlash({ kind: "ok", msg: "Recovery codes copied to clipboard." });
+    } catch {
+      setFlash({ kind: "err", msg: "Clipboard unavailable; copy them manually." });
+    }
+  }
+
+  function downloadCodes() {
+    if (!issuedCodes) return;
+    const stamp = new Date().toISOString().slice(0, 10);
+    const header = `# ShotClassify recovery codes\n# Account: ${data?.principal ?? ""}\n# Generated: ${new Date().toISOString()}\n# Each code works exactly once.\n\n`;
+    const blob = new Blob([header + issuedCodes.join("\n") + "\n"], {
+      type: "text/plain;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `shotclassify-recovery-${stamp}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -353,6 +445,188 @@ export default function MfaPage() {
                 >
                   <Trash size={16} weight="duotone" /> Remove second factor
                 </button>
+              </div>
+            </section>
+          )}
+
+          {data.confirmed && (
+            <section
+              aria-labelledby="recovery-heading"
+              className="rounded-xl bg-white/5 p-5 ring-1 ring-white/10"
+            >
+              <div className="flex items-start gap-3">
+                <div className="rounded-md bg-amber-500/10 p-2 ring-1 ring-amber-400/20">
+                  <Lifebuoy
+                    size={20}
+                    weight="duotone"
+                    className="text-amber-300"
+                  />
+                </div>
+                <div className="flex-1">
+                  <h2 id="recovery-heading" className="text-sm font-semibold">
+                    Recovery codes
+                  </h2>
+                  <p className="mt-1 text-sm text-white/60">
+                    Single-use backup codes that satisfy step-up when your
+                    authenticator app is unavailable. Store them somewhere
+                    your password manager can reach from another device.
+                  </p>
+                  <dl className="mt-3 grid grid-cols-2 gap-3 text-xs text-white/60 sm:grid-cols-4">
+                    <div>
+                      <dt className="uppercase tracking-wide text-white/40">
+                        Active
+                      </dt>
+                      <dd className="mt-0.5 font-mono text-sm text-white">
+                        {data.recovery_codes?.remaining ?? 0}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="uppercase tracking-wide text-white/40">
+                        Issued
+                      </dt>
+                      <dd className="mt-0.5 font-mono text-sm text-white">
+                        {data.recovery_codes?.total ?? 0}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="uppercase tracking-wide text-white/40">
+                        Generated
+                      </dt>
+                      <dd className="mt-0.5 text-sm">
+                        {formatDate(
+                          data.recovery_codes?.generated_at ?? null,
+                        )}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="uppercase tracking-wide text-white/40">
+                        Last used
+                      </dt>
+                      <dd className="mt-0.5 text-sm">
+                        {formatDate(
+                          data.recovery_codes?.last_used_at ?? null,
+                        )}
+                      </dd>
+                    </div>
+                  </dl>
+
+                  {(data.recovery_codes?.remaining ?? 0) > 0 &&
+                    (data.recovery_codes?.remaining ?? 0) <= 2 &&
+                    !issuedCodes && (
+                      <p
+                        role="alert"
+                        className="mt-3 flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-200 ring-1 ring-amber-400/20"
+                      >
+                        <Warning size={14} weight="duotone" />
+                        Only {data.recovery_codes?.remaining} recovery code
+                        {(data.recovery_codes?.remaining ?? 0) === 1
+                          ? ""
+                          : "s"}{" "}
+                        left. Regenerate a fresh batch soon.
+                      </p>
+                    )}
+
+                  {!issuedCodes && (
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={regenerateRecovery}
+                        disabled={busy || !data.session_verified_at}
+                        title={
+                          data.session_verified_at
+                            ? ""
+                            : "Step up your session above first."
+                        }
+                        className="inline-flex items-center gap-2 rounded-md bg-amber-500/15 px-3 py-2 text-sm text-amber-100 ring-1 ring-amber-400/30 transition hover:bg-amber-500/25 disabled:opacity-50"
+                      >
+                        <ArrowsClockwise size={16} weight="duotone" />
+                        {data.recovery_codes?.total
+                          ? "Regenerate recovery codes"
+                          : "Generate recovery codes"}
+                      </button>
+                      {!data.session_verified_at && (
+                        <span className="text-xs text-white/50">
+                          Step up your session first to confirm intent.
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {issuedCodes && (
+                    <div className="mt-4 rounded-lg bg-black/40 p-4 ring-1 ring-amber-400/30">
+                      <div className="flex items-center gap-2 text-xs text-amber-200">
+                        <LockKey size={14} weight="duotone" />
+                        Shown once. Copy or download before leaving this page.
+                      </div>
+                      <ul className="mt-3 grid grid-cols-1 gap-2 font-mono text-sm text-white sm:grid-cols-2">
+                        {issuedCodes.map((c) => (
+                          <li
+                            key={c}
+                            className="rounded bg-white/5 px-2 py-1 tracking-widest ring-1 ring-white/10"
+                          >
+                            {c}
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={copyCodes}
+                          className="inline-flex items-center gap-2 rounded-md bg-white/10 px-3 py-2 text-sm ring-1 ring-white/15 transition hover:bg-white/15"
+                        >
+                          <CopySimple size={16} weight="duotone" /> Copy all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={downloadCodes}
+                          className="inline-flex items-center gap-2 rounded-md bg-white/10 px-3 py-2 text-sm ring-1 ring-white/15 transition hover:bg-white/15"
+                        >
+                          <DownloadSimple size={16} weight="duotone" /> Download .txt
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIssuedCodes(null)}
+                          className="rounded-md px-3 py-2 text-sm text-white/60 hover:text-white"
+                        >
+                          I have saved them
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-5 border-t border-white/10 pt-4">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-white/40">
+                      Use a recovery code
+                    </h3>
+                    <p className="mt-1 text-xs text-white/50">
+                      Step up this session if your authenticator is
+                      unavailable. Each code works once.
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-end gap-2">
+                      <label htmlFor="recovery-input" className="sr-only">
+                        Recovery code
+                      </label>
+                      <input
+                        id="recovery-input"
+                        autoComplete="off"
+                        spellCheck={false}
+                        maxLength={32}
+                        value={recoveryCode}
+                        onChange={(e) => setRecoveryCode(e.target.value)}
+                        placeholder="abcd-efgh"
+                        className="w-44 rounded-md bg-black/40 px-3 py-2 font-mono text-sm tracking-widest ring-1 ring-white/10 focus:outline-none focus:ring-amber-400/40"
+                      />
+                      <button
+                        type="button"
+                        onClick={redeemRecovery}
+                        disabled={busy || recoveryCode.trim().length < 4}
+                        className="inline-flex items-center gap-2 rounded-md bg-amber-500/15 px-3 py-2 text-sm text-amber-100 ring-1 ring-amber-400/30 transition hover:bg-amber-500/25 disabled:opacity-50"
+                      >
+                        <Lifebuoy size={16} weight="duotone" /> Redeem code
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
             </section>
           )}

@@ -2,6 +2,7 @@
 from .audit import AuditRepository
 from . import mfa as mfa_store
 from .mfa import MfaStatus
+from .mfa import RecoveryStatus as MfaRecoveryStatus
 from .blobs import BlobStore, LocalBlobStore
 from .db import (
     ApiKeyRow,

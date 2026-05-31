@@ -124,11 +124,25 @@ def confirm_enrollment(principal: str, code: str) -> bool:
 
 
 def disable(principal: str) -> bool:
-    """Remove the MFA credential. Returns True if a row existed."""
+    """Remove the MFA credential and any associated recovery codes.
+
+    Returns True if a credential row existed. Recovery codes are wiped
+    unconditionally because they are only meaningful while a TOTP
+    credential is enrolled; leaving them behind would let a stale code
+    re-enable step-up after the second factor was removed.
+    """
     with get_session() as s:
         row = s.get(MfaCredentialRow, principal)
         if row is None:
+            # Still clean up any orphan recovery rows just in case.
+            s.query(MfaRecoveryCodeRow).filter(
+                MfaRecoveryCodeRow.principal == principal
+            ).delete(synchronize_session=False)
+            s.commit()
             return False
+        s.query(MfaRecoveryCodeRow).filter(
+            MfaRecoveryCodeRow.principal == principal
+        ).delete(synchronize_session=False)
         s.delete(row)
         s.commit()
         return True
@@ -170,3 +184,173 @@ def session_mfa_verified_at(session_id: str | None) -> datetime | None:
         if row is None:
             return None
         return row.mfa_verified_at
+
+
+# ---------------------------------------------------------------------------
+# Recovery (backup) codes
+# ---------------------------------------------------------------------------
+#
+# A confirmed-MFA user can generate a batch of single-use recovery codes that
+# satisfy step-up when the authenticator app is unavailable. Codes are stored
+# salted-and-hashed, burned on first use, and a new generation invalidates the
+# old batch.
+
+import hashlib
+import secrets
+import uuid
+
+from .db import MfaRecoveryCodeRow
+
+RECOVERY_BATCH_SIZE = 10
+RECOVERY_CODE_GROUPS = 2  # "abcd-efgh" style
+RECOVERY_CODE_GROUP_LEN = 4
+
+
+def _hash_recovery(code: str, salt: str) -> str:
+    return hashlib.sha256(f"{salt}:{code.lower().strip()}".encode("utf-8")).hexdigest()
+
+
+def _format_code() -> str:
+    # Crockford-ish alphabet: no 0/O/1/I/L to keep transcription clean.
+    alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+    groups = [
+        "".join(secrets.choice(alphabet) for _ in range(RECOVERY_CODE_GROUP_LEN))
+        for _ in range(RECOVERY_CODE_GROUPS)
+    ]
+    return "-".join(groups).lower()
+
+
+@dataclass(frozen=True)
+class RecoveryStatus:
+    total: int
+    remaining: int
+    generated_at: datetime | None
+    last_used_at: datetime | None
+
+    def to_dict(self) -> dict:
+        return {
+            "total": self.total,
+            "remaining": self.remaining,
+            "generated_at": self.generated_at.isoformat() if self.generated_at else None,
+            "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
+        }
+
+
+def recovery_status(principal: str) -> RecoveryStatus:
+    """Return counts and timestamps for the principal's active recovery batch."""
+    with get_session() as s:
+        rows = (
+            s.query(MfaRecoveryCodeRow)
+            .filter(MfaRecoveryCodeRow.principal == principal)
+            .all()
+        )
+        if not rows:
+            return RecoveryStatus(0, 0, None, None)
+        total = len(rows)
+        remaining = sum(1 for r in rows if r.used_at is None)
+        generated_at = min(r.created_at for r in rows)
+        used_times = [r.used_at for r in rows if r.used_at is not None]
+        last_used_at = max(used_times) if used_times else None
+        return RecoveryStatus(total, remaining, generated_at, last_used_at)
+
+
+def regenerate_recovery_codes(principal: str) -> dict:
+    """Burn any existing batch and issue a fresh set of plaintext codes.
+
+    Caller MUST gate this on a confirmed MFA credential and a fresh
+    TOTP step-up; this function only enforces the "confirmed MFA"
+    invariant so it cannot accidentally bootstrap recovery before the
+    second factor itself exists.
+    """
+    if not is_confirmed(principal):
+        raise ValueError("Confirm MFA enrollment before generating recovery codes.")
+    now = datetime.now(UTC)
+    batch_id = uuid.uuid4().hex
+    plaintext: list[str] = []
+    with get_session() as s:
+        # Drop any prior rows for this principal in the same transaction so a
+        # crash mid-generation never leaves two active batches.
+        s.query(MfaRecoveryCodeRow).filter(
+            MfaRecoveryCodeRow.principal == principal
+        ).delete(synchronize_session=False)
+        for _ in range(RECOVERY_BATCH_SIZE):
+            code = _format_code()
+            plaintext.append(code)
+            salt = secrets.token_hex(16)
+            s.add(
+                MfaRecoveryCodeRow(
+                    id=uuid.uuid4().hex,
+                    principal=principal,
+                    code_hash=_hash_recovery(code, salt),
+                    salt=salt,
+                    batch_id=batch_id,
+                    created_at=now,
+                    used_at=None,
+                )
+            )
+        s.commit()
+    return {
+        "batch_id": batch_id,
+        "generated_at": now.isoformat(),
+        "codes": plaintext,
+        "remaining": RECOVERY_BATCH_SIZE,
+        "total": RECOVERY_BATCH_SIZE,
+    }
+
+
+def consume_recovery_code(
+    principal: str, code: str, *, session_id: str | None
+) -> bool:
+    """Burn one matching recovery code and stamp the session as MFA-verified.
+
+    Returns False if the principal has no MFA credential, no matching
+    unused code is found, or no session is present to stamp. The code
+    lookup is constant-time per row to avoid leaking which codes exist.
+    """
+    if not session_id:
+        return False
+    code = (code or "").strip().lower()
+    if not code:
+        return False
+    if not is_confirmed(principal):
+        return False
+    now = datetime.now(UTC)
+    with get_session() as s:
+        rows = (
+            s.query(MfaRecoveryCodeRow)
+            .filter(
+                MfaRecoveryCodeRow.principal == principal,
+                MfaRecoveryCodeRow.used_at.is_(None),
+            )
+            .all()
+        )
+        match = None
+        for row in rows:
+            expected = _hash_recovery(code, row.salt)
+            if secrets.compare_digest(expected, row.code_hash):
+                match = row
+        if match is None:
+            return False
+        match.used_at = now
+        # Also stamp the credential so audit shows recent MFA activity.
+        cred = s.get(MfaCredentialRow, principal)
+        if cred is not None:
+            cred.last_used_at = now
+        s.execute(
+            update(SessionRow)
+            .where(SessionRow.id == session_id)
+            .values(mfa_verified_at=now)
+        )
+        s.commit()
+        return True
+
+
+def _invalidate_recovery_codes(principal: str) -> int:
+    with get_session() as s:
+        deleted = (
+            s.query(MfaRecoveryCodeRow)
+            .filter(MfaRecoveryCodeRow.principal == principal)
+            .delete(synchronize_session=False)
+        )
+        s.commit()
+        return int(deleted)

@@ -316,6 +316,34 @@ class MfaCredentialRow(Base):
     )
 
 
+class MfaRecoveryCodeRow(Base):
+    """Single-use TOTP recovery (backup) code.
+
+    Generated in batches of N (default 10) when the user clicks
+    "Regenerate recovery codes" on the MFA page. Plaintext is shown to
+    the user exactly once; only the SHA-256 hash of the salted code is
+    stored. Consuming a code stamps ``used_at`` so the same value cannot
+    be used twice (NIST 800-63B 5.1.2).
+
+    Generating a new batch deletes prior unused rows for the same
+    principal so users never have two active sets at once.
+    """
+
+    __tablename__ = "mfa_recovery_codes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    principal: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    salt: Mapped[str] = mapped_column(String(64), nullable=False)
+    batch_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class MembershipRow(Base):
     """Binds a principal (OAuth/SSO login) to a tenant with a role.
 
@@ -715,6 +743,8 @@ def init_db() -> None:
                     ))
             if not insp.has_table("mfa_credentials"):
                 Base.metadata.tables["mfa_credentials"].create(bind=conn)
+            if not insp.has_table("mfa_recovery_codes"):
+                Base.metadata.tables["mfa_recovery_codes"].create(bind=conn)
             if not insp.has_table("webhook_subscriptions"):
                 Base.metadata.tables["webhook_subscriptions"].create(bind=conn)
             if not insp.has_table("webhook_deliveries"):

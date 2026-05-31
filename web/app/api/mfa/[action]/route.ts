@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
   // /api/mfa/[action] where action is verify or challenge
   const parts = req.nextUrl.pathname.split("/");
   const action = parts[parts.length - 1];
-  if (!["verify", "challenge"].includes(action)) {
+  if (!["verify", "challenge", "recovery"].includes(action)) {
     return NextResponse.json({ error: "unknown action" }, { status: 404 });
   }
   return forward(req, `/v1/mfa/${action}`, "POST");

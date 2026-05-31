@@ -2,7 +2,27 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
-## What's new: tenant-consented support access grants
+## What's new: MFA recovery (backup) codes
+
+Mandatory MFA closes one risk and opens another: a user who loses their phone is locked out of their workspace until an admin intervenes. SOC 2 CC6.1 and NIST 800-63B both expect a documented self-service recovery path, and procurement teams routinely block deals until they see one. Every confirmed second factor can now mint a batch of 10 single-use recovery codes from `Settings -> Security -> MFA`. Plaintext is shown exactly once at generation time; the server only retains a per-code salted SHA-256 hash, so a database leak cannot reveal a working code. Each code satisfies step-up exactly once (NIST 800-63B 5.1.2), is burned atomically on use, and stamps the session's `mfa_verified_at` so the user immediately regains access to admin mutations. Regenerating a batch invalidates the prior set in a single transaction so users never have two live batches at once, and disabling MFA wipes every recovery row for that principal so a stale code can never re-enable step-up after the second factor is gone. Generation itself requires a fresh TOTP step-up (`require_mfa_step_up`) so a stolen cookie alone cannot mint codes, and API key callers are refused outright because recovery is a human-only flow. Coverage in `tests/test_mfa_recovery_codes.py`.
+
+### Try it
+
+With the API running on `http://127.0.0.1:7441` and a cookie session that has a confirmed TOTP credential and a fresh step-up:
+
+```sh
+# Mint a batch. Plaintext is returned once and only once.
+curl -s -X POST -b "sc_session=$COOKIE" \
+  http://localhost:7441/v1/mfa/recovery-codes | jq
+
+# Redeem one when the authenticator app is unavailable; this stamps the session.
+curl -s -X POST -b "sc_session=$COOKIE" -H "content-type: application/json" \
+  -d '{"code":"abcd-efgh"}' http://localhost:7441/v1/mfa/recovery | jq
+```
+
+The dashboard surface lives at <http://localhost:3000/settings/mfa>.
+
+## Previous: tenant-consented support access grants
 
 The vendor side of any multi-tenant SaaS has the same long-standing back door: an `admin` who runs the deployment can flip `X-Tenant: <other>` and silently read or mutate any customer workspace's data. Procurement reviewers catch this every time and refuse to sign without a control. The tenant resolution middleware now refuses cross-tenant admin scoping unless the target workspace has issued an active, unexpired support access grant, and every cross-tenant request taken under a grant writes the grant id, ticket reason, and target tenant into the immutable hash-chained audit log. Workspaces manage their own grants from `/settings/support-access`: each grant carries a reason (ticket id or short narrative), a hard expiry (5 minutes to 7 days), an optional pin to one specific vendor admin login, and a visible use counter. Revocation is one click and the gate closes on the next request. The legacy single-admin `AUTH_API_KEY` stays exempt because it represents the owner of the deployment, not a multi-tenant SaaS support engineer; DB-backed API keys already carry a hard tenant binding and are unaffected. Coverage in `tests/test_support_access.py`.
 
