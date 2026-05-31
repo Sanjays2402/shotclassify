@@ -302,7 +302,7 @@ export default function ShotDetail({
               <div className="eyebrow mb-2">Frame</div>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={`/api/proxy/blob/${rec.image_path.split("/").pop()}`}
+                src={`/api/proxy/v1/blobs/${rec.id}`}
                 alt={rec.filename}
                 className="w-full rounded-sm"
               />

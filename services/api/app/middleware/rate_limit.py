@@ -10,7 +10,7 @@ configured via settings:
   RATE_LIMIT_PER_WORKSPACE_RPM int requests/min per workspace, default 2400
   RATE_LIMIT_BURST            int extra burst allowance, default 20
   RATE_LIMIT_EXEMPT_PATHS     comma list of path prefixes, default
-                              "/healthz,/readyz,/metrics,/blob"
+                              "/healthz,/readyz,/metrics,/.well-known,/security.txt"
 
 Individual API keys may override the per-key ceiling via the
 ``api_keys.rpm_override`` column so workspace admins can grant elevated

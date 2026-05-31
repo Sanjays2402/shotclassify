@@ -2,6 +2,26 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: authenticated, tenant-scoped screenshot downloads
+
+Uploaded screenshots used to be served by a raw `StaticFiles` mount at `GET /blob/<filename>` with no authentication and no tenant scoping. Anyone who could guess or scrape a 16-byte hex id could pull another tenant's screenshot, which is an immediate procurement red flag (SOC 2 CC6.1, CC6.6, and every enterprise security questionnaire). The mount is gone. Screenshots now live behind `GET /v1/blobs/{record_id}`, which runs through the same auth, RBAC, rate-limit, IP allowlist, browser-origin allowlist, and legal-hold gates as every other `/v1` route. The handler resolves the classification record through `Repository.get(item_id, tenant_id=...)`, so a caller from workspace B asking for workspace A's id gets `HTTP 404 blob_not_found` (same status as a missing record, so cross-tenant existence does not leak) and never sees a byte of image data. The response carries `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff` so downstream proxies and shared caches never retain another tenant's screenshot. The history CSV/JSON export no longer leaks the server-side absolute path either; it now exports a relative `blob_url` that callers must fetch through the same authenticated endpoint. Coverage in `tests/test_blob_tenant_scoping.py`, including the regression that the old `/blob/<filename>` mount is gone.
+
+Try it locally:
+
+```sh
+# Owning tenant gets the image
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H 'X-API-Key: acme-op-key' \
+  http://localhost:7441/v1/blobs/<record_id>
+# -> 200
+
+# Different tenant gets 404, never the bytes
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H 'X-API-Key: globex-op-key' \
+  http://localhost:7441/v1/blobs/<record_id>
+# -> 404
+```
+
 ## What's new: Trust Center for Terms of Service, DPA, and Acceptable Use
 
 Enterprise procurement and security reviews want to see that the vendor publishes the current commercial terms in a stable place, that the customer can prove who accepted which version, and that there is a way to hard-gate writes until Legal signs off. ShotClassify now ships a vendor-owned legal catalog (TOS, Data Processing Addendum, Acceptable Use Policy) at `GET /v1/trust/legal`, an append-only per-tenant acceptance ledger at `GET /v1/trust/legal/ledger`, an `accept` endpoint that records actor, IP, user agent, and request id, and a workspace-wide enforcement gate. Each agreement body is hashed to derive its version, so editing the body in code automatically re-arms the acceptance prompt for every workspace; no operator can silently bump a version string by hand. When an admin flips enforcement on, every mutating `/v1` request from that workspace is rejected with `HTTP 451 Unavailable For Legal Reasons` until all required agreements have been accepted at their current version. The gate fails closed on stale acceptances but refuses to arm itself while required agreements are unaccepted, so a workspace can never lock itself out by accident. Reads and writes are admin only and acceptances require MFA step-up. The admin console lives at `/admin/legal`. Cross-tenant isolation, stale-version rejection, and the 451 gate are covered in `tests/test_trust_legal_agreements.py`.

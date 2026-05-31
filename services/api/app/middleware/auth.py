@@ -168,7 +168,7 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         s = get_settings()
         path = request.url.path
-        if not s.auth_enabled or path in PUBLIC_PATHS or path.startswith("/blob"):
+        if not s.auth_enabled or path in PUBLIC_PATHS:
             return await call_next(request)
         # SCIM 2.0 bearer auth. Only honored under /scim/v2/* so a leaked
         # SCIM token cannot reach the rest of the API surface. The token is

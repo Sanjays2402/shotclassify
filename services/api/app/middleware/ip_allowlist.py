@@ -43,7 +43,6 @@ DEFAULT_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/readyz",
     "/metrics",
     "/auth/",
-    "/blob/",
     "/docs",
     "/redoc",
     "/openapi.json",

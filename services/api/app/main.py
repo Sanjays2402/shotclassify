@@ -6,7 +6,6 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from shotclassify_common import (
     configure_logging,
     get_settings,
@@ -30,6 +29,7 @@ from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.tenant import TenantResolutionMiddleware
 from .routes import audit as audit_routes
 from .routes import auth as auth_routes
+from .routes import blobs as blobs_routes
 from .routes import classify as classify_routes
 from .routes import health as health_routes
 from .routes import history as history_routes
@@ -145,6 +145,7 @@ def create_app() -> FastAPI:
     app.include_router(metrics_routes.router)
     app.include_router(auth_routes.router)
     app.include_router(classify_routes.router)
+    app.include_router(blobs_routes.router)
     app.include_router(history_routes.router)
     app.include_router(settings_routes.router)
     app.include_router(audit_routes.router)
@@ -168,9 +169,12 @@ def create_app() -> FastAPI:
     app.include_router(support_access_routes.router)
     app.include_router(support_access_routes.admin_router)
     app.include_router(well_known_routes.router)
+    # Ensure the storage root exists for uploads. Blobs are served only
+    # through the authenticated, tenant-scoped /v1/blobs/{id} endpoint;
+    # the previous unauthenticated StaticFiles mount at /blob was removed
+    # because it allowed cross-tenant screenshot exfiltration.
     storage_root = Path(s.storage_local_dir)
     storage_root.mkdir(parents=True, exist_ok=True)
-    app.mount("/blob", StaticFiles(directory=str(storage_root)), name="blob")
     instrument_fastapi(app)
     return app
 

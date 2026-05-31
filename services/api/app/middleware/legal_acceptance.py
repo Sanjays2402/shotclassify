@@ -34,7 +34,6 @@ EXEMPT_PREFIXES = (
     "/healthz",
     "/readyz",
     "/auth/",
-    "/blob/",
     "/v1/trust/legal",  # accept + enforcement endpoints themselves
     "/v1/trust/subprocessors",  # sub-processor acks are policy-adjacent
     "/.well-known/",

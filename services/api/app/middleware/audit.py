@@ -25,7 +25,6 @@ SKIP_PATH_PREFIXES = (
     "/healthz",
     "/readyz",
     "/auth/",
-    "/blob/",
     "/docs",
     "/redoc",
     "/openapi.json",

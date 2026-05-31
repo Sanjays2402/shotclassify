@@ -26,7 +26,7 @@ EXPORT_COLUMNS = [
     "confidence",
     "user_corrected_to",
     "ocr_text",
-    "image_path",
+    "blob_url",
 ]
 
 
@@ -47,7 +47,7 @@ def _record_to_row(rec: ClassificationRecord) -> dict:
             else (str(rec.user_corrected_to) if rec.user_corrected_to else "")
         ),
         "ocr_text": (rec.ocr_text or "").replace("\r", " ").replace("\n", " "),
-        "image_path": rec.image_path or "",
+        "blob_url": f"/v1/blobs/{rec.id}" if rec.image_path else "",
     }
 
 

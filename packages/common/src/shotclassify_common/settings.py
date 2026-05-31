@@ -134,7 +134,7 @@ class Settings(BaseSettings):
     rate_limit_per_key_rpm: int = 600
     rate_limit_per_workspace_rpm: int = 2400
     rate_limit_burst: int = 20
-    rate_limit_exempt_paths: str = "/healthz,/readyz,/metrics,/blob,/.well-known,/security.txt"
+    rate_limit_exempt_paths: str = "/healthz,/readyz,/metrics,/.well-known,/security.txt"
 
     # Outbound webhook egress hardening. Webhook URLs are tenant-controlled,
     # which makes the dispatcher a textbook SSRF sink: a malicious or
