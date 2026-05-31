@@ -16,6 +16,8 @@ from .db import (
     get_session,
     init_db,
 )
+from . import api_keys as api_keys_store
+from .api_keys import ApiKeyRecord
 from .repository import Repository
 from .saved_views import SavedViewRepository
 from . import sessions as session_store
@@ -72,4 +74,6 @@ __all__ = [
     "MfaCredentialRow",
     "MfaStatus",
     "mfa_store",
+    "api_keys_store",
+    "ApiKeyRecord",
 ]

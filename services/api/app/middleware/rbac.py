@@ -74,6 +74,38 @@ def role_for_login(login: str) -> str:
     return s.auth_default_role
 
 
+def require_scope(scope: str):
+    """FastAPI dependency factory: 403 unless caller's key includes ``scope``.
+
+    Session callers (humans) and legacy env-var keys do not carry an explicit
+    scope list, so we fall back to the coarse role check (``admin`` satisfies
+    any scope; ``operator`` satisfies write/read; ``viewer`` satisfies read).
+    DB-backed API keys are checked against their literal scope list, with the
+    ``admin`` scope acting as a superset shorthand.
+    """
+
+    def _checker(request: Request) -> str:
+        scopes = getattr(request.state, "auth_scopes", None) or []
+        if scopes:
+            if "admin" in scopes or scope in scopes:
+                return scope
+            raise HTTPException(
+                status_code=403,
+                detail=f"API key is missing required scope '{scope}'.",
+            )
+        role = getattr(request.state, "role", None) or "anonymous"
+        rank = ROLE_RANK.get(role, 0)
+        needed = 3 if scope == "admin" else (2 if scope.startswith("write:") else 1)
+        if rank < needed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Role '{role}' lacks required scope '{scope}'.",
+            )
+        return scope
+
+    return Depends(_checker)
+
+
 def require_role(minimum: Role):
     """FastAPI dependency factory: 403 unless caller has >= ``minimum`` role."""
     required = ROLE_RANK[minimum]

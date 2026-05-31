@@ -61,6 +61,15 @@ class ApiKeyRow(Base):
     )
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # JSON list of scope strings. ``None`` is treated as "no explicit scopes"
+    # and is interpreted by the auth layer using the legacy role mapping so
+    # rows written before migration 0012 keep working.
+    scopes: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Principal that minted the key. Recorded so the audit trail can answer
+    # "who issued this credential" without joining against the audit log.
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 class AuditLogRow(Base):

@@ -58,6 +58,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         principal = getattr(request.state, "principal", None)
         api_key = getattr(request.state, "auth_api_key", None)
+        api_key_tenant = getattr(request.state, "auth_api_key_tenant", None)
         role = getattr(request.state, "role", None)
         # Default tenant for unauthenticated/public paths is still set so any
         # downstream code that reads request.state.tenant_id never crashes.
@@ -65,6 +66,12 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
         # the generic literal "api-key"); for OAuth users, look up by login.
         lookup_key = api_key if api_key else principal
         resolved: str | None = tenant_for_principal(lookup_key)
+        # DB-backed API keys carry a hard tenant binding. This takes
+        # precedence over the env-var map and is NOT overridable by
+        # X-Tenant, so a leaked key can never read across tenants.
+        if api_key_tenant:
+            request.state.tenant_id = api_key_tenant
+            return await call_next(request)
         override = request.headers.get("x-tenant")
         if override and role == "admin":
             if override == "*":

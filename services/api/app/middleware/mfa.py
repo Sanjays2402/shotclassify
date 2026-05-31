@@ -45,7 +45,7 @@ def require_mfa_step_up():
             raise HTTPException(401, "Not authenticated.")
         # Machine-to-machine: scoped API key already proves possession of a
         # secret; MFA is a human-only control.
-        if principal == "api-key":
+        if principal == "api-key" or principal.startswith("api-key:"):
             return
         if not mfa_store.is_confirmed(principal):
             raise HTTPException(

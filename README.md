@@ -2,7 +2,61 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, and an admin dashboard.
 
-## What's new: SSRF protection for outbound webhooks
+## What's new: DB-backed API keys with scopes, expiry, and revocation
+
+The FastAPI service now treats the `api_keys` table as the source of truth
+for `X-API-Key` authentication instead of reading keys from environment
+variables only. Each key carries:
+
+* **Scopes** (`read:classifications`, `write:classifications`, `read:audit`,
+  `admin`) checked by a new `require_scope(...)` dependency on every
+  mutating route. Issue a read-only key to a partner without giving them
+  write or admin access.
+* **Hard tenant binding**: the resolved tenant for a key is whatever was
+  set when it was minted. `X-Tenant` overrides are ignored for DB-backed
+  keys, so a leaked credential cannot read another workspace even if the
+  attacker has the admin scope.
+* **Lifecycle**: optional `ttl_days`, soft `revoked_at`, and `last_used_at`
+  bumped on every successful request so the admin console can show live
+  key activity.
+* **Audit trail**: create and revoke are gated by MFA step-up and recorded
+  by the audit middleware with the new key id as `target_id`.
+
+Plaintext tokens (`sk_live_...`) are returned exactly once at creation and
+never persisted. Lookups are by SHA-256 hash so a stolen database snapshot
+yields no usable credentials. The legacy `AUTH_API_KEY` / `AUTH_API_KEYS`
+environment variables still work as a fallback for bootstrap and CI.
+
+### Try it
+
+```bash
+make api  # FastAPI on http://localhost:8000
+
+# 1. Mint a read-only key as the bootstrap admin.
+curl -sS -X POST http://localhost:8000/v1/api-keys \
+  -H "X-API-Key: dev-api-key-change-me" \
+  -H "content-type: application/json" \
+  -d '{"label":"partner-readonly","scopes":["read:classifications"],"ttl_days":90}'
+# -> {"id":"...","token":"sk_live_...","token_display_once":true,...}
+
+# 2. The new key can read history...
+curl -sS http://localhost:8000/v1/history -H "X-API-Key: sk_live_..."
+
+# 3. ...but classify writes are rejected with 403 for missing scope.
+curl -sS -X POST http://localhost:8000/v1/classify \
+  -H "X-API-Key: sk_live_..." -F file=@samples/cricket.jpg
+
+# 4. List and revoke from the same admin context.
+curl -sS http://localhost:8000/v1/api-keys -H "X-API-Key: dev-api-key-change-me"
+curl -sS -X DELETE http://localhost:8000/v1/api-keys/<key_id> \
+  -H "X-API-Key: dev-api-key-change-me"
+```
+
+Migration: `alembic upgrade head` (or rely on `init_db()` in dev). Covered
+by `tests/test_api_keys_db.py` (scope denial, revoke 401, hard tenant
+binding, cross-tenant revoke-by-id rejection).
+
+## Previous: SSRF protection for outbound webhooks
 
 Webhook deliveries now refuse to POST to loopback, link-local, private,
 multicast, broadcast, or cloud metadata addresses. The check runs at both

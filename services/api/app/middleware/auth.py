@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from itsdangerous import BadSignature, URLSafeSerializer
 from shotclassify_common import get_settings
-from shotclassify_store import session_store
+from shotclassify_store import api_keys_store, session_store
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -102,10 +102,26 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
             return await call_next(request)
         api_key = request.headers.get("x-api-key")
         if api_key:
+            # DB-backed keys are the source of truth. They carry their own
+            # scopes, tenant binding, and revocation state so cycling a key
+            # is a single UPDATE and does not require a redeploy.
+            record = api_keys_store.get_active_by_token(api_key)
+            if record is not None:
+                request.state.principal = f"api-key:{record.id}"
+                request.state.auth_api_key = api_key
+                request.state.auth_api_key_id = record.id
+                request.state.auth_api_key_tenant = record.tenant_id
+                request.state.auth_scopes = list(record.scopes)
+                request.state.role = api_keys_store.role_for_scopes(record.scopes)
+                api_keys_store.touch_last_used(record.id)
+                return await call_next(request)
+            # Fall back to env-var configured keys for backward compatibility
+            # with the legacy AUTH_API_KEY / AUTH_API_KEYS deployment style.
             role = role_for_api_key(api_key)
             if role:
                 request.state.principal = "api-key"
                 request.state.auth_api_key = api_key
+                request.state.auth_scopes = []
                 request.state.role = role
                 return await call_next(request)
         cookie = request.cookies.get("sc_session")
