@@ -21,6 +21,7 @@ import structlog
 from shotclassify_common import get_settings
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 log = structlog.get_logger(__name__)
 
@@ -60,6 +61,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
         api_key = getattr(request.state, "auth_api_key", None)
         api_key_tenant = getattr(request.state, "auth_api_key_tenant", None)
         role = getattr(request.state, "role", None)
+        s = get_settings()
         # Default tenant for unauthenticated/public paths is still set so any
         # downstream code that reads request.state.tenant_id never crashes.
         # For API key callers, look up by the actual key (the principal is
@@ -92,7 +94,67 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
             if override == "*":
                 resolved = CROSS_TENANT
             else:
-                resolved = override.strip()[:64] or resolved
+                target = override.strip()[:64]
+                if target:
+                    own_tenant = tenant_for_principal(principal)
+                    # The legacy single-admin env-var key represents the
+                    # owner of this deployment, not a multi-tenant SaaS
+                    # support engineer. Preserve their cross-tenant access.
+                    legacy_admin = bool(
+                        api_key and s.auth_api_key and api_key == s.auth_api_key
+                    )
+                    if target != own_tenant and not legacy_admin:
+                        # Cross-tenant admin scoping requires an active,
+                        # tenant-issued support access grant. Without it
+                        # we refuse the request rather than silently let
+                        # the admin read or mutate the target workspace.
+                        from shotclassify_store import support_access_store
+
+                        grant = support_access_store.find_active(
+                            target, admin_login=str(principal) if principal else None
+                        )
+                        if grant is None:
+                            return JSONResponse(
+                                status_code=403,
+                                content={
+                                    "detail": (
+                                        "Cross-tenant access denied: target "
+                                        "workspace has no active support "
+                                        "access grant for this admin."
+                                    ),
+                                    "code": "support_access_required",
+                                    "tenant_id": target,
+                                },
+                            )
+                        # Pin the grant on the request so the audit log
+                        # records which ticket authorized this action,
+                        # and so the route layer can read it back.
+                        request.state.support_access_grant_id = grant.id
+                        request.state.support_access_grant_expires_at = (
+                            grant.expires_at.isoformat()
+                            if grant.expires_at
+                            else None
+                        )
+                        # Merge into audit_extra so the audit middleware
+                        # writes it to the immutable hash-chained log.
+                        prev = getattr(request.state, "audit_extra", None) or {}
+                        request.state.audit_extra = {
+                            **prev,
+                            "support_access_grant_id": grant.id,
+                            "support_access_reason": grant.reason,
+                            "cross_tenant_target": target,
+                        }
+                        try:
+                            support_access_store.mark_used(grant.id)
+                        except Exception as exc:  # pragma: no cover
+                            log.warning(
+                                "support_access_mark_used_failed",
+                                grant_id=grant.id,
+                                error=str(exc),
+                            )
+                    resolved = target
+                else:
+                    resolved = resolved
         request.state.tenant_id = resolved
         response = await call_next(request)
         # Echo the per-tenant data residency hint so procurement reviewers

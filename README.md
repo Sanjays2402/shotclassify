@@ -2,7 +2,35 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
-## What's new: per-API-key source-IP allowlist
+## What's new: tenant-consented support access grants
+
+The vendor side of any multi-tenant SaaS has the same long-standing back door: an `admin` who runs the deployment can flip `X-Tenant: <other>` and silently read or mutate any customer workspace's data. Procurement reviewers catch this every time and refuse to sign without a control. The tenant resolution middleware now refuses cross-tenant admin scoping unless the target workspace has issued an active, unexpired support access grant, and every cross-tenant request taken under a grant writes the grant id, ticket reason, and target tenant into the immutable hash-chained audit log. Workspaces manage their own grants from `/settings/support-access`: each grant carries a reason (ticket id or short narrative), a hard expiry (5 minutes to 7 days), an optional pin to one specific vendor admin login, and a visible use counter. Revocation is one click and the gate closes on the next request. The legacy single-admin `AUTH_API_KEY` stays exempt because it represents the owner of the deployment, not a multi-tenant SaaS support engineer; DB-backed API keys already carry a hard tenant binding and are unaffected. Coverage in `tests/test_support_access.py`.
+
+### Try it
+
+With the API running on `http://127.0.0.1:7441` and a workspace admin key in `$ACME_ADMIN_KEY`, and a separate vendor admin key in `$VENDOR_ADMIN_KEY`:
+
+```sh
+# Without a grant, vendor admin cross-tenant access is refused.
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "X-API-Key: $VENDOR_ADMIN_KEY" -H "X-Tenant: acme" \
+  http://localhost:7441/v1/history
+# -> 403
+
+# The acme workspace authorizes one hour of vendor access.
+curl -s -X POST -H "X-API-Key: $ACME_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"reason":"ZD-9001 investigate failed run","duration_minutes":60}' \
+  http://localhost:7441/v1/support-access
+
+# Now the vendor admin can scope in, and the request is audit-tagged.
+curl -s -H "X-API-Key: $VENDOR_ADMIN_KEY" -H "X-Tenant: acme" \
+  http://localhost:7441/v1/history | head
+```
+
+The dashboard view lives at <http://localhost:3000/settings/support-access>.
+
+## Previous: per-API-key source-IP allowlist
 
 The workspace-level IP allowlist already gates the dashboard and the API as a whole, but every API key issued for that workspace inherited the same one allowlist. Enterprise procurement teams routinely ask for the tighter control: a single leaked CI key must not be replayable from a coffee shop even if the workspace allowlist is open, and a vendor integration key should be locked to that vendor's egress IPs without forcing the same constraint on every other key. Each key now carries its own optional `allowed_cidrs` list (IPv4 or IPv6, bare addresses or CIDR ranges). When the list is empty the key works from any IP (default, backward-compatible). When it is set, the auth middleware checks the request's source IP against the list before touching the route and returns `HTTP 403 api_key_ip_not_allowed` on a miss, with the rejected `client_ip` echoed back so an operator can see the actual source. Enforcement lives in `services/api/app/middleware/auth.py` so adding a new route cannot bypass it, rotation copies the allowlist to the successor key, and every change is captured by the existing tamper-evident audit chain. Admin only, MFA step-up required on writes. Coverage in `tests/test_api_key_ip_allowlist.py`.
 
@@ -30,7 +58,7 @@ A call from outside the allowlist returns:
 {"error":"api_key_ip_not_allowed","detail":"...","client_ip":"203.0.113.5"}
 ```
 
-## Previous: workspace-wide MFA enrolment policy
+## Earlier: workspace-wide MFA enrolment policy
 
 Per-action MFA step-up already gated destructive admin mutations, but it never forced a viewer or operator who only reads data to enrol a second factor. That fails SOC 2 CC6.6, ISO 27001 A.9.4.2, and HIPAA 164.308(a)(5)(ii)(D), which all expect "every human user authenticates with multiple factors". An admin can now flip `mfa_required_for_members` on the workspace and every cookie-authenticated request from a member without a confirmed TOTP credential gets `HTTP 403 mfa_enrollment_required` until they enrol. A small allowlist (`/v1/mfa/*`, `/v1/me/*`, `/v1/sessions`, `/auth/logout`, healthchecks) stays open so members can complete enrolment without being locked out of the very pages that let them comply. API keys are exempt because they cover machine-to-machine integrations.
 

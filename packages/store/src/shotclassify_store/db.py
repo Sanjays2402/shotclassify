@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Any
 
 from shotclassify_common import get_settings
-from sqlalchemy import JSON, Boolean, DateTime, Float, String, Text, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -523,6 +523,51 @@ class IncidentSubscriptionRow(Base):
     last_incident_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class SupportAccessGrantRow(Base):
+    """Time-boxed tenant consent for vendor-side admin cross-tenant access.
+
+    By default admins of the vendor deployment cannot cross-scope into a
+    customer workspace via ``X-Tenant: <other>`` unless that workspace has
+    an active grant on file. The grant carries a reason (ticket id or
+    short narrative), a hard expiry, and the actor who created and
+    optionally revoked it. Every cross-tenant action taken under a grant
+    records the grant id in the audit log ``extra`` field, so the
+    workspace can later prove who looked at what under which ticket.
+
+    Grants are owned by the *customer* tenant (``tenant_id`` is the
+    workspace whose data is being unlocked). The acting admin login is
+    optionally pinned in ``allowed_admin`` so a grant for one support
+    engineer cannot be used by another. ``revoked_at`` is a soft
+    revocation; rows are never deleted so the audit trail survives.
+    """
+
+    __tablename__ = "support_access_grants"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    allowed_admin: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    use_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()
@@ -680,6 +725,8 @@ def init_db() -> None:
                 Base.metadata.tables["subprocessor_acks"].create(bind=conn)
             if not insp.has_table("incident_subscriptions"):
                 Base.metadata.tables["incident_subscriptions"].create(bind=conn)
+            if not insp.has_table("support_access_grants"):
+                Base.metadata.tables["support_access_grants"].create(bind=conn)
     except Exception:
         # Best-effort. Real schema management lives in alembic.
         pass
