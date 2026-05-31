@@ -132,6 +132,81 @@ def revoke_my_key(
     return {"revoked": True, "key": record.to_dict()}
 
 
+class RotateKeyRequest(BaseModel):
+    grace_minutes: int = Field(
+        default=1440,
+        ge=0,
+        le=10080,
+        description=(
+            "How long the old key stays valid after rotation, in minutes. "
+            "Default 24 hours. 0 revokes immediately. Maximum 7 days."
+        ),
+    )
+
+
+@router.post(
+    "/{key_id}/rotate",
+    status_code=201,
+    dependencies=[require_mfa_step_up(), require_scope("admin")],
+)
+def rotate_my_key(
+    key_id: str,
+    payload: RotateKeyRequest,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+    _: str = require_role("admin"),
+):
+    """Rotate an API key without downtime.
+
+    Mints a successor key with the same tenant, scopes, and rpm override,
+    then shortens the source key's lifetime to ``grace_minutes`` so callers
+    have a finite window to swap the secret in their integrations. The new
+    plaintext token is returned exactly once in the ``token`` field; the
+    successor's ``id`` is in ``new_key.id``.
+
+    Returns 404 for unknown ids or keys belonging to another tenant so a
+    tenant-scoped admin cannot probe ids across workspaces. Returns 409 if
+    the source key is already revoked.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if dry_run:
+        keys = api_keys_store.list_keys(tenant_id=tenant_id, include_revoked=True)
+        record = next((k for k in keys if k.id == key_id), None)
+        if record is None or getattr(record, "revoked_at", None) is not None:
+            return mark_dry_run(request, would_rotate=None)
+        request.state.audit_target_id = record.id
+        return mark_dry_run(
+            request,
+            would_rotate={
+                "id": record.id,
+                "label": record.label,
+                "grace_minutes": payload.grace_minutes,
+            },
+        )
+    actor = getattr(request.state, "principal", None)
+    try:
+        result = api_keys_store.rotate(
+            key_id,
+            tenant_id=tenant_id,
+            grace_minutes=payload.grace_minutes,
+            rotated_by=actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "API key not found.")
+    old_rec, new_rec, token = result
+    request.state.audit_target_id = old_rec.id
+    body = new_rec.to_dict()
+    body["token"] = token
+    return {
+        "rotated": True,
+        "old_key": old_rec.to_dict(),
+        "new_key": body,
+        "grace_minutes": payload.grace_minutes,
+    }
+
+
 class RateLimitOverrideRequest(BaseModel):
     rpm: int | None = Field(
         default=None,

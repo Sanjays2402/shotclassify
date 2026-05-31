@@ -102,8 +102,15 @@ class ApiKeyRecord:
     def is_active(self) -> bool:
         if self.revoked_at is not None:
             return False
-        if self.expires_at is not None and self.expires_at <= _now():
-            return False
+        if self.expires_at is not None:
+            exp = self.expires_at
+            now = _now()
+            # Normalize both to naive UTC for comparison: SQLite returns naive
+            # datetimes even when we wrote timezone-aware ones.
+            if exp.tzinfo is None:
+                now = now.replace(tzinfo=None)
+            if exp <= now:
+                return False
         return True
 
     def to_dict(self) -> dict:
@@ -253,6 +260,76 @@ def set_rpm_override(
         ses.commit()
         ses.refresh(row)
     return _row_to_record(row)
+
+
+def rotate(
+    key_id: str,
+    *,
+    tenant_id: str | None,
+    grace_minutes: int = 1440,
+    rotated_by: str | None = None,
+) -> tuple[ApiKeyRecord, ApiKeyRecord, str] | None:
+    """Issue a successor key and shorten the old key's lifetime to a grace window.
+
+    Returns ``(old_record, new_record, plaintext_token)`` or ``None`` when the
+    source key is not found or belongs to another tenant. The new key inherits
+    the source's ``label`` (suffixed ``(rotated)``), ``tenant_id``, ``scopes``,
+    and ``rpm_override``. The old key's ``expires_at`` is pulled in to
+    ``now + grace_minutes`` (unless it already expires sooner) so existing
+    integrations keep working long enough to swap the secret, but no longer.
+
+    A ``grace_minutes`` of ``0`` revokes the old key immediately. The maximum
+    grace window is 7 days; longer windows defeat the purpose of rotation.
+    """
+    if not isinstance(grace_minutes, int) or isinstance(grace_minutes, bool):
+        raise ValueError("grace_minutes must be an integer")
+    if grace_minutes < 0 or grace_minutes > 7 * 24 * 60:
+        raise ValueError("grace_minutes must be between 0 and 10080 (7 days)")
+    now = _now()
+    with get_session() as ses:
+        row = ses.scalar(select(ApiKeyRow).where(ApiKeyRow.id == key_id))
+        if row is None:
+            return None
+        if tenant_id is not None and row.tenant_id != tenant_id:
+            return None
+        if row.revoked_at is not None:
+            raise ValueError("cannot rotate a revoked key")
+        # Mint the successor first so the source is never left without
+        # a replacement on the off chance of a partial failure.
+        scopes = list(row.scopes or [])
+        new_label = row.label
+        if not new_label.endswith("(rotated)"):
+            new_label = f"{row.label} (rotated)"[:128]
+        new_token = _new_token()
+        new_row = ApiKeyRow(
+            id=_new_id(),
+            label=new_label,
+            token_hash=_hash(new_token),
+            tenant_id=row.tenant_id,
+            scopes=scopes,
+            created_by=rotated_by or row.created_by,
+            expires_at=row.expires_at,
+            rpm_override=row.rpm_override,
+        )
+        ses.add(new_row)
+        # Shorten (never extend) the old key's TTL. SQLite strips tzinfo on
+        # round-trip so we strip it here too to keep comparisons consistent
+        # with rows read back from the DB.
+        if grace_minutes == 0:
+            row.revoked_at = now.replace(tzinfo=None)
+        else:
+            new_exp_aware = now + timedelta(minutes=grace_minutes)
+            new_exp = new_exp_aware.replace(tzinfo=None)
+            existing = row.expires_at
+            existing_cmp = existing.replace(tzinfo=None) if existing is not None and existing.tzinfo is not None else existing
+            if existing_cmp is None or existing_cmp > new_exp:
+                row.expires_at = new_exp
+        ses.commit()
+        ses.refresh(row)
+        ses.refresh(new_row)
+        old_rec = _row_to_record(row)
+        new_rec = _row_to_record(new_row)
+    return old_rec, new_rec, new_token
 
 
 def revoke(key_id: str, *, tenant_id: str | None) -> ApiKeyRecord | None:

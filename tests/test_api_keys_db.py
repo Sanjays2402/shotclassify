@@ -235,3 +235,77 @@ def test_read_only_key_blocked_from_webhook_create(monkeypatch, tmp_path):
         json={"url": "https://example.com/hook", "events": ["classify.completed"]},
     )
     assert r.status_code == 403, r.text
+
+
+def test_rotate_key_issues_successor_and_grace_old(monkeypatch, tmp_path):
+    """Rotating a key returns a new plaintext token, keeps the old one valid
+    for a grace window, and after grace=0 the old key 401s immediately."""
+    c = _client(monkeypatch, tmp_path)
+    # Mint a working key with write scope.
+    minted = _mint(c, scopes=["write:classifications", "admin"])
+    old_token = minted["token"]
+    old_id = minted["id"]
+    # Sanity: the old token authenticates.
+    r = c.get("/v1/api-keys", headers={"X-API-Key": old_token})
+    assert r.status_code == 200, r.text
+
+    # Rotate with a 24h grace.
+    r = c.post(
+        f"/v1/api-keys/{old_id}/rotate",
+        headers={"X-API-Key": "admin-key"},
+        json={"grace_minutes": 1440},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    new_token = body["new_key"]["token"]
+    assert new_token.startswith("sk_live_")
+    assert new_token != old_token
+    assert body["new_key"]["scopes"] == body["old_key"]["scopes"]
+    assert body["new_key"]["tenant_id"] == body["old_key"]["tenant_id"]
+    assert body["old_key"]["expires_at"] is not None
+    # Both keys work during grace.
+    assert c.get("/v1/api-keys", headers={"X-API-Key": old_token}).status_code == 200
+    assert c.get("/v1/api-keys", headers={"X-API-Key": new_token}).status_code == 200
+
+    # Rotate the new key with grace=0 (immediate revoke of predecessor).
+    new_id = body["new_key"]["id"]
+    r = c.post(
+        f"/v1/api-keys/{new_id}/rotate",
+        headers={"X-API-Key": "admin-key"},
+        json={"grace_minutes": 0},
+    )
+    assert r.status_code == 201, r.text
+    # The previous "new_token" is now revoked and must 401.
+    assert c.get("/v1/api-keys", headers={"X-API-Key": new_token}).status_code == 401
+
+
+def test_rotate_cannot_cross_tenants(monkeypatch, tmp_path):
+    """A tenant-scoped admin must not be able to rotate another tenant's key."""
+    c = _client(monkeypatch, tmp_path)
+    # Mint a key bound to tenant-a (the caller's tenant).
+    minted_a = _mint(c, scopes=["admin"])
+    key_id_a = minted_a["id"]
+    # Directly create a key bound to tenant-b via the store, simulating a key
+    # owned by another workspace.
+    from shotclassify_store import api_keys_store
+    rec_b, _tok_b = api_keys_store.create_key(
+        label="tenant-b key",
+        tenant_id="tenant-b",
+        scopes=["admin"],
+        created_by="seed",
+    )
+    # Tenant-a admin attempts to rotate tenant-b's key. Must be 404 (not 403)
+    # so the caller cannot probe key ids across tenants.
+    r = c.post(
+        f"/v1/api-keys/{rec_b.id}/rotate",
+        headers={"X-API-Key": "admin-key"},
+        json={"grace_minutes": 60},
+    )
+    assert r.status_code == 404, r.text
+    # Sanity: tenant-a admin CAN rotate its own key.
+    r = c.post(
+        f"/v1/api-keys/{key_id_a}/rotate",
+        headers={"X-API-Key": "admin-key"},
+        json={"grace_minutes": 60},
+    )
+    assert r.status_code == 201, r.text

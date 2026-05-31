@@ -2,7 +2,24 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
-## What's new: tamper-evident audit log (SHA-256 hash chain)
+## What's new: zero-downtime API key rotation with grace window
+
+Workspace admins can rotate a `/v1/api-keys` credential with `POST /v1/api-keys/{id}/rotate`. The endpoint mints a successor key that inherits the source key's tenant binding, scopes, and per-key rate limit override, then shortens the old key's `expires_at` to `now + grace_minutes` (default 24 hours, max 7 days, `0` revokes immediately). Both keys authenticate during the grace window so production integrations can swap the secret without dropped requests, then the old key hard-fails 401 on its own.
+
+The call requires the `admin` scope plus an MFA step-up (matching create/revoke), is audited by the global middleware with the source key id as the audit target, and supports `?dry_run=true` to preview without mutating. Cross-tenant rotation attempts return 404 (not 403) so a tenant-scoped admin cannot probe key ids that belong to another workspace. Coverage in `tests/test_api_keys_db.py::test_rotate_key_issues_successor_and_grace_old` and `::test_rotate_cannot_cross_tenants`.
+
+### Try it
+
+```bash
+# Rotate an API key with a 1-hour grace window, then prove both keys work.
+curl -sS -X POST -H "X-API-Key: $ADMIN_KEY" -H "content-type: application/json" \
+  -d '{"grace_minutes": 60}' \
+  http://localhost:7441/v1/api-keys/$KEY_ID/rotate
+# => {"rotated":true,"old_key":{...,"expires_at":"...+01:00"},
+#     "new_key":{...,"token":"sk_live_..."},"grace_minutes":60}
+```
+
+## Previous: tamper-evident audit log (SHA-256 hash chain)
 
 Every audit row is now cryptographically linked to the previous row in the same workspace using `entry_hash = sha256(prev_hash || canonical_json(fields))`. Modifying, deleting, or inserting an audit row out of band breaks the chain, and the new `GET /v1/audit/verify` endpoint reports exactly where. The admin audit page surfaces a shield badge plus a one-click Verify button and shows the current tip hash so workspace owners can pin it off-platform (e.g. in a quarterly compliance report) to detect future tampering even by an attacker who controls the API.
 
