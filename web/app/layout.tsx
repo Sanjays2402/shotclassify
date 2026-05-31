@@ -4,6 +4,8 @@ import Link from "next/link";
 import { Inter, Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import Ticker from "@/components/Ticker";
 import HotKeys from "@/components/HotKeys";
+import CommandPalette from "@/components/CommandPalette";
+import CommandPaletteButton from "@/components/CommandPaletteButton";
 import { QuotaMeter } from "@/components/QuotaMeter";
 import OnboardingTour from "@/components/OnboardingTour";
 import AuthMenu from "@/components/AuthMenu";
@@ -60,6 +62,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`${inter.variable} ${display.variable} ${mono.variable}`}>
       <body>
         <HotKeys />
+        <CommandPalette />
         <OnboardingTour />
         <PwaInstaller />
         <Ticker />
@@ -105,6 +108,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/welcome">Welcome</NavLink>
             </nav>
             <div className="ml-auto flex items-center gap-3">
+              <CommandPaletteButton />
               <QuotaMeter compact />
               <NotificationBell />
               <span className="eyebrow hidden sm:inline">Press</span>

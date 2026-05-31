@@ -1,5 +1,29 @@
 # shotclassify
 
+> Real-time screenshot classifier with confidence scoring, OCR, history, sharing, API keys, webhooks, and a Cmd+K command palette.
+
+## What's new: global command palette (Cmd/Ctrl+K)
+
+Hit `⌘K` (or `Ctrl+K`, or `/` outside an input) from any page to open the
+command palette. It jumps you to any major page and live-searches your
+classification history (filename, OCR, label, tags) through the existing
+`/api/history?q=...` endpoint. Arrow keys navigate, Enter selects, Esc
+closes.
+
+Try it locally:
+
+```sh
+# Start the web app (Next.js 15)
+cd web && npm run dev
+# Open http://localhost:3000 and press Cmd+K
+
+# The palette uses the same history search endpoint:
+curl -s 'http://localhost:3000/api/history?q=invoice&limit=8' | jq '.items[0]'
+```
+
+Pure ranking helpers live in `web/lib/command-palette.ts` and are covered by
+`web/lib/command-palette.test.mts` (`npm test`).
+
 Screenshot classifier with vision LLM, OCR, structured extraction, and action routing. Drop in an image, get back a category with confidence and a saved record you can browse, share, or pull back via API.
 
 ## What's new: notifications search, kind filter, and pagination
