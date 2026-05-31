@@ -29,6 +29,7 @@ from shotclassify_store import (
     set_auth_lockout_policy,
 )
 
+from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
 from ..middleware.rbac import require_role
 
@@ -62,10 +63,22 @@ def get_lockout_policy_route(request: Request) -> dict:
 def put_lockout_policy_route(
     request: Request,
     payload: dict = Body(...),
-) -> dict:
+    dry_run: bool = dry_run_query(),
+):
     """Replace the lockout policy. Pass three nulls to clear it."""
     tenant_id = _tenant(request)
     actor = getattr(request.state, "principal", None)
+    if dry_run:
+        return mark_dry_run(
+            request,
+            would_set={
+                "tenant_id": tenant_id,
+                "threshold": payload.get("threshold"),
+                "window_minutes": payload.get("window_minutes"),
+                "cooldown_minutes": payload.get("cooldown_minutes"),
+            },
+            current=get_auth_lockout_policy(tenant_id).as_dict(),
+        )
     try:
         policy = set_auth_lockout_policy(
             tenant_id,
@@ -122,10 +135,29 @@ def list_lockouts_route(request: Request) -> dict:
     "/admin/lockouts/{lockout_id}",
     dependencies=[require_role("admin"), require_mfa_step_up()],
 )
-def clear_lockout_route(request: Request, lockout_id: int) -> dict:
+def clear_lockout_route(
+    request: Request,
+    lockout_id: int,
+    dry_run: bool = dry_run_query(),
+):
     """Soft-clear a single lockout row scoped to the caller's tenant."""
     tenant_id = _tenant(request)
     actor = getattr(request.state, "principal", None)
+    if dry_run:
+        rows = auth_lockouts_store.list_lockouts(
+            tenant_id, include_inactive=True, limit=1000
+        )
+        target = next((r for r in rows if r.id == lockout_id), None)
+        if target is None or not target.active:
+            return mark_dry_run(request, would_clear=None)
+        return mark_dry_run(
+            request,
+            would_clear={
+                "id": lockout_id,
+                "ip": target.ip,
+                "locked_until": target.locked_until.isoformat(),
+            },
+        )
     cleared = auth_lockouts_store.clear_lockout(tenant_id, lockout_id, cleared_by=actor)
     if not cleared:
         raise HTTPException(404, "Lockout not found or already cleared.")

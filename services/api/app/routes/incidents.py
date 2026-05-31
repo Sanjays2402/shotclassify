@@ -23,6 +23,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, HTTPException, Request
 
 from shotclassify_store import incidents_store
+
+from ..dryrun import dry_run_query, mark_dry_run
 from shotclassify_store.incidents import (
     IncidentSubscriptionError,
     VALID_SEVERITIES,
@@ -98,8 +100,10 @@ def list_subscriptions_route(request: Request) -> dict:
     status_code=201,
 )
 def create_subscription_route(
-    request: Request, payload: dict = Body(...)
-) -> dict:
+    request: Request,
+    payload: dict = Body(...),
+    dry_run: bool = dry_run_query(),
+):
     tenant_id = _tenant(request)
     if not isinstance(payload, dict):
         raise HTTPException(422, "Body must be a JSON object.")
@@ -115,6 +119,21 @@ def create_subscription_route(
         raise HTTPException(422, "'severity_min' must be a string.")
     if label is not None and not isinstance(label, str):
         raise HTTPException(422, "'label' must be a string.")
+    if dry_run:
+        if channel not in incidents_store.VALID_CHANNELS:
+            raise HTTPException(422, f"'channel' must be one of {sorted(incidents_store.VALID_CHANNELS)}.")
+        if (severity_min or "low") not in VALID_SEVERITIES:
+            raise HTTPException(422, f"'severity_min' must be one of {sorted(VALID_SEVERITIES)}.")
+        return mark_dry_run(
+            request,
+            would_create={
+                "tenant_id": tenant_id,
+                "channel": channel,
+                "endpoint": endpoint,
+                "severity_min": severity_min or "low",
+                "label": label,
+            },
+        )
     try:
         sub = incidents_store.create_subscription(
             tenant_id=tenant_id,
@@ -134,8 +153,11 @@ def create_subscription_route(
     dependencies=[require_role("admin"), require_mfa_step_up()],
 )
 def update_subscription_route(
-    sub_id: str, request: Request, payload: dict = Body(...)
-) -> dict:
+    sub_id: str,
+    request: Request,
+    payload: dict = Body(...),
+    dry_run: bool = dry_run_query(),
+):
     tenant_id = _tenant(request)
     if not isinstance(payload, dict):
         raise HTTPException(422, "Body must be a JSON object.")
@@ -148,6 +170,22 @@ def update_subscription_route(
         raise HTTPException(422, "'severity_min' must be a string.")
     if label is not None and not isinstance(label, str):
         raise HTTPException(422, "'label' must be a string.")
+    if dry_run:
+        existing = next(
+            (s for s in incidents_store.list_subscriptions(tenant_id) if s.id == sub_id),
+            None,
+        )
+        if existing is None:
+            raise HTTPException(404, "Subscription not found in this tenant.")
+        return mark_dry_run(
+            request,
+            would_update={
+                "id": sub_id,
+                "active": active,
+                "severity_min": severity_min,
+                "label": label,
+            },
+        )
     try:
         sub = incidents_store.update_subscription(
             tenant_id=tenant_id,
@@ -167,8 +205,20 @@ def update_subscription_route(
     "/v1/incident-subscriptions/{sub_id}",
     dependencies=[require_role("admin"), require_mfa_step_up()],
 )
-def delete_subscription_route(sub_id: str, request: Request) -> dict:
+def delete_subscription_route(
+    sub_id: str,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+):
     tenant_id = _tenant(request)
+    if dry_run:
+        existing = next(
+            (s for s in incidents_store.list_subscriptions(tenant_id) if s.id == sub_id),
+            None,
+        )
+        if existing is None:
+            return mark_dry_run(request, would_delete=None)
+        return mark_dry_run(request, would_delete={"id": sub_id})
     ok = incidents_store.delete_subscription(tenant_id=tenant_id, sub_id=sub_id)
     if not ok:
         raise HTTPException(404, "Subscription not found in this tenant.")

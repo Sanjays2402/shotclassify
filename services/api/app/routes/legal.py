@@ -26,6 +26,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 
 from shotclassify_store import legal_agreements_store
 
+from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
 from ..middleware.rbac import require_role
 
@@ -138,7 +139,11 @@ def post_accept_route(request: Request, payload: dict = Body(...)) -> dict:
     "/legal/enforcement",
     dependencies=[require_role("admin"), require_mfa_step_up()],
 )
-def put_enforcement_route(request: Request, payload: dict = Body(...)) -> dict:
+def put_enforcement_route(
+    request: Request,
+    payload: dict = Body(...),
+    dry_run: bool = dry_run_query(),
+):
     tenant_id = _tenant(request)
     if not isinstance(payload, dict):
         raise HTTPException(422, "Body must be a JSON object.")
@@ -160,6 +165,12 @@ def put_enforcement_route(request: Request, payload: dict = Body(...)) -> dict:
         # gate_blocks returns None if enforce is currently off; the real
         # check is missing_required above.
         del missing
+    if dry_run:
+        return mark_dry_run(
+            request,
+            would_set={"tenant_id": tenant_id, "enforce": enforce},
+            status=legal_agreements_store.status_for(tenant_id),
+        )
     policy = legal_agreements_store.set_enforcement(
         tenant_id, enforce=enforce, updated_by=_actor(request)
     )

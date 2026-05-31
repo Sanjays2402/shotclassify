@@ -804,7 +804,10 @@ Covered routes: `/v1/workspace/data`, `/v1/me/data`,
 `/v1/history/{id}`, `/v1/history/bulk`, `/v1/saved-views/{id}`,
 `/v1/sessions/{id}`, `/v1/sessions/revoke-all`,
 `/v1/sessions/admin/revoke-principal`, `/v1/api-keys/{id}`,
-`/v1/members/{principal}`, `/v1/invitations/{id}`, `/v1/mfa`.
+`/v1/members/{principal}`, `/v1/invitations/{id}`, `/v1/mfa`,
+`/v1/incident-subscriptions` (create, update, delete),
+`/v1/settings/security/auth-lockout` (policy update),
+`/v1/admin/lockouts/{id}` (clear), `/v1/trust/legal/enforcement`.
 
 The browser surface lives at `/settings/sandbox` with a live preview
 for bulk history deletes.
@@ -822,6 +825,10 @@ curl -s -X POST 'http://localhost:7441/v1/history/bulk?dry_run=true' \
 # Preview workspace-wide GDPR erasure.
 curl -si -X DELETE 'http://localhost:7441/v1/workspace/data?dry_run=true' \
   -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme" | grep -i x-dry-run
+
+# Preview an incident-subscription delete; row is preserved.
+curl -si -X DELETE 'http://localhost:7441/v1/incident-subscriptions/sub-123?dry_run=true' \
+  -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme"
 ```
 
 UI lives at `/settings/sandbox` in the web app.

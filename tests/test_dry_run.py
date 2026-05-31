@@ -180,3 +180,86 @@ def test_dry_run_audit_row_tagged(monkeypatch, tmp_path):
     matching = [row for row in rows if row["path"].endswith(rid) and row["method"] == "DELETE"]
     assert matching, "audit row for the dry-run delete was not recorded"
     assert matching[0]["extra"].get("dry_run") is True
+
+
+def test_incident_subscription_dry_run_crud_preserves_state(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    headers = {"x-api-key": "admin-key", "x-tenant": "tenant-a"}
+
+    # Create: dry run does not persist.
+    r = c.post(
+        "/v1/incident-subscriptions?dry_run=true",
+        headers=headers,
+        json={"channel": "email", "endpoint": "ops@example.com", "severity_min": "low"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["dry_run"] is True and body["applied"] is False
+    assert body["would_create"]["endpoint"] == "ops@example.com"
+    assert r.headers.get("X-Dry-Run") == "true"
+
+    listing = c.get("/v1/incident-subscriptions", headers=headers).json()
+    assert listing["count"] == 0, "dry-run create must not persist a subscription"
+
+    # Real create then dry-run delete: row survives.
+    r2 = c.post(
+        "/v1/incident-subscriptions",
+        headers=headers,
+        json={"channel": "email", "endpoint": "ops@example.com", "severity_min": "low"},
+    )
+    assert r2.status_code == 201
+    sub_id = r2.json()["subscription"]["id"]
+
+    r3 = c.delete(
+        f"/v1/incident-subscriptions/{sub_id}?dry_run=true", headers=headers
+    )
+    assert r3.status_code == 200
+    body3 = r3.json()
+    assert body3["dry_run"] is True
+    assert body3["would_delete"] == {"id": sub_id}
+    assert r3.headers.get("X-Dry-Run") == "true"
+
+    listing2 = c.get("/v1/incident-subscriptions", headers=headers).json()
+    assert listing2["count"] == 1, "dry-run delete must not remove the subscription"
+
+
+def test_incident_subscription_dry_run_is_tenant_scoped(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+
+    # Create in tenant-a as the admin.
+    r = c.post(
+        "/v1/incident-subscriptions",
+        headers={"x-api-key": "admin-key", "x-tenant": "tenant-a"},
+        json={"channel": "email", "endpoint": "a@example.com"},
+    )
+    assert r.status_code == 201
+    sub_id = r.json()["subscription"]["id"]
+
+    # Same admin key, different tenant: must not see, dry-run delete returns no-op.
+    r2 = c.delete(
+        f"/v1/incident-subscriptions/{sub_id}?dry_run=true",
+        headers={"x-api-key": "admin-key", "x-tenant": "tenant-b"},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["would_delete"] is None
+
+
+def test_auth_lockout_policy_dry_run_does_not_change_policy(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    headers = {"x-api-key": "admin-key", "x-tenant": "tenant-a"}
+
+    before = c.get("/v1/settings/security/auth-lockout", headers=headers).json()
+
+    r = c.put(
+        "/v1/settings/security/auth-lockout?dry_run=true",
+        headers=headers,
+        json={"threshold": 3, "window_minutes": 10, "cooldown_minutes": 30},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["dry_run"] is True
+    assert body["would_set"]["threshold"] == 3
+    assert r.headers.get("X-Dry-Run") == "true"
+
+    after = c.get("/v1/settings/security/auth-lockout", headers=headers).json()
+    assert after == before, "dry-run must not change the persisted policy"
