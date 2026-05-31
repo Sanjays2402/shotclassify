@@ -2,6 +2,34 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: per-(tenant, source IP) authentication brute-force lockout
+
+Every rejected credential (bad `X-API-Key`, bad session cookie, bad SCIM bearer, bad OAuth callback state) is now bucketed in `auth_failures` keyed by `(tenant_id, source_ip)`. When a single source IP accumulates the per-tenant threshold inside the sliding window, the auth middleware writes an `auth_lockouts` row and refuses every subsequent request from that IP for that workspace with `HTTP 423 Locked` plus a standard `Retry-After` header until the cooldown elapses. Lockouts are strictly per workspace and per IP, so a credential-spray attacker against tenant `acme` cannot also lock the legitimate operators of tenant `globex` out of the shared deployment. The policy lives at `/v1/settings/security/auth-lockout` (admin role plus MFA step-up on `PUT`). Workspace admins can list and clear active lockouts at `/v1/admin/lockouts` (and the corresponding console page at `/admin/lockouts`). Bounds enforce a sane range: threshold 3-1000, window 1 min to 24 h, cooldown 1 min to 7 d. Half-configured policies are refused at write time and treated as disabled at read time so a UI misclick can never silently disable enforcement. Coverage in `tests/test_auth_lockout.py`, including the cross-tenant isolation test that procurement teams ask for by name.
+
+Try it locally:
+
+```bash
+make api  # http://127.0.0.1:7441
+
+# Configure the lockout policy for this workspace.
+curl -sS -X PUT http://127.0.0.1:7441/v1/settings/security/auth-lockout \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" -H 'content-type: application/json' \
+  -d '{"threshold": 5, "window_minutes": 10, "cooldown_minutes": 15}'
+
+# Burn the threshold from a single source IP; the Nth attempt returns 423.
+for i in 1 2 3 4 5; do
+  curl -sS -o /dev/null -w '%{http_code}\n' \
+    -H 'x-api-key: clearly-wrong' -H 'x-forwarded-for: 203.0.113.7' \
+    http://127.0.0.1:7441/v1/history
+done
+# -> 401, 401, 401, 401, 423
+
+# List and clear active lockouts.
+curl -sS -H "x-api-key: $SHOTCLASSIFY_API_KEY" http://127.0.0.1:7441/v1/admin/lockouts
+```
+
+Web console: <http://127.0.0.1:3000/admin/lockouts>.
+
 ## What's new: per-tenant webhook egress host allowlist
 
 Every webhook subscription URL the tenant supplies already runs through an SSRF block that refuses private addresses, loopback, link-local, and cloud metadata endpoints. Procurement teams want the next layer too: a per-workspace control that proves outbound webhook traffic can only reach destinations the customer themselves vetted, even if a compromised admin tries to repoint a subscription at an attacker-controlled URL. `tenant_settings.webhook_egress_allowed_hosts` (alembic `0032`) is that control. Entries are exact hostnames (`hooks.example.com`) or leading-dot suffixes (`.example.com`) that match the apex and any subdomain. Wildcards are rejected so a permissive rule never sneaks in. The store enforces the policy at subscription create time (HTTP 422 with the offending host named) AND at delivery time, so removing a host from the list blocks the very next delivery for every existing subscription with a `failed` record whose error reads `egress blocked: host ... not in tenant allowlist`. The HTTP plane lives at `/v1/settings/security/webhook-egress-hosts` (admin role plus MFA step-up on PUT). The web console exposes it at `/settings/security/webhook-egress`. Coverage in `tests/test_webhook_egress_allowlist.py`, including a cross-tenant isolation test that proves tenant A's policy never affects tenant B and vice versa.

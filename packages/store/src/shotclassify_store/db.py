@@ -328,6 +328,21 @@ class TenantSettingsRow(Base):
     # protects shared workers from runaway memory and gives procurement
     # a per-workspace abuse-and-cost control they can demonstrate.
     max_upload_bytes: Mapped[int | None] = mapped_column(nullable=True)
+    # Per-tenant brute-force authentication lockout policy. When all three
+    # are set, the auth middleware records every failed credential attempt
+    # in ``auth_failures`` keyed by (tenant_id, source_ip), and once a
+    # given IP accumulates ``auth_lockout_threshold`` failures inside a
+    # ``auth_lockout_window_minutes`` sliding window, that IP is locked
+    # out of this tenant for ``auth_lockout_cooldown_minutes`` and every
+    # subsequent request returns HTTP 423 with a ``Retry-After`` header.
+    # Lockouts are per-(tenant, ip) so a noisy attacker against one
+    # workspace cannot affect any other workspace's tenants. NULL on any
+    # of the three disables the policy for this tenant (legacy behaviour
+    # is preserved). This is the SOC 2 CC6.7 / NIST 800-63B AAL2 brute-
+    # force control that procurement teams ask for by name.
+    auth_lockout_threshold: Mapped[int | None] = mapped_column(nullable=True)
+    auth_lockout_window_minutes: Mapped[int | None] = mapped_column(nullable=True)
+    auth_lockout_cooldown_minutes: Mapped[int | None] = mapped_column(nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -728,6 +743,65 @@ class SupportAccessGrantRow(Base):
     )
 
 
+class AuthFailureRow(Base):
+    """Per-(tenant, source IP) record of a failed authentication attempt.
+
+    Rows are append-only and pruned by the lockout store when it counts
+    failures inside the sliding window. Tenant is recorded so a noisy IP
+    against one workspace cannot affect another workspace's counter, and
+    so admins can see exactly which tenant the abuse is targeting.
+
+    ``kind`` records *which* credential failed (api_key, session, scim,
+    sso) so an operator triaging an incident can tell brute-forced API
+    keys apart from SSO callback errors at a glance.
+    """
+
+    __tablename__ = "auth_failures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    ip: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        index=True,
+        nullable=False,
+    )
+
+
+class AuthLockoutRow(Base):
+    """Active brute-force lockout for a (tenant, source IP) pair.
+
+    When the AuthFailureRow count for a (tenant, ip) crosses the tenant
+    threshold inside the sliding window, the auth middleware writes one
+    row here and refuses every subsequent request from that IP for that
+    tenant until ``locked_until`` passes. Admins can list and clear rows
+    from the admin console. Rows survive expiry so investigators have a
+    durable history of brute-force activity per workspace.
+    """
+
+    __tablename__ = "auth_lockouts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    ip: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    failures_in_window: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    locked_until: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=False
+    )
+    cleared_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cleared_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()
@@ -927,6 +1001,26 @@ def init_db() -> None:
                 Base.metadata.tables["incident_subscriptions"].create(bind=conn)
             if not insp.has_table("support_access_grants"):
                 Base.metadata.tables["support_access_grants"].create(bind=conn)
+            # 0034 brute-force auth lockout: failure ledger + lockout table
+            # plus the per-tenant policy columns that drive thresholds.
+            if not insp.has_table("auth_failures"):
+                Base.metadata.tables["auth_failures"].create(bind=conn)
+            if not insp.has_table("auth_lockouts"):
+                Base.metadata.tables["auth_lockouts"].create(bind=conn)
+            if insp.has_table("tenant_settings"):
+                tcols = {c["name"] for c in insp.get_columns("tenant_settings")}
+                if "auth_lockout_threshold" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN auth_lockout_threshold INTEGER"
+                    ))
+                if "auth_lockout_window_minutes" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN auth_lockout_window_minutes INTEGER"
+                    ))
+                if "auth_lockout_cooldown_minutes" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN auth_lockout_cooldown_minutes INTEGER"
+                    ))
     except Exception:
         # Best-effort. Real schema management lives in alembic.
         pass

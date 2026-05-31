@@ -9,9 +9,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from shotclassify_common import get_settings
-from shotclassify_store import session_store
+from shotclassify_store import auth_lockouts_store, session_store
 
-from ..middleware.auth import _decode_sid, issue_session
+from ..middleware.auth import _client_ip, _decode_sid, issue_session
 from ..middleware.tenant import tenant_for_principal
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -46,8 +46,23 @@ def login(request: Request):
 @router.get("/callback", name="auth_callback")
 def callback(request: Request, code: str, state: str):
     s = get_settings()
+    src_ip = _client_ip(request)
+    fallback_tenant = getattr(s, "auth_default_tenant", None) or "default"
+    # Block the callback when this IP is under an active brute-force
+    # lockout for the deployment tenant. Returns 423 with Retry-After.
+    lo = auth_lockouts_store.check_locked(fallback_tenant, src_ip)
+    if lo.locked:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "auth_locked_out",
+                "retry_after_seconds": lo.retry_after_seconds,
+            },
+            headers={"Retry-After": str(lo.retry_after_seconds)},
+        )
     cookie_state = request.cookies.get("sc_oauth_state")
     if not cookie_state or cookie_state != state:
+        auth_lockouts_store.record_failure(fallback_tenant, src_ip, "oauth")
         raise HTTPException(400, "Invalid OAuth state.")
     with httpx.Client(timeout=10) as client:
         r = client.post(
@@ -62,11 +77,13 @@ def callback(request: Request, code: str, state: str):
         r.raise_for_status()
         access = r.json().get("access_token")
         if not access:
+            auth_lockouts_store.record_failure(fallback_tenant, src_ip, "oauth")
             raise HTTPException(400, "No access token returned.")
         u = client.get(_USER, headers={"Authorization": f"Bearer {access}"})
         u.raise_for_status()
         login_name = u.json().get("login")
     if s.auth_allowed_github_login and login_name != s.auth_allowed_github_login:
+        auth_lockouts_store.record_failure(fallback_tenant, src_ip, "oauth")
         raise HTTPException(403, "Not in allowlist.")
     client_ip = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")

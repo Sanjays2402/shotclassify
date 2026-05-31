@@ -29,6 +29,7 @@ from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.tenant import TenantResolutionMiddleware
 from .routes import audit as audit_routes
 from .routes import auth as auth_routes
+from .routes import auth_lockouts as auth_lockouts_routes
 from .routes import blobs as blobs_routes
 from .routes import classify as classify_routes
 from .routes import health as health_routes
@@ -144,6 +145,7 @@ def create_app() -> FastAPI:
     app.include_router(health_routes.router)
     app.include_router(metrics_routes.router)
     app.include_router(auth_routes.router)
+    app.include_router(auth_lockouts_routes.router)
     app.include_router(classify_routes.router)
     app.include_router(blobs_routes.router)
     app.include_router(history_routes.router)

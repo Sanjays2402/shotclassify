@@ -17,6 +17,7 @@ import {
   ChartLineUp,
   Pulse,
   Lock,
+  ShieldWarning,
   ArrowSquareOut,
   WebhooksLogo,
   Gavel,
@@ -278,6 +279,13 @@ export default function AdminConsolePage() {
           value="Probes"
           href="/admin/observability"
           sub="healthz, readyz, metrics"
+        />
+        <StatCard
+          icon={<ShieldWarning size={18} weight="duotone" />}
+          label="Auth lockouts"
+          value="Review"
+          href="/admin/lockouts"
+          sub="brute-force defense"
         />
       </div>
 

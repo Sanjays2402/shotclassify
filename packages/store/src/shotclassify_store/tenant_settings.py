@@ -1498,3 +1498,160 @@ def set_upload_size_policy(
             row.updated_by = updated_by
         s.commit()
     return UploadSizePolicy(tenant_id=tenant_id, max_upload_bytes=norm)
+
+
+# Per-tenant brute-force authentication lockout policy bounds. Threshold
+# is the number of failed credential attempts inside the sliding window
+# that triggers a lockout; window is the lookback in minutes; cooldown
+# is how long the IP stays locked. Bounds are deliberately wide so
+# every enterprise's risk appetite fits (NIST 800-63B AAL2 recommends
+# >= 100 attempts before locking; PCI DSS 8.3.4 says >= 10).
+AUTH_LOCKOUT_THRESHOLD_MIN: int = 3
+AUTH_LOCKOUT_THRESHOLD_MAX: int = 1000
+AUTH_LOCKOUT_WINDOW_MIN_MINUTES: int = 1
+AUTH_LOCKOUT_WINDOW_MAX_MINUTES: int = 60 * 24
+AUTH_LOCKOUT_COOLDOWN_MIN_MINUTES: int = 1
+AUTH_LOCKOUT_COOLDOWN_MAX_MINUTES: int = 60 * 24 * 7
+
+
+@dataclass(frozen=True)
+class AuthLockoutPolicy:
+    """Resolved brute-force lockout settings for a tenant.
+
+    ``enabled`` is True only when *all three* knobs are set. A
+    half-configured policy (e.g. threshold without cooldown) is treated
+    as disabled so a misclick in the settings UI cannot accidentally
+    lock every customer out.
+    """
+
+    tenant_id: str
+    threshold: int
+    window_minutes: int
+    cooldown_minutes: int
+    enabled: bool
+
+    def as_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "threshold": self.threshold,
+            "window_minutes": self.window_minutes,
+            "cooldown_minutes": self.cooldown_minutes,
+            "enabled": self.enabled,
+            "bounds": {
+                "threshold_min": AUTH_LOCKOUT_THRESHOLD_MIN,
+                "threshold_max": AUTH_LOCKOUT_THRESHOLD_MAX,
+                "window_min_minutes": AUTH_LOCKOUT_WINDOW_MIN_MINUTES,
+                "window_max_minutes": AUTH_LOCKOUT_WINDOW_MAX_MINUTES,
+                "cooldown_min_minutes": AUTH_LOCKOUT_COOLDOWN_MIN_MINUTES,
+                "cooldown_max_minutes": AUTH_LOCKOUT_COOLDOWN_MAX_MINUTES,
+            },
+        }
+
+
+def get_auth_lockout_policy(tenant_id: str) -> AuthLockoutPolicy:
+    """Return the resolved lockout policy for ``tenant_id``."""
+    if not tenant_id:
+        return AuthLockoutPolicy(
+            tenant_id="", threshold=0, window_minutes=0,
+            cooldown_minutes=0, enabled=False,
+        )
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return AuthLockoutPolicy(
+                tenant_id=tenant_id, threshold=0, window_minutes=0,
+                cooldown_minutes=0, enabled=False,
+            )
+        th = getattr(row, "auth_lockout_threshold", None)
+        win = getattr(row, "auth_lockout_window_minutes", None)
+        cool = getattr(row, "auth_lockout_cooldown_minutes", None)
+        enabled = bool(
+            isinstance(th, int) and th > 0
+            and isinstance(win, int) and win > 0
+            and isinstance(cool, int) and cool > 0
+        )
+        return AuthLockoutPolicy(
+            tenant_id=tenant_id,
+            threshold=int(th) if isinstance(th, int) else 0,
+            window_minutes=int(win) if isinstance(win, int) else 0,
+            cooldown_minutes=int(cool) if isinstance(cool, int) else 0,
+            enabled=enabled,
+        )
+
+
+def _validate_lockout_field(name: str, value, lo: int, hi: int) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer or null")
+    if value < lo or value > hi:
+        raise ValueError(f"{name} must be between {lo} and {hi}")
+    return int(value)
+
+
+def set_auth_lockout_policy(
+    tenant_id: str,
+    *,
+    threshold: int | None,
+    window_minutes: int | None,
+    cooldown_minutes: int | None,
+    updated_by: str | None,
+) -> AuthLockoutPolicy:
+    """Persist the lockout policy. Passing ``None`` for every field clears it."""
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    th = _validate_lockout_field(
+        "threshold", threshold,
+        AUTH_LOCKOUT_THRESHOLD_MIN, AUTH_LOCKOUT_THRESHOLD_MAX,
+    )
+    win = _validate_lockout_field(
+        "window_minutes", window_minutes,
+        AUTH_LOCKOUT_WINDOW_MIN_MINUTES, AUTH_LOCKOUT_WINDOW_MAX_MINUTES,
+    )
+    cool = _validate_lockout_field(
+        "cooldown_minutes", cooldown_minutes,
+        AUTH_LOCKOUT_COOLDOWN_MIN_MINUTES, AUTH_LOCKOUT_COOLDOWN_MAX_MINUTES,
+    )
+    # Refuse half-configured policies: either all three or none. This is
+    # the same "fail safe" rule the resolver applies and stops a UI bug
+    # from silently disabling enforcement.
+    set_count = sum(1 for v in (th, win, cool) if v is not None)
+    if 0 < set_count < 3:
+        raise ValueError(
+            "threshold, window_minutes, and cooldown_minutes must be "
+            "set together (or all cleared)."
+        )
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                auth_lockout_threshold=th,
+                auth_lockout_window_minutes=win,
+                auth_lockout_cooldown_minutes=cool,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.auth_lockout_threshold = th
+            row.auth_lockout_window_minutes = win
+            row.auth_lockout_cooldown_minutes = cool
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    enabled = th is not None and win is not None and cool is not None
+    return AuthLockoutPolicy(
+        tenant_id=tenant_id,
+        threshold=th or 0,
+        window_minutes=win or 0,
+        cooldown_minutes=cool or 0,
+        enabled=enabled,
+    )
