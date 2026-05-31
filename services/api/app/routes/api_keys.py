@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from shotclassify_store import api_keys_store
 from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
-from ..middleware.rbac import require_role
+from ..middleware.rbac import require_role, require_scope
 
 
 router = APIRouter(prefix="/v1/api-keys", tags=["api-keys"])
@@ -60,7 +60,7 @@ def _effective_tenant(request: Request, requested: str | None) -> str | None:
     return caller_tenant
 
 
-@router.get("")
+@router.get("", dependencies=[require_scope("admin")])
 def list_my_keys(
     request: Request,
     include_revoked: bool = Query(False),
@@ -78,7 +78,7 @@ def list_my_keys(
     }
 
 
-@router.post("", status_code=201, dependencies=[require_mfa_step_up()])
+@router.post("", status_code=201, dependencies=[require_mfa_step_up(), require_scope("admin")])
 def create_my_key(
     payload: CreateKeyRequest,
     request: Request,
@@ -106,7 +106,7 @@ def create_my_key(
     return body
 
 
-@router.delete("/{key_id}", dependencies=[require_mfa_step_up()])
+@router.delete("/{key_id}", dependencies=[require_mfa_step_up(), require_scope("admin")])
 def revoke_my_key(
     key_id: str,
     request: Request,
@@ -141,7 +141,7 @@ class RateLimitOverrideRequest(BaseModel):
     )
 
 
-@router.patch("/{key_id}/rate-limit", dependencies=[require_mfa_step_up()])
+@router.patch("/{key_id}/rate-limit", dependencies=[require_mfa_step_up(), require_scope("admin")])
 def set_key_rate_limit(
     key_id: str,
     payload: RateLimitOverrideRequest,

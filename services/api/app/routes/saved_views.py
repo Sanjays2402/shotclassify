@@ -16,7 +16,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from shotclassify_store import SavedViewRepository
 
 from ..dryrun import dry_run_query, mark_dry_run
-from ..middleware.rbac import require_role
+from ..middleware.rbac import require_role, require_scope
 
 router = APIRouter(prefix="/v1/saved-views", tags=["saved-views"])
 
@@ -29,7 +29,7 @@ def _scope(request: Request) -> tuple[str, str | None]:
     return principal, tenant_id
 
 
-@router.get("", dependencies=[require_role("viewer")])
+@router.get("", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def list_views(request: Request) -> dict:
     principal, tenant_id = _scope(request)
     repo = SavedViewRepository()
@@ -37,7 +37,7 @@ def list_views(request: Request) -> dict:
     return {"items": items, "count": len(items)}
 
 
-@router.post("", dependencies=[require_role("operator")])
+@router.post("", dependencies=[require_role("operator"), require_scope("write:classifications")])
 def create_view(request: Request, payload: dict = Body(...)) -> dict:
     principal, tenant_id = _scope(request)
     name = payload.get("name")
@@ -57,7 +57,7 @@ def create_view(request: Request, payload: dict = Body(...)) -> dict:
         raise HTTPException(422, str(e))
 
 
-@router.get("/{view_id}", dependencies=[require_role("viewer")])
+@router.get("/{view_id}", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def get_view(request: Request, view_id: str) -> dict:
     principal, tenant_id = _scope(request)
     row = SavedViewRepository().get(
@@ -68,7 +68,7 @@ def get_view(request: Request, view_id: str) -> dict:
     return row
 
 
-@router.patch("/{view_id}", dependencies=[require_role("operator")])
+@router.patch("/{view_id}", dependencies=[require_role("operator"), require_scope("write:classifications")])
 def update_view(
     request: Request, view_id: str, payload: dict = Body(...)
 ) -> dict:
@@ -96,7 +96,7 @@ def update_view(
     return row
 
 
-@router.delete("/{view_id}", dependencies=[require_role("operator")])
+@router.delete("/{view_id}", dependencies=[require_role("operator"), require_scope("write:classifications")])
 def delete_view(request: Request, view_id: str, dry_run: bool = dry_run_query()) -> dict | object:
     principal, tenant_id = _scope(request)
     repo = SavedViewRepository()

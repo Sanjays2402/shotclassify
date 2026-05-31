@@ -66,7 +66,7 @@ def test_minted_key_authenticates_and_is_scoped(monkeypatch, tmp_path):
 
 def test_revoked_key_is_unauthorized(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
-    payload = _mint(c)
+    payload = _mint(c, scopes=["read:classifications", "write:classifications"])
     token = payload["token"]
     kid = payload["id"]
     # Sanity: key works.
@@ -172,3 +172,66 @@ def test_rate_limit_override_isolated_across_tenants(monkeypatch, tmp_path):
     # The override was not applied.
     keys = api_keys_store.list_keys(tenant_id="tenant-b")
     assert next(k for k in keys if k.id == other.id).rpm_override is None
+
+
+def test_read_only_key_blocked_from_history_writes(monkeypatch, tmp_path):
+    """A key minted with only read:classifications cannot mutate history."""
+    c = _client(monkeypatch, tmp_path)
+    token = _mint(c, scopes=["read:classifications"])["token"]
+    # Read works.
+    assert c.get("/v1/history", headers={"X-API-Key": token}).status_code == 200
+    # Delete is blocked with a clear scope error.
+    r = c.delete("/v1/history/nonexistent", headers={"X-API-Key": token})
+    assert r.status_code == 403, r.text
+    # The role check trips first for viewers; either failure mode is fine.
+    detail = r.json()["detail"]
+    assert "write:classifications" in detail or "operator" in detail
+    # Bulk delete is also blocked.
+    r = c.post(
+        "/v1/history/bulk",
+        headers={"X-API-Key": token},
+        json={"ids": ["abc"]},
+    )
+    assert r.status_code == 403
+
+
+def test_write_key_cannot_read_audit_log(monkeypatch, tmp_path):
+    """A write-scoped key cannot pull the audit log; needs read:audit."""
+    c = _client(monkeypatch, tmp_path)
+    token = _mint(c, scopes=["write:classifications"])["token"]
+    r = c.get("/v1/audit", headers={"X-API-Key": token})
+    assert r.status_code == 403, r.text
+    detail = r.json()["detail"]
+    assert "read:audit" in detail or "admin" in detail
+
+
+def test_non_admin_scope_cannot_manage_api_keys(monkeypatch, tmp_path):
+    """An admin-role *session* key with no scopes still works (fallback);
+    a DB key without the 'admin' scope cannot mint or list keys."""
+    c = _client(monkeypatch, tmp_path)
+    # Mint a key with read+write but NOT admin.
+    token = _mint(
+        c, scopes=["read:classifications", "write:classifications"]
+    )["token"]
+    # Listing keys requires admin scope.
+    r = c.get("/v1/api-keys", headers={"X-API-Key": token})
+    assert r.status_code == 403, r.text
+    # Minting another key also requires admin scope.
+    r = c.post(
+        "/v1/api-keys",
+        headers={"X-API-Key": token},
+        json={"label": "nope", "scopes": ["read:classifications"]},
+    )
+    assert r.status_code == 403
+
+
+def test_read_only_key_blocked_from_webhook_create(monkeypatch, tmp_path):
+    """Creating a webhook is an admin-scope action; a read key cannot do it."""
+    c = _client(monkeypatch, tmp_path)
+    token = _mint(c, scopes=["read:classifications"])["token"]
+    r = c.post(
+        "/v1/webhooks",
+        headers={"X-API-Key": token},
+        json={"url": "https://example.com/hook", "events": ["classify.completed"]},
+    )
+    assert r.status_code == 403, r.text

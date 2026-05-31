@@ -8,9 +8,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 from shotclassify_store import AuditRepository
 
-from ..middleware.rbac import require_role
+from ..middleware.rbac import require_role, require_scope
 
-router = APIRouter(prefix="/v1/audit", tags=["audit"], dependencies=[require_role("admin")])
+router = APIRouter(prefix="/v1/audit", tags=["audit"], dependencies=[require_role("admin"), require_scope("read:audit")])
 
 
 @router.get("")

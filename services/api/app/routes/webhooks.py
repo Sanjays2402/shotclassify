@@ -25,7 +25,7 @@ from shotclassify_store import webhooks_store
 
 from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
-from ..middleware.rbac import require_role
+from ..middleware.rbac import require_role, require_scope
 
 
 router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
@@ -51,7 +51,7 @@ def _require_tenant(request: Request) -> str:
     return tenant_id
 
 
-@router.get("")
+@router.get("", dependencies=[require_scope("read:classifications")])
 def list_webhooks(request: Request, _: str = require_role("admin")):
     """List webhook subscriptions for the caller's tenant."""
     tenant_id = _require_tenant(request)
@@ -63,7 +63,7 @@ def list_webhooks(request: Request, _: str = require_role("admin")):
     }
 
 
-@router.post("", dependencies=[require_mfa_step_up()])
+@router.post("", dependencies=[require_mfa_step_up(), require_scope("admin")])
 def create_webhook(
     payload: CreateWebhookRequest,
     request: Request,
@@ -91,7 +91,7 @@ def create_webhook(
     }
 
 
-@router.get("/{webhook_id}")
+@router.get("/{webhook_id}", dependencies=[require_scope("read:classifications")])
 def get_webhook(
     webhook_id: str,
     request: Request,
@@ -104,7 +104,7 @@ def get_webhook(
     return {"webhook": record.to_dict()}
 
 
-@router.delete("/{webhook_id}", dependencies=[require_mfa_step_up()])
+@router.delete("/{webhook_id}", dependencies=[require_mfa_step_up(), require_scope("admin")])
 def revoke_webhook(
     webhook_id: str,
     request: Request,
@@ -134,7 +134,7 @@ def revoke_webhook(
     return {"ok": True, "revoked": webhook_id}
 
 
-@router.get("/{webhook_id}/deliveries")
+@router.get("/{webhook_id}/deliveries", dependencies=[require_scope("read:audit")])
 def list_webhook_deliveries(
     webhook_id: str,
     request: Request,
@@ -160,7 +160,7 @@ def list_webhook_deliveries(
     }
 
 
-@router.get("/deliveries/recent")
+@router.get("/deliveries/recent", dependencies=[require_scope("read:audit")])
 def list_recent_deliveries(
     request: Request,
     status: str | None = Query(None, pattern="^(success|failed)$"),
@@ -175,7 +175,7 @@ def list_recent_deliveries(
     return {"deliveries": [r.to_dict() for r in records], "tenant_id": tenant_id}
 
 
-@router.post("/deliveries/{delivery_id}/replay", dependencies=[require_mfa_step_up()])
+@router.post("/deliveries/{delivery_id}/replay", dependencies=[require_mfa_step_up(), require_scope("admin")])
 def replay_delivery(
     delivery_id: str,
     request: Request,

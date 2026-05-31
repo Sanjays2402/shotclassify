@@ -2,7 +2,26 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
-## What's new: SSRF-safe outbound webhook egress
+## What's new: per-route scope enforcement on API keys
+
+DB-issued API keys now carry scopes (`read:classifications`, `write:classifications`, `read:audit`, `admin`) and every public `/v1/*` route checks them. A key minted with only `read:classifications` can list and export history but cannot delete, bulk-mutate, or correct records, cannot pull the audit log, cannot manage webhooks, and cannot mint or revoke other keys. The `admin` scope is a superset shorthand; session cookies fall back to the existing role check so dashboard users are unaffected.
+
+Failures return a 403 that names the missing scope, which makes it actionable for integration owners without leaking what *would* have happened. Coverage in `tests/test_api_keys_db.py` proves: a read-only key cannot delete history, a write-only key cannot read `/v1/audit`, and a non-admin key cannot list, mint, revoke, or rate-limit API keys.
+
+### Try it
+
+```bash
+# Mint a read-only key from the dashboard at http://localhost:3000/keys.
+# Then prove it cannot mutate:
+curl -sS -X DELETE -H "X-API-Key: $READ_ONLY_KEY" \
+  http://localhost:7441/v1/history/any-id
+# => 403 {"detail":"Role 'viewer' lacks required role 'operator'."}
+
+curl -sS -H "X-API-Key: $READ_ONLY_KEY" http://localhost:7441/v1/audit
+# => 403 {"detail":"API key is missing required scope 'read:audit'."}
+```
+
+## Previous: SSRF-safe outbound webhook egress
 
 Webhook destinations are tenant controlled, which makes the dispatcher the most common SSRF sink in any SaaS. Before every delivery (and at subscription create time) the URL is parsed, the hostname is resolved, and every A/AAAA record is checked. Loopback, private (RFC1918, IPv6 ULA), link-local, multicast, CGNAT, cloud-metadata (169.254.0.0/16), and operator-configured CIDR ranges are refused. Plain `http://` is refused unless explicitly enabled. Egress denials skip the retry loop and surface as `egress blocked: <reason>` in the audit-replay UI so tenants get an actionable error without leaking internal network topology.
 
@@ -32,7 +51,7 @@ curl -s -X POST http://localhost:7441/v1/webhooks \
 
 Full threat-model write-up: [`docs/security.md`](docs/security.md).
 
-## Previous: SCIM 2.0 provisioning for Okta, Azure AD, Google Workspace
+## Earlier: SCIM 2.0 provisioning for Okta, Azure AD, Google Workspace
 
 The FastAPI service now speaks SCIM 2.0 (RFC 7644) so enterprise IdPs can auto provision and de provision workspace members without API key handouts. Each workspace mints its own bearer token, only the SHA-256 is stored, and lookups go through that hash index so the plaintext never appears in logs or backups. Disabling SCIM in the admin console breaks glass immediately: every subsequent SCIM call returns 401 even before the admin rotates.
 

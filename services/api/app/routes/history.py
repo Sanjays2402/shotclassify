@@ -13,7 +13,7 @@ from shotclassify_common import Category, ClassificationRecord
 from shotclassify_store import Repository
 
 from ..dryrun import dry_run_query, mark_dry_run
-from ..middleware.rbac import require_role
+from ..middleware.rbac import require_role, require_scope
 
 router = APIRouter(prefix="/v1/history", tags=["history"])
 
@@ -51,7 +51,7 @@ def _record_to_row(rec: ClassificationRecord) -> dict:
     }
 
 
-@router.get("/export", dependencies=[require_role("viewer")])
+@router.get("/export", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def export_history(
     request: Request,
     format: str = Query("csv", pattern="^(csv|json)$"),
@@ -106,7 +106,7 @@ def export_history(
     )
 
 
-@router.get("", response_model=list[ClassificationRecord], dependencies=[require_role("viewer")])
+@router.get("", response_model=list[ClassificationRecord], dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def list_history(
     request: Request,
     response: Response,
@@ -156,19 +156,19 @@ def list_history(
     return items
 
 
-@router.get("/stats", dependencies=[require_role("viewer")])
+@router.get("/stats", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def stats(request: Request):
     tenant_id = getattr(request.state, "tenant_id", None)
     return {"count": Repository().count(tenant_id=tenant_id)}
 
 
-@router.get("/aggregate", dependencies=[require_role("viewer")])
+@router.get("/aggregate", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def aggregate(request: Request, hours: int = Query(24, ge=1, le=24 * 30)):
     tenant_id = getattr(request.state, "tenant_id", None)
     return Repository().aggregate(tenant_id=tenant_id, hours=hours)
 
 
-@router.get("/{item_id}", response_model=ClassificationRecord, dependencies=[require_role("viewer")])
+@router.get("/{item_id}", response_model=ClassificationRecord, dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def get_one(item_id: str, request: Request) -> ClassificationRecord:
     tenant_id = getattr(request.state, "tenant_id", None)
     rec = Repository().get(item_id, tenant_id=tenant_id)
@@ -177,7 +177,7 @@ def get_one(item_id: str, request: Request) -> ClassificationRecord:
     return rec
 
 
-@router.post("/bulk", dependencies=[require_role("operator")])
+@router.post("/bulk", dependencies=[require_role("operator"), require_scope("write:classifications")])
 def bulk(request: Request, payload: dict = Body(...), dry_run: bool = dry_run_query()) -> dict:
     """Apply an action to many saved shots at once.
 
@@ -303,7 +303,7 @@ def bulk(request: Request, payload: dict = Body(...), dry_run: bool = dry_run_qu
     }
 
 
-@router.delete("/{item_id}", dependencies=[require_role("operator")])
+@router.delete("/{item_id}", dependencies=[require_role("operator"), require_scope("write:classifications")])
 def delete(item_id: str, request: Request, dry_run: bool = dry_run_query()):
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
@@ -323,7 +323,7 @@ def delete(item_id: str, request: Request, dry_run: bool = dry_run_query()):
 @router.patch(
     "/{item_id}",
     response_model=ClassificationRecord,
-    dependencies=[require_role("operator")],
+    dependencies=[require_role("operator"), require_scope("write:classifications")],
 )
 def patch(
     item_id: str,
