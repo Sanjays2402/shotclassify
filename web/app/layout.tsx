@@ -64,6 +64,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/compare">Compare</NavLink>
               <NavLink href="/calibration">Calibration</NavLink>
               <NavLink href="/upload">Upload</NavLink>
+              <NavLink href="/keys">API keys</NavLink>
             </nav>
             <div className="ml-auto flex items-center gap-3">
               <span className="eyebrow hidden sm:inline">Press</span>

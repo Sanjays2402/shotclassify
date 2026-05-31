@@ -22,7 +22,22 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - `GET /v1/history/{id}` full record with OCR transcript and confidence distribution.
 - Web UI: upload page, shots list, per-shot detail with OCR transcript, `/stats` analytics dashboard with class mix, calibration histogram, ingest tempo, and latency percentiles, plus a calibration page with reliability diagram and ECE/Brier/Log loss.
 - Side-by-side compare view at `/compare?a=<id>&b=<id>`: pick any two shots from history (or pass IDs via URL), see class chips, full probability distributions, OCR text, and a delta summary (same-class, confidence delta, latency delta). Multi-select two rows on `/shots` and hit Compare to jump in.
+- User-generated API keys at `/keys`: generate, copy once, list with prefix/created/last-used/call-count, revoke. Keys are hashed at rest. A new `POST /v1/classify` Next.js route accepts `Authorization: Bearer sk_live_...` and forwards to the FastAPI classifier, returning the same JSON the in-app uploader sees. Per-key usage counters tick on every call.
 - Public share links at `/r/<shot-id>`: server-rendered, no-auth result pages with confidence distribution, OCR transcript, and a dynamic 1200x630 OpenGraph image for link previews on Slack, Twitter, iMessage, and LinkedIn. Each shot detail page has a one-click Copy share link button.
+
+## Try the API keys
+
+1. `cd web && pnpm dev` (or `npm run dev`) and open http://localhost:3000/keys.
+2. Generate a key, copy it from the one-time reveal banner.
+3. Call the classifier from anywhere:
+
+```
+curl -X POST http://localhost:3000/v1/classify \
+  -H "Authorization: Bearer sk_live_YOUR_KEY" \
+  -F "file=@screenshot.png"
+```
+
+The response is the standard `ProcessResult` JSON. Revoke the key from `/keys` and the next call will return `401 invalid_key`.
 
 ## Try the share feature
 
