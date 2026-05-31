@@ -40,6 +40,7 @@ class SessionInfo:
     client_ip: str | None
     user_agent: str | None
     auth_method: str = "oauth"
+    mfa_verified_at: datetime | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -53,6 +54,7 @@ class SessionInfo:
             "client_ip": self.client_ip,
             "user_agent": self.user_agent,
             "auth_method": self.auth_method,
+            "mfa_verified_at": self.mfa_verified_at.isoformat() if self.mfa_verified_at else None,
         }
 
 
@@ -68,6 +70,7 @@ def _to_info(row: SessionRow) -> SessionInfo:
         client_ip=row.client_ip,
         user_agent=row.user_agent,
         auth_method=getattr(row, "auth_method", "oauth") or "oauth",
+        mfa_verified_at=getattr(row, "mfa_verified_at", None),
     )
 
 

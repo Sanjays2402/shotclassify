@@ -1,11 +1,14 @@
 """Storage: SQLAlchemy + file/S3 blob storage."""
 from .audit import AuditRepository
+from . import mfa as mfa_store
+from .mfa import MfaStatus
 from .blobs import BlobStore, LocalBlobStore
 from .db import (
     ApiKeyRow,
     AuditLogRow,
     Base,
     ClassificationRow,
+    MfaCredentialRow,
     SavedViewRow,
     SessionRow,
     TenantSettingsRow,
@@ -66,4 +69,7 @@ __all__ = [
     "get_sso_config",
     "set_sso_config",
     "tenant_for_sso_domain",
+    "MfaCredentialRow",
+    "MfaStatus",
+    "mfa_store",
 ]

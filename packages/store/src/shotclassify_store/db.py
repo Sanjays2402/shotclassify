@@ -166,6 +166,38 @@ class SessionRow(Base):
     # ``sso`` (OIDC). Used by enforce-SSO middleware to reject password /
     # legacy oauth sessions for tenants that have switched to SSO-only.
     auth_method: Mapped[str] = mapped_column(String(16), default="oauth", nullable=False)
+    # Step-up MFA timestamp. When set, the session has presented a valid
+    # TOTP code within the step-up window. Admin mutations require this to
+    # be recent (see ``require_mfa_step_up``). NULL means MFA has not been
+    # verified on this session yet.
+    mfa_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class MfaCredentialRow(Base):
+    """TOTP enrollment for a principal.
+
+    One row per principal. ``confirmed_at`` is NULL until the user proves
+    they configured their authenticator app by submitting a valid code
+    against the pending secret. Only confirmed credentials gate access;
+    pending enrollments are ignored by step-up checks so a half-enrolled
+    account is not locked out.
+    """
+
+    __tablename__ = "mfa_credentials"
+
+    principal: Mapped[str] = mapped_column(String(128), primary_key=True)
+    secret: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 @lru_cache(maxsize=1)
@@ -237,6 +269,12 @@ def init_db() -> None:
                     conn.execute(text(
                         "ALTER TABLE sessions ADD COLUMN auth_method VARCHAR(16) NOT NULL DEFAULT 'oauth'"
                     ))
+                if "mfa_verified_at" not in scols:
+                    conn.execute(text(
+                        "ALTER TABLE sessions ADD COLUMN mfa_verified_at TIMESTAMP"
+                    ))
+            if not insp.has_table("mfa_credentials"):
+                Base.metadata.tables["mfa_credentials"].create(bind=conn)
     except Exception:
         # Best-effort. Real schema management lives in alembic.
         pass

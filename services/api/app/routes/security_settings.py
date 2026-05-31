@@ -19,6 +19,7 @@ from shotclassify_store import (
     set_sso_config,
 )
 
+from ..middleware.mfa import require_mfa_step_up
 from ..middleware.rbac import require_role
 
 router = APIRouter(prefix="/v1/settings/security", tags=["settings"])
@@ -44,7 +45,7 @@ def get_ip_allowlist_route(request: Request) -> dict:
     }
 
 
-@router.put("/ip-allowlist", dependencies=[require_role("admin")])
+@router.put("/ip-allowlist", dependencies=[require_role("admin"), require_mfa_step_up()])
 def put_ip_allowlist_route(
     request: Request,
     payload: dict = Body(...),
@@ -74,7 +75,7 @@ def get_retention_route(request: Request) -> dict:
     }
 
 
-@router.put("/retention", dependencies=[require_role("admin")])
+@router.put("/retention", dependencies=[require_role("admin"), require_mfa_step_up()])
 def put_retention_route(
     request: Request,
     payload: dict = Body(...),
@@ -96,7 +97,7 @@ def put_retention_route(
     }
 
 
-@router.post("/retention/run", dependencies=[require_role("admin")])
+@router.post("/retention/run", dependencies=[require_role("admin"), require_mfa_step_up()])
 def run_retention_route(request: Request) -> dict:
     """Manually trigger a purge for the caller's tenant.
 
@@ -116,7 +117,7 @@ def get_sso_route(request: Request) -> dict:
     return get_sso_config(tenant_id).to_dict()
 
 
-@router.put("/sso", dependencies=[require_role("admin")])
+@router.put("/sso", dependencies=[require_role("admin"), require_mfa_step_up()])
 def put_sso_route(request: Request, payload: dict = Body(...)) -> dict:
     """Update per-tenant SSO config.
 

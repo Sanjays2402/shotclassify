@@ -2,6 +2,27 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, and an admin dashboard.
 
+## What's new: TOTP step-up MFA for admin mutations
+
+Destructive admin actions now require a recent second factor on top of the role check. The `require_mfa_step_up()` dependency is wired onto every mutating admin route (IP allowlist PUT, retention PUT, retention run, SSO config PUT, routing-rules PUT, admin force-logout-principal) so a stolen browser session alone cannot reconfigure tenant security. API-key callers (machine-to-machine) bypass MFA because the key itself is a possession factor.
+
+Enroll an authenticator at http://localhost:3000/settings/mfa, or via the API:
+
+```sh
+# 1. Start enrollment (returns secret + otpauth URI for any TOTP app)
+curl -s -X POST http://127.0.0.1:7441/v1/mfa/setup -b cookies.txt | jq
+
+# 2. Confirm with a current 6-digit code from the authenticator
+curl -s -X POST http://127.0.0.1:7441/v1/mfa/verify \
+  -H 'content-type: application/json' \
+  -d '{"code":"123456"}' -b cookies.txt | jq
+
+# 3. Subsequent admin mutations work for the next MFA_STEP_UP_WINDOW_SECONDS (default 900).
+#    Re-stamp the session with POST /v1/mfa/challenge {code} when the window lapses.
+```
+
+Without an enrolled credential, mutating admin endpoints return `401 {"error":"mfa_enrollment_required"}`. With one enrolled but the window lapsed, they return `401 {"error":"mfa_required","window_seconds":900}` so the UI can prompt for a fresh code. Coverage in `tests/test_mfa_step_up.py` proves enrollment unlocks the action, an expired stamp blocks it, and a re-challenge restores access.
+
 ## What's new: enterprise SSO (OIDC) with per-workspace enforcement
 
 Wire one OIDC identity provider (Google Workspace, Okta, Azure AD, Auth0, Keycloak) for the deployment, then opt each tenant in by claiming its email domain and turning on enforcement. When `enforced=true`, the auth middleware refuses any session for that tenant that was not minted via `/auth/sso/callback`. API-key (machine-to-machine) callers are unaffected.

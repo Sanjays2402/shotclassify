@@ -15,6 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 from shotclassify_store import session_store
 
+from ..middleware.mfa import require_mfa_step_up
 from ..middleware.rbac import require_role
 
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
@@ -108,7 +109,7 @@ def list_all(
     }
 
 
-@router.post("/admin/revoke-principal")
+@router.post("/admin/revoke-principal", dependencies=[require_mfa_step_up()])
 def admin_revoke_principal(
     request: Request,
     principal: str = Query(..., description="Principal whose sessions should be revoked."),

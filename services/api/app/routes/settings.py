@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, HTTPException
 
 from shotclassify_common import get_settings
 
+from ..middleware.mfa import require_mfa_step_up
 from ..middleware.rbac import require_role
 
 router = APIRouter(prefix="/v1/settings", tags=["settings"])
@@ -26,7 +27,7 @@ def get_rules():
     return {"path": str(p), "yaml": raw, "parsed": parsed}
 
 
-@router.put("/rules", dependencies=[require_role("admin")])
+@router.put("/rules", dependencies=[require_role("admin"), require_mfa_step_up()])
 def put_rules(payload: dict = Body(...)):
     raw = payload.get("yaml", "")
     try:
