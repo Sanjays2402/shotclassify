@@ -2,6 +2,33 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: enforced API key rotation policy
+
+SOC 2 CC6.1 and most enterprise procurement reviews expect a documented and *enforced* credential rotation window, not just a written policy. Workspace admins can now cap the lifetime of every newly minted or rotated API key from `Settings -> Security -> API key rotation policy` (or `PUT /v1/settings/security/api-key-ttl`). When a cap is set, `POST /v1/api-keys` rejects any `ttl_days` longer than the cap and applies the cap as the default when `ttl_days` is omitted, so a tenant with a policy can never silently mint an unbounded key. `POST /v1/api-keys/{id}/rotate` clamps the successor's expiry to the cap as well, so rotation never extends past the documented window. Existing keys are not retroactively shortened: a tightened policy will not break a live integration. The cap is surfaced on `GET /v1/api-keys` (field `ttl_policy`) so the admin UI can render the active value. Admin-only, MFA step-up required, audit-logged by the existing tamper-evident chain. Coverage in `tests/test_api_key_ttl_policy.py`.
+
+### Try it
+
+```bash
+# 1. Set a 30 day rotation cap for the workspace.
+curl -s -X PUT -H "X-API-Key: $ADMIN_KEY" -H "X-MFA-OTP: 123456" \
+  -H "content-type: application/json" \
+  -d '{"max_ttl_days": 30}' \
+  http://localhost:7441/v1/settings/security/api-key-ttl
+# {"tenant_id": "acme", "max_ttl_days": 30, "min_days": 1, "max_days": 3650}
+
+# 2. A 90 day key is rejected with 422; an in-range key is minted.
+curl -s -X POST -H "X-API-Key: $ADMIN_KEY" -H "content-type: application/json" \
+  -d '{"label":"ci","scopes":["read:classifications"],"ttl_days":90}' \
+  http://localhost:7441/v1/api-keys
+# {"detail": "ttl_days 90 exceeds tenant policy max of 30 days"}
+
+# 3. The policy ships with the key list so the dashboard can render it.
+curl -s -H "X-API-Key: $ADMIN_KEY" http://localhost:7441/v1/api-keys | jq .ttl_policy
+# {"tenant_id": "acme", "max_ttl_days": 30, "min_days": 1, "max_days": 3650}
+```
+
+Dashboard UI: <http://localhost:3000/settings/security>.
+
 ## What's new: per-tenant OIDC identity provider
 
 Large customers refuse to hand their corporate Okta or Azure AD credentials to a shared vendor SSO client. Each workspace can now register its own OIDC application from `Settings -> Security -> Your own identity provider` (or `PUT /v1/settings/security/oidc`). When a user signs in with an email in the workspace's SSO domain, `/auth/sso/login` resolves the tenant, looks up its issuer + client_id + client_secret, and runs the authorization-code flow against that tenant's IdP instead of the deployment-level shared client. The deployment-level `AUTH_SSO_*` config remains as a fallback for workspaces that have not configured their own IdP. Client secrets are stored opaquely, never returned by any API; only a SHA-256 fingerprint and last-four are surfaced for operator confirmation. Admin-only, MFA step-up required, audit-logged by the existing tamper-evident chain. Coverage in `tests/test_tenant_oidc.py`.

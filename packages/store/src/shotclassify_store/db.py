@@ -220,6 +220,12 @@ class TenantSettingsRow(Base):
     # into the admin console and the audit log; lets ops sell tiered
     # plans ("Team: 10", "Business: 50") without a redeploy.
     seat_limit: Mapped[int | None] = mapped_column(nullable=True)
+    # Max TTL (in days) the tenant will allow on any newly minted or rotated
+    # API key. NULL means no policy (legacy behaviour). When set, the API
+    # keys store rejects ``create_key`` calls with a longer ttl_days and
+    # clamps the successor's expiry on ``rotate``. Recorded changes go
+    # through the audit log via the security_settings route.
+    api_key_max_ttl_days: Mapped[int | None] = mapped_column(nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -588,6 +594,11 @@ def init_db() -> None:
                 if "seat_limit" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN seat_limit INTEGER"
+                    ))
+                # 0023 per-tenant API key max TTL policy.
+                if "api_key_max_ttl_days" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN api_key_max_ttl_days INTEGER"
                     ))
             if insp.has_table("sessions"):
                 scols = {c["name"] for c in insp.get_columns("sessions")}

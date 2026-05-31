@@ -288,6 +288,7 @@ export default function SecuritySettingsPage() {
       <SsoSection />
       <TenantOidcSection />
       <SessionPolicySection />
+      <ApiKeyTtlPolicySection />
       <SessionsSection />
     </div>
   );
@@ -1413,6 +1414,234 @@ function TenantOidcSection() {
                   ? `${window.location.origin}/api/auth/sso/callback`
                   : "/api/auth/sso/callback"}
               </code>
+            </span>
+          </div>
+
+          {flash ? (
+            <p
+              className={`mt-3 text-sm ${
+                flash.kind === "ok"
+                  ? "text-emerald-700 dark:text-emerald-300"
+                  : "text-rose-700 dark:text-rose-300"
+              }`}
+              role="status"
+            >
+              {flash.msg}
+            </p>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+type ApiKeyTtlResponse = {
+  tenant_id: string;
+  max_ttl_days: number | null;
+  min_days: number;
+  max_days: number;
+};
+
+function ApiKeyTtlPolicySection() {
+  const { data, error, isLoading, mutate } = useSWR<ApiKeyTtlResponse>(
+    "/api/settings/security/api-key-ttl",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+
+  const [enforce, setEnforce] = useState<boolean>(false);
+  const [value, setValue] = useState<string>("");
+  const [otp, setOtp] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!data) return;
+    if (data.max_ttl_days != null) {
+      setEnforce(true);
+      setValue(String(data.max_ttl_days));
+    } else {
+      setEnforce(false);
+      setValue("90");
+    }
+  }, [data?.max_ttl_days]);
+
+  const status = error as ApiError | undefined;
+  const unauth = status?.status === 401;
+  const forbidden = status?.status === 403;
+
+  const presets: Array<{ label: string; days: number }> = [
+    { label: "30 days", days: 30 },
+    { label: "60 days", days: 60 },
+    { label: "90 days", days: 90 },
+    { label: "180 days", days: 180 },
+    { label: "1 year", days: 365 },
+  ];
+
+  async function save() {
+    if (!data) return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      let body: { max_ttl_days: number | null };
+      if (!enforce) {
+        body = { max_ttl_days: null };
+      } else {
+        const parsed = Math.trunc(Number(value));
+        if (!Number.isFinite(parsed)) {
+          setFlash({ kind: "err", msg: "Enter a whole number of days." });
+          setBusy(false);
+          return;
+        }
+        if (parsed < data.min_days || parsed > data.max_days) {
+          setFlash({
+            kind: "err",
+            msg: `Days must be between ${data.min_days} and ${data.max_days}.`,
+          });
+          setBusy(false);
+          return;
+        }
+        body = { max_ttl_days: parsed };
+      }
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (otp.trim()) headers["x-mfa-otp"] = otp.trim();
+      const res = await fetch("/api/settings/security/api-key-ttl", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setFlash({ kind: "err", msg: text || `Save failed (${res.status})` });
+        setBusy(false);
+        return;
+      }
+      const next: ApiKeyTtlResponse = await res.json();
+      setFlash({ kind: "ok", msg: "Saved." });
+      setOtp("");
+      await mutate(next, { revalidate: false });
+    } catch (e) {
+      setFlash({ kind: "err", msg: (e as Error).message || "Save failed" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-center gap-2 mb-2">
+        <KeyIcon size={20} weight="duotone" className="text-amber-600" />
+        <h2 className="text-base font-semibold">API key rotation policy</h2>
+        {data?.tenant_id ? (
+          <span className="ml-auto rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+            tenant: {data.tenant_id}
+          </span>
+        ) : null}
+      </div>
+      <p className="text-sm text-zinc-500 mb-4">
+        Cap the lifetime of every newly minted or rotated API key in this
+        workspace. SOC 2 CC6.1 and most procurement reviews expect a
+        documented and enforced rotation window. Existing keys are not
+        retroactively shortened, so a tightened policy will not break
+        live integrations.
+      </p>
+
+      {isLoading ? (
+        <div className="space-y-2" aria-busy="true">
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+        </div>
+      ) : unauth ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Sign in to manage API key policy.
+        </div>
+      ) : forbidden ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Admin role required to change API key policy.
+        </div>
+      ) : !data ? (
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+          Could not load API key policy.
+        </div>
+      ) : (
+        <>
+          <div className="mb-4 flex flex-wrap items-center gap-3 text-sm">
+            <span className="text-zinc-500">Current:</span>
+            <span className="rounded-md bg-zinc-100 px-2 py-1 font-mono text-xs dark:bg-zinc-900">
+              {data.max_ttl_days == null ? "no cap" : `${data.max_ttl_days} days max`}
+            </span>
+          </div>
+
+          <label className="mb-3 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={enforce}
+              onChange={(e) => setEnforce(e.target.checked)}
+              className="h-4 w-4 rounded border-zinc-300 text-amber-600 focus:ring-amber-500"
+            />
+            <span>Enforce a maximum key lifetime for this workspace</span>
+          </label>
+
+          {enforce ? (
+            <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block text-sm">
+                <span className="mb-1 block text-zinc-600 dark:text-zinc-400">
+                  Max key lifetime (days)
+                </span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={data.min_days}
+                  max={data.max_days}
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  className="w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 font-mono text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 dark:border-zinc-700 dark:bg-zinc-900"
+                />
+              </label>
+              <div className="flex flex-wrap items-end gap-1.5">
+                {presets.map((p) => (
+                  <button
+                    key={p.days}
+                    type="button"
+                    onClick={() => setValue(String(p.days))}
+                    className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900"
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <label className="mb-3 block text-sm">
+            <span className="mb-1 block text-zinc-600 dark:text-zinc-400">
+              MFA code (required to save)
+            </span>
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value)}
+              placeholder="6 digit code"
+              className="w-40 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 font-mono text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          </label>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FloppyDisk size={16} weight="duotone" />
+              {busy ? "Saving" : "Save policy"}
+            </button>
+            <span className="text-xs text-zinc-500">
+              Range: {data.min_days} to {data.max_days} days.
             </span>
           </div>
 

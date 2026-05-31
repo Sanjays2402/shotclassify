@@ -708,3 +708,99 @@ def set_tenant_oidc(
         s.commit()
 
     return get_tenant_oidc(tenant_id)
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant API key max-TTL policy.
+#
+# Enterprise buyers (and SOC 2 CC6.1) routinely require a documented and
+# *enforced* credential rotation window. Setting a per-tenant cap here
+# makes ``api_keys.create_key`` reject any ttl_days longer than the cap
+# and clamps the successor's expiry on ``api_keys.rotate``. NULL means
+# no policy: existing deployments keep working unchanged until an admin
+# opts in.
+
+# Smallest cap is 1 day (anything shorter is operationally hostile). The
+# upper bound is 10 years so a tenant can still document "we don't rotate
+# integration keys" without code changes, while preventing a no-op
+# 100-year setting that defeats the audit answer.
+API_KEY_MIN_TTL_DAYS = 1
+API_KEY_MAX_TTL_DAYS = 3650
+
+
+@dataclass(frozen=True)
+class ApiKeyTtlPolicy:
+    tenant_id: str
+    max_ttl_days: int | None  # None = no policy (legacy)
+
+    def to_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "max_ttl_days": self.max_ttl_days,
+            "min_days": API_KEY_MIN_TTL_DAYS,
+            "max_days": API_KEY_MAX_TTL_DAYS,
+        }
+
+
+def get_api_key_ttl_policy(tenant_id: str | None) -> ApiKeyTtlPolicy:
+    """Return the per-tenant API key TTL cap, or a no-policy sentinel."""
+    if not tenant_id:
+        return ApiKeyTtlPolicy(tenant_id="", max_ttl_days=None)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return ApiKeyTtlPolicy(tenant_id=tenant_id, max_ttl_days=None)
+        return ApiKeyTtlPolicy(
+            tenant_id=tenant_id,
+            max_ttl_days=getattr(row, "api_key_max_ttl_days", None),
+        )
+
+
+def set_api_key_ttl_policy(
+    tenant_id: str,
+    *,
+    max_ttl_days: int | None,
+    updated_by: str | None,
+) -> ApiKeyTtlPolicy:
+    """Persist (or clear) the per-tenant max API key TTL in days.
+
+    ``None`` clears the policy. Raises ``ValueError`` for non-integer or
+    out-of-range values so the API layer can return 422.
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    norm: int | None
+    if max_ttl_days is None:
+        norm = None
+    else:
+        if isinstance(max_ttl_days, bool) or not isinstance(max_ttl_days, int):
+            raise ValueError("max_ttl_days must be an integer or null")
+        if max_ttl_days < API_KEY_MIN_TTL_DAYS or max_ttl_days > API_KEY_MAX_TTL_DAYS:
+            raise ValueError(
+                f"max_ttl_days must be between {API_KEY_MIN_TTL_DAYS} "
+                f"and {API_KEY_MAX_TTL_DAYS} days"
+            )
+        norm = max_ttl_days
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                api_key_max_ttl_days=norm,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.api_key_max_ttl_days = norm
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return ApiKeyTtlPolicy(tenant_id=tenant_id, max_ttl_days=norm)

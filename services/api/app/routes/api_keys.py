@@ -15,7 +15,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from shotclassify_store import api_keys_store
+from shotclassify_store import api_keys_store, get_api_key_ttl_policy
 from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
 from ..middleware.rbac import require_role, require_scope
@@ -75,6 +75,7 @@ def list_my_keys(
         "keys": [r.to_dict() for r in records],
         "tenant_id": tenant_id,
         "available_scopes": _SCOPE_VALUES,
+        "ttl_policy": get_api_key_ttl_policy(tenant_id).to_dict(),
     }
 
 

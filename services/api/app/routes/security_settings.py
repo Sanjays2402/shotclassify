@@ -10,8 +10,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, HTTPException, Request
 
 from shotclassify_store import (
+    API_KEY_MAX_TTL_DAYS,
+    API_KEY_MIN_TTL_DAYS,
     SESSION_TTL_MAX_MINUTES,
     SESSION_TTL_MIN_MINUTES,
+    get_api_key_ttl_policy,
     get_ip_allowlist,
     get_privacy_settings,
     get_retention_days,
@@ -19,6 +22,7 @@ from shotclassify_store import (
     get_sso_config,
     get_tenant_oidc,
     purge_expired_for_tenant,
+    set_api_key_ttl_policy,
     set_ip_allowlist,
     set_privacy_settings,
     set_retention_days,
@@ -406,4 +410,47 @@ def delete_tenant_oidc_route(request: Request) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+    return cfg.to_dict()
+
+
+@router.get("/api-key-ttl", dependencies=[require_role("admin")])
+def get_api_key_ttl_route(request: Request) -> dict:
+    """Return the tenant's API key max-TTL policy (days, or null = no policy)."""
+    tenant_id = _tenant(request)
+    return get_api_key_ttl_policy(tenant_id).to_dict()
+
+
+@router.put(
+    "/api-key-ttl",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_api_key_ttl_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Set or clear the tenant's max API key TTL in days.
+
+    Body: ``{"max_ttl_days": int|null}``. ``null`` clears the policy and
+    returns the tenant to legacy "no cap" behaviour. When set, every
+    subsequent ``POST /v1/api-keys`` with a longer ``ttl_days`` is
+    rejected 422, and ``POST /v1/api-keys/{id}/rotate`` clamps the
+    successor's expiry to ``now + max_ttl_days``. Existing keys are not
+    retroactively shortened so we never break a live integration on
+    policy change.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "JSON object body required.")
+    if "max_ttl_days" not in payload:
+        raise HTTPException(422, "Field 'max_ttl_days' is required (int or null).")
+    raw = payload["max_ttl_days"]
+    if raw is not None and (isinstance(raw, bool) or not isinstance(raw, int)):
+        raise HTTPException(422, "max_ttl_days must be an integer or null.")
+    actor = getattr(request.state, "principal", None)
+    try:
+        cfg = set_api_key_ttl_policy(
+            tenant_id, max_ttl_days=raw, updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     return cfg.to_dict()

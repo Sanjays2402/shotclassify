@@ -32,6 +32,7 @@ from typing import Iterable
 from sqlalchemy import select, update
 
 from .db import ApiKeyRow, get_session
+from . import tenant_settings as _tenant_settings
 
 # Canonical scope strings. ``admin`` is a superset shorthand the auth layer
 # expands so callers don't have to list every read+write capability.
@@ -165,6 +166,21 @@ def create_key(
     normalized = normalize_scopes(scopes)
     if not normalized:
         raise ValueError("at least one valid scope is required")
+    # Enforce per-tenant max-TTL policy. NULL policy = legacy behaviour.
+    # When the caller omits ttl_days but a policy exists, default to the
+    # policy cap so we never silently mint an unbounded key under a
+    # tenant that explicitly opted into rotation.
+    policy_cap: int | None = None
+    if tenant_id:
+        policy_cap = _tenant_settings.get_api_key_ttl_policy(tenant_id).max_ttl_days
+    if policy_cap is not None:
+        if ttl_days is None:
+            ttl_days = policy_cap
+        elif ttl_days > policy_cap:
+            raise ValueError(
+                f"ttl_days {ttl_days} exceeds tenant policy max of "
+                f"{policy_cap} days"
+            )
     token = _new_token()
     row = ApiKeyRow(
         id=_new_id(),
@@ -301,6 +317,24 @@ def rotate(
         if not new_label.endswith("(rotated)"):
             new_label = f"{row.label} (rotated)"[:128]
         new_token = _new_token()
+        # Clamp the successor's lifetime to the tenant policy if one is
+        # set. We never extend the inherited expiry; we only shorten it.
+        successor_expires = row.expires_at
+        if row.tenant_id:
+            policy_cap = _tenant_settings.get_api_key_ttl_policy(
+                row.tenant_id
+            ).max_ttl_days
+            if policy_cap is not None:
+                cap_aware = now + timedelta(days=policy_cap)
+                cap_naive = cap_aware.replace(tzinfo=None)
+                existing = successor_expires
+                existing_cmp = (
+                    existing.replace(tzinfo=None)
+                    if existing is not None and existing.tzinfo is not None
+                    else existing
+                )
+                if existing_cmp is None or existing_cmp > cap_naive:
+                    successor_expires = cap_naive
         new_row = ApiKeyRow(
             id=_new_id(),
             label=new_label,
@@ -308,7 +342,7 @@ def rotate(
             tenant_id=row.tenant_id,
             scopes=scopes,
             created_by=rotated_by or row.created_by,
-            expires_at=row.expires_at,
+            expires_at=successor_expires,
             rpm_override=row.rpm_override,
         )
         ses.add(new_row)
