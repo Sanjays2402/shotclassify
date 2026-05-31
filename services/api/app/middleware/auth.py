@@ -182,6 +182,32 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
             # is a single UPDATE and does not require a redeploy.
             record = api_keys_store.get_active_by_token(api_key)
             if record is not None:
+                # Per-key source-IP allowlist. When the key carries a
+                # non-empty CIDR list, the request's source IP must be
+                # contained by at least one range. This is the per-
+                # credential complement to the per-tenant IP allowlist
+                # and is enforced at the auth layer so adding a new route
+                # cannot accidentally bypass it.
+                if record.allowed_cidrs:
+                    fwd = request.headers.get("x-forwarded-for")
+                    client_ip = (
+                        fwd.split(",")[0].strip()
+                        if fwd
+                        else (request.client.host if request.client else "")
+                    )
+                    if not api_keys_store.ip_in_cidrs(client_ip, record.allowed_cidrs):
+                        return JSONResponse(
+                            {
+                                "error": "api_key_ip_not_allowed",
+                                "detail": (
+                                    "This API key is restricted to a fixed "
+                                    "set of source IPs. Your request came "
+                                    "from outside the allowlist."
+                                ),
+                                "client_ip": client_ip,
+                            },
+                            status_code=403,
+                        )
                 request.state.principal = f"api-key:{record.id}"
                 request.state.auth_api_key = api_key
                 request.state.auth_api_key_id = record.id

@@ -75,6 +75,12 @@ class ApiKeyRow(Base):
     # carve out elevated quotas for trusted integrations without lifting
     # the ceiling for everyone else.
     rpm_override: Mapped[int | None] = mapped_column(nullable=True)
+    # Optional per-key source-IP allowlist. ``None`` or ``[]`` means the
+    # key is accepted from any IP (default); a non-empty list of CIDR
+    # ranges restricts the key to callers whose source IP is contained
+    # by at least one range. Enforced in the auth middleware so adding
+    # a new route cannot accidentally bypass it.
+    allowed_cidrs: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
 
 class AuditLogRow(Base):

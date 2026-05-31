@@ -24,6 +24,7 @@ timestamps so leaked database backups do not leak usable credentials.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -86,6 +87,65 @@ def normalize_scopes(scopes: Iterable[str] | None) -> list[str]:
     return out
 
 
+# Maximum number of CIDR entries we will persist for a single key. Generous
+# enough for ``/32`` per office plus per-CI-runner ranges, low enough to
+# keep auth-time matching constant-time in practice.
+_MAX_ALLOWED_CIDRS = 64
+
+
+def normalize_cidrs(cidrs: Iterable[str] | None) -> list[str]:
+    """Parse, canonicalise, dedupe, and sort a CIDR allowlist.
+
+    Accepts bare addresses (``203.0.113.7`` becomes ``203.0.113.7/32``)
+    and CIDR ranges (``198.51.100.0/24``). IPv4 and IPv6 are both valid.
+    Raises :class:`ValueError` on any unparseable entry so callers see a
+    422 rather than silently dropping a typo to an empty list (which
+    would mean 'no restriction' and is exactly the wrong default).
+    """
+    if not cidrs:
+        return []
+    out: set[str] = set()
+    for raw in cidrs:
+        if raw is None:
+            continue
+        s = str(raw).strip()
+        if not s:
+            continue
+        try:
+            net = ipaddress.ip_network(s, strict=False)
+        except ValueError as exc:
+            raise ValueError(f"invalid CIDR: {s!r} ({exc})") from exc
+        out.add(str(net))
+    if len(out) > _MAX_ALLOWED_CIDRS:
+        raise ValueError(
+            f"too many CIDRs: {len(out)} (max {_MAX_ALLOWED_CIDRS})"
+        )
+    return sorted(out)
+
+
+def ip_in_cidrs(ip: str, cidrs: Iterable[str] | None) -> bool:
+    """True when ``ip`` is allowed by ``cidrs``.
+
+    An empty / missing allowlist means 'no restriction' and returns True.
+    Unparseable inputs fail closed (return False) so a malformed source
+    IP can never bypass an active allowlist.
+    """
+    items = list(cidrs or [])
+    if not items:
+        return True
+    try:
+        addr = ipaddress.ip_address(ip)
+    except (ValueError, TypeError):
+        return False
+    for c in items:
+        try:
+            if addr in ipaddress.ip_network(c, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 @dataclass(frozen=True)
 class ApiKeyRecord:
     id: str
@@ -98,6 +158,7 @@ class ApiKeyRecord:
     revoked_at: datetime | None
     created_by: str | None
     rpm_override: int | None
+    allowed_cidrs: list[str]
 
     @property
     def is_active(self) -> bool:
@@ -128,6 +189,7 @@ class ApiKeyRecord:
             "created_by": self.created_by,
             "active": self.is_active,
             "rpm_override": self.rpm_override,
+            "allowed_cidrs": list(self.allowed_cidrs),
         }
 
 
@@ -143,6 +205,7 @@ def _row_to_record(row: ApiKeyRow) -> ApiKeyRecord:
         revoked_at=row.revoked_at,
         created_by=row.created_by,
         rpm_override=row.rpm_override,
+        allowed_cidrs=list(row.allowed_cidrs or []),
     )
 
 
@@ -153,6 +216,7 @@ def create_key(
     scopes: Iterable[str],
     created_by: str | None,
     ttl_days: int | None = None,
+    allowed_cidrs: Iterable[str] | None = None,
 ) -> tuple[ApiKeyRecord, str]:
     """Mint a new key. Returns ``(record, plaintext_token)``.
 
@@ -182,6 +246,7 @@ def create_key(
                 f"{policy_cap} days"
             )
     token = _new_token()
+    cidrs = normalize_cidrs(allowed_cidrs)
     row = ApiKeyRow(
         id=_new_id(),
         label=label[:128],
@@ -190,6 +255,7 @@ def create_key(
         scopes=normalized,
         created_by=created_by,
         expires_at=(_now() + timedelta(days=ttl_days)) if ttl_days else None,
+        allowed_cidrs=cidrs or None,
     )
     with get_session() as ses:
         ses.add(row)
@@ -247,6 +313,32 @@ def touch_last_used(key_id: str) -> None:
             ses.commit()
     except Exception:  # pragma: no cover - defensive
         pass
+
+
+def set_allowed_cidrs(
+    key_id: str,
+    *,
+    tenant_id: str | None,
+    cidrs: Iterable[str] | None,
+) -> ApiKeyRecord | None:
+    """Replace the per-key source-IP allowlist.
+
+    Pass an empty list or ``None`` to clear the restriction (key accepted
+    from any IP). Returns ``None`` when the key is missing or belongs to
+    another tenant so a tenant-scoped admin can't probe ids across
+    workspaces. Raises :class:`ValueError` on invalid CIDR input.
+    """
+    normalised = normalize_cidrs(cidrs)
+    with get_session() as ses:
+        row = ses.scalar(select(ApiKeyRow).where(ApiKeyRow.id == key_id))
+        if row is None:
+            return None
+        if tenant_id is not None and row.tenant_id != tenant_id:
+            return None
+        row.allowed_cidrs = normalised or None
+        ses.commit()
+        ses.refresh(row)
+    return _row_to_record(row)
 
 
 def set_rpm_override(
@@ -344,6 +436,7 @@ def rotate(
             created_by=rotated_by or row.created_by,
             expires_at=successor_expires,
             rpm_override=row.rpm_override,
+            allowed_cidrs=list(row.allowed_cidrs) if row.allowed_cidrs else None,
         )
         ses.add(new_row)
         # Shorten (never extend) the old key's TTL. SQLite strips tzinfo on

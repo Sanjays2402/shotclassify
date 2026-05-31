@@ -31,6 +31,16 @@ class CreateKeyRequest(BaseModel):
     scopes: list[Literal["read:classifications", "write:classifications", "read:audit", "admin"]]
     tenant_id: str | None = Field(default=None, max_length=64)
     ttl_days: int | None = Field(default=None, ge=1, le=3650)
+    allowed_cidrs: list[str] | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional source-IP allowlist. Accepts bare addresses or CIDR "
+            "ranges, IPv4 and IPv6. Empty list or omitted means no "
+            "restriction. When set, requests with X-API-Key that arrive "
+            "from an IP outside the allowlist are rejected with HTTP 403."
+        ),
+    )
 
 
 def _effective_tenant(request: Request, requested: str | None) -> str | None:
@@ -95,6 +105,7 @@ def create_my_key(
             scopes=payload.scopes,
             created_by=created_by,
             ttl_days=payload.ttl_days,
+            allowed_cidrs=payload.allowed_cidrs,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -250,6 +261,69 @@ def set_key_rate_limit(
     try:
         record = api_keys_store.set_rpm_override(
             key_id, tenant_id=tenant_id, rpm=payload.rpm
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if record is None:
+        raise HTTPException(404, "API key not found.")
+    request.state.audit_target_id = record.id
+    return {"key": record.to_dict()}
+
+
+class AllowedCidrsRequest(BaseModel):
+    allowed_cidrs: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        description=(
+            "Replacement source-IP allowlist for this key. Accepts bare "
+            "addresses or CIDR ranges, IPv4 and IPv6. An empty list "
+            "clears the restriction so the key is again accepted from "
+            "any IP."
+        ),
+    )
+
+
+@router.patch(
+    "/{key_id}/allowed-cidrs",
+    dependencies=[require_mfa_step_up(), require_scope("admin")],
+)
+def set_key_allowed_cidrs(
+    key_id: str,
+    payload: AllowedCidrsRequest,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+    _: str = require_role("admin"),
+):
+    """Replace the per-key source-IP allowlist.
+
+    Pass ``allowed_cidrs=[]`` to clear the restriction. Returns 404 for
+    unknown ids or keys belonging to another tenant so admins cannot
+    probe ids across workspaces. Returns 422 with the offending entry
+    when an input is not a parseable IP address or CIDR range.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if dry_run:
+        try:
+            preview = api_keys_store.normalize_cidrs(payload.allowed_cidrs)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        keys = api_keys_store.list_keys(tenant_id=tenant_id, include_revoked=True)
+        record = next((k for k in keys if k.id == key_id), None)
+        if record is None:
+            return mark_dry_run(request, would_set=None)
+        request.state.audit_target_id = record.id
+        return mark_dry_run(
+            request,
+            would_set={
+                "id": record.id,
+                "label": record.label,
+                "current_allowed_cidrs": list(record.allowed_cidrs),
+                "new_allowed_cidrs": preview,
+            },
+        )
+    try:
+        record = api_keys_store.set_allowed_cidrs(
+            key_id, tenant_id=tenant_id, cidrs=payload.allowed_cidrs
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

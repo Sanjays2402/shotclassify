@@ -2,7 +2,35 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
-## What's new: workspace-wide MFA enrolment policy
+## What's new: per-API-key source-IP allowlist
+
+The workspace-level IP allowlist already gates the dashboard and the API as a whole, but every API key issued for that workspace inherited the same one allowlist. Enterprise procurement teams routinely ask for the tighter control: a single leaked CI key must not be replayable from a coffee shop even if the workspace allowlist is open, and a vendor integration key should be locked to that vendor's egress IPs without forcing the same constraint on every other key. Each key now carries its own optional `allowed_cidrs` list (IPv4 or IPv6, bare addresses or CIDR ranges). When the list is empty the key works from any IP (default, backward-compatible). When it is set, the auth middleware checks the request's source IP against the list before touching the route and returns `HTTP 403 api_key_ip_not_allowed` on a miss, with the rejected `client_ip` echoed back so an operator can see the actual source. Enforcement lives in `services/api/app/middleware/auth.py` so adding a new route cannot bypass it, rotation copies the allowlist to the successor key, and every change is captured by the existing tamper-evident audit chain. Admin only, MFA step-up required on writes. Coverage in `tests/test_api_key_ip_allowlist.py`.
+
+### Try it
+
+With the API running on `http://127.0.0.1:7441` and an admin key in `$ADMIN_KEY`:
+
+```sh
+# Mint a key locked to the office and CI ranges.
+curl -s -X POST -H "X-API-Key: $ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"label":"ci-runner","scopes":["write:classifications"],"allowed_cidrs":["198.51.100.0/24","203.0.113.7"]}' \
+  http://localhost:7441/v1/api-keys
+
+# Replace the allowlist on an existing key (empty list clears the restriction).
+curl -s -X PATCH -H "X-API-Key: $ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"allowed_cidrs":["10.0.0.0/8"]}' \
+  http://localhost:7441/v1/api-keys/<key_id>/allowed-cidrs
+```
+
+A call from outside the allowlist returns:
+
+```json
+{"error":"api_key_ip_not_allowed","detail":"...","client_ip":"203.0.113.5"}
+```
+
+## Previous: workspace-wide MFA enrolment policy
 
 Per-action MFA step-up already gated destructive admin mutations, but it never forced a viewer or operator who only reads data to enrol a second factor. That fails SOC 2 CC6.6, ISO 27001 A.9.4.2, and HIPAA 164.308(a)(5)(ii)(D), which all expect "every human user authenticates with multiple factors". An admin can now flip `mfa_required_for_members` on the workspace and every cookie-authenticated request from a member without a confirmed TOTP credential gets `HTTP 403 mfa_enrollment_required` until they enrol. A small allowlist (`/v1/mfa/*`, `/v1/me/*`, `/v1/sessions`, `/auth/logout`, healthchecks) stays open so members can complete enrolment without being locked out of the very pages that let them comply. API keys are exempt because they cover machine-to-machine integrations.
 
