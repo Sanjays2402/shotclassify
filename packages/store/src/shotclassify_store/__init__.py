@@ -23,7 +23,7 @@ from .db import (
 from . import api_keys as api_keys_store
 from .api_keys import ApiKeyRecord
 from . import memberships as memberships_store
-from .memberships import InvitationRecord, MembershipRecord
+from .memberships import InvitationRecord, MembershipRecord, SeatLimitExceeded
 from . import scim as scim_store
 from .scim import ScimConfig
 from . import webhooks as webhooks_store
@@ -110,6 +110,7 @@ __all__ = [
     "MembershipRow",
     "InvitationRecord",
     "InvitationRow",
+    "SeatLimitExceeded",
     "webhooks_store",
     "WebhookSubscriptionRow",
     "WebhookDeliveryRow",

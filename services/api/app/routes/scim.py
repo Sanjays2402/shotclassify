@@ -304,12 +304,22 @@ def create_user(payload: ScimUserIn, request: Request) -> JSONResponse:
     if existing_role is not None:
         # SCIM says POST of an existing resource is 409.
         return _scim_error(409, f"User '{principal}' already provisioned.", "uniqueness")
-    record = memberships_store.upsert_member(
-        tenant_id=tenant_id,
-        principal=principal,
-        role=role,
-        invited_by=getattr(request.state, "principal", "scim"),
-    )
+    try:
+        record = memberships_store.upsert_member(
+            tenant_id=tenant_id,
+            principal=principal,
+            role=role,
+            invited_by=getattr(request.state, "principal", "scim"),
+        )
+    except memberships_store.SeatLimitExceeded as exc:
+        # 507 Insufficient Storage is what Okta and Azure AD treat as a
+        # capacity error and retry on. 402 is more semantically correct
+        # but most IdP SCIM clients do not surface it cleanly.
+        return _scim_error(
+            507,
+            f"Seat limit reached ({exc.in_use}/{exc.limit}). Raise the cap to provision more users.",
+            "tooMany",
+        )
     return JSONResponse(
         _user_resource(tenant_id, record.principal, record.role, record.created_at, record.updated_at),
         status_code=201,

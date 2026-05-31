@@ -187,6 +187,17 @@ class TenantSettingsRow(Base):
     scim_token_last_four: Mapped[str | None] = mapped_column(String(8), nullable=True)
     scim_token_rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scim_default_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Seat limit: maximum number of paid seats this workspace can fill.
+    # A "seat" = one active membership row OR one pending (non-expired,
+    # non-revoked, non-accepted) invitation. NULL means unlimited (legacy
+    # behavior). Enforced inside ``memberships.upsert_member`` and
+    # ``memberships.create_invitation`` so every path that adds a seat
+    # (manual invite, SSO auto-join, SCIM provisioning) is gated
+    # consistently. Lowering the cap below current usage is allowed: it
+    # blocks new seats but does not retro-evict existing members. Wired
+    # into the admin console and the audit log; lets ops sell tiered
+    # plans ("Team: 10", "Business: 50") without a redeploy.
+    seat_limit: Mapped[int | None] = mapped_column(nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -477,6 +488,10 @@ def init_db() -> None:
                 if "session_ttl_minutes" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN session_ttl_minutes INTEGER"
+                    ))
+                if "seat_limit" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN seat_limit INTEGER"
                     ))
             if insp.has_table("sessions"):
                 scols = {c["name"] for c in insp.get_columns("sessions")}

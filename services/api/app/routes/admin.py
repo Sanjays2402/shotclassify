@@ -88,6 +88,12 @@ def overview(request: Request) -> dict[str, Any]:
     repo = Repository()
     classification_count = repo.count(tenant_id=tenant_id)
 
+    seat_limit = memberships_store.get_seat_limit(tenant_id)
+    seat_usage = memberships_store.count_seats_in_use(tenant_id)
+    seats_available = (
+        None if seat_limit is None else max(0, seat_limit - seat_usage["total"])
+    )
+
     return {
         "tenant_id": tenant_id,
         "members": {
@@ -115,5 +121,10 @@ def overview(request: Request) -> dict[str, Any]:
         },
         "classifications": {
             "total": classification_count,
+        },
+        "seats": {
+            "limit": seat_limit,
+            "in_use": seat_usage,
+            "available": seats_available,
         },
     }

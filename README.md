@@ -2,6 +2,27 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: per-workspace seat limits
+
+Workspaces now have a configurable seat cap (`seat_limit` on `tenant_settings`). A seat is one active member plus one pending invitation, so the count an admin sees in `/settings/members` matches what billing would charge. Enforcement lives in the store layer (`memberships.upsert_member` and `memberships.create_invitation`) so every path that adds a seat is gated identically: manual invites return HTTP 402 with `{"error":"seat_limit_exceeded", "seat_limit", "seats_in_use"}`, SCIM provisioning returns 507 `tooMany` so Okta/Azure AD retry cleanly, and SSO auto-join silently declines so a sign-in at the cap still succeeds without granting a role. Lowering the cap below current usage is allowed and only blocks new seats. Role changes on existing members never consume a seat. Coverage in `tests/test_seat_limits.py`.
+
+### Try it
+
+```bash
+# Read current seat accounting (admin role required).
+curl -s -H "X-API-Key: $ADMIN_KEY" http://localhost:7441/v1/workspace/seats
+# => {"tenant_id":"acme","seat_limit":null,
+#     "seats_in_use":{"members":3,"pending_invitations":1,"total":4},
+#     "seats_available":null}
+
+# Cap the workspace at 10 seats. MFA step-up required.
+curl -s -X PUT -H "X-API-Key: $ADMIN_KEY" -H "X-MFA-OTP: 123456" \
+  -H "content-type: application/json" \
+  -d '{"seat_limit":10}' http://localhost:7441/v1/workspace/seats
+```
+
+Manage from the dashboard at <http://localhost:3000/settings/members>.
+
 ## What's new: automatic retention enforcement
 
 Per-tenant retention windows are now enforced by the worker on a schedule instead of waiting for someone to remember to hit the manual purge route. The worker spawns a small daemon thread on startup that, every `RETENTION_SCHEDULER_INTERVAL_S` seconds (default 3600, floor 60), iterates every tenant with a positive `retention_days` policy and hard-deletes expired classifications and their blobs. Tenants without a policy are skipped. Each non-empty purge writes one audit row scoped to the owning tenant with the `scheduler` trigger, so workspace owners see automatic deletions in the same audit log as manual ones. Cross-tenant isolation is preserved end to end. Set `RETENTION_SCHEDULER_ENABLED=false` to opt out (for example when running an external cron). Coverage in `tests/test_retention_scheduler.py`.

@@ -25,6 +25,28 @@ from .db import InvitationRow, MembershipRow, get_session
 VALID_ROLES = ("admin", "operator", "viewer")
 DEFAULT_INVITE_TTL_DAYS = 7
 INVITE_TOKEN_PREFIX = "inv_"
+# Hard cap on the seat_limit column. Keeps a fat-fingered value (e.g.
+# 1e9) from making the count cheap-to-query but expensive-to-reason
+# about. Workspaces that genuinely need more should set NULL (unlimited).
+SEAT_LIMIT_MAX = 100_000
+
+
+class SeatLimitExceeded(Exception):
+    """Raised when adding a seat would exceed the workspace's seat_limit.
+
+    A "seat" is one active membership row plus one pending non-expired
+    invitation. The API layer maps this to HTTP 402 Payment Required so
+    billing/seat overage flows can branch on it without parsing strings.
+    """
+
+    def __init__(self, tenant_id: str, limit: int, in_use: int) -> None:
+        self.tenant_id = tenant_id
+        self.limit = limit
+        self.in_use = in_use
+        super().__init__(
+            f"Workspace {tenant_id!r} has used {in_use}/{limit} seats. "
+            "Revoke a pending invite, remove a member, or raise the seat limit."
+        )
 
 
 def _hash(token: str) -> str:
@@ -173,8 +195,22 @@ def upsert_member(
     principal: str,
     role: str,
     invited_by: str | None = None,
+    enforce_seat_limit: bool = True,
 ) -> MembershipRecord:
-    """Create or update a membership. Returns the resulting record."""
+    """Create or update a membership. Returns the resulting record.
+
+    When ``enforce_seat_limit`` is True (default) and the principal is not
+    already a member of the tenant, the call raises
+    :class:`SeatLimitExceeded` if seating a new member would exceed the
+    tenant's configured ``seat_limit``. Role changes on an existing member
+    never consume a new seat, so they are always allowed.
+
+    Pass ``enforce_seat_limit=False`` for internal bootstrap paths (test
+    fixtures, data migrations) where a quota check is not appropriate.
+    Production code paths that surface to humans (manual invite, SSO
+    auto-join, SCIM provisioning) MUST leave the default in place so the
+    quota cannot be bypassed by routing through a different surface.
+    """
     if role not in VALID_ROLES:
         raise ValueError(f"Invalid role '{role}'. Must be one of {VALID_ROLES}.")
     if not tenant_id or not principal:
@@ -192,6 +228,8 @@ def upsert_member(
             session.commit()
             session.refresh(existing)
             return _to_membership(existing)
+        if enforce_seat_limit:
+            _enforce_seat_capacity(session, tenant_id)
         row = MembershipRow(
             id=_new_id(),
             tenant_id=tenant_id,
@@ -279,6 +317,11 @@ def create_invitation(
         expires_at=now + timedelta(days=max(1, int(ttl_days))),
     )
     with get_session() as session:
+        # Pending invitations consume a seat for the purposes of the cap.
+        # Without this check an admin could mint more invitations than the
+        # plan allows and only hit the wall on accept, leaving paying
+        # invitees stranded.
+        _enforce_seat_capacity(session, tenant_id)
         session.add(row)
         session.commit()
         session.refresh(row)
@@ -390,3 +433,137 @@ def accept_invitation(
         session.refresh(row)
         session.refresh(member)
         return _to_invitation(row), _to_membership(member)
+
+
+# ---------------------------------------------------------------- seats
+
+
+def count_seats_in_use(tenant_id: str) -> dict[str, int]:
+    """Return the seat accounting for ``tenant_id``.
+
+    A seat is one of:
+
+    * an active membership row (any role), OR
+    * a pending invitation (not yet accepted, not revoked, not expired).
+
+    The pair add up to ``total`` -- the number that gets compared to the
+    ``seat_limit`` cap. Existing members are never counted twice (an
+    accepted invitation is no longer pending).
+    """
+    if not tenant_id:
+        return {"members": 0, "pending_invitations": 0, "total": 0}
+    members = len(list_members(tenant_id))
+    pending = len(list_invitations(tenant_id, include_inactive=False))
+    return {
+        "members": members,
+        "pending_invitations": pending,
+        "total": members + pending,
+    }
+
+
+def _count_seats_in_session(session, tenant_id: str) -> int:
+    """Same as :func:`count_seats_in_use`'s ``total`` but reuses an open
+    SQLAlchemy session. Used inside the same transaction as the row that
+    is about to be added so the check and the insert see consistent state.
+    """
+    now = datetime.now(UTC)
+    member_rows = session.execute(
+        select(MembershipRow).where(MembershipRow.tenant_id == tenant_id)
+    ).scalars().all()
+    invite_rows = session.execute(
+        select(InvitationRow).where(InvitationRow.tenant_id == tenant_id)
+    ).scalars().all()
+    pending = 0
+    for r in invite_rows:
+        if r.accepted_at is not None or r.revoked_at is not None:
+            continue
+        expires_at = r.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at < now:
+            continue
+        pending += 1
+    return len(member_rows) + pending
+
+
+def get_seat_limit(tenant_id: str) -> int | None:
+    """Return the seat cap for ``tenant_id``, or ``None`` if unlimited."""
+    if not tenant_id:
+        return None
+    # Local import keeps this module free of a hard cycle with db; we
+    # only need the row type at call time.
+    from .db import TenantSettingsRow, get_session as _gs
+
+    with _gs() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        return row.seat_limit
+
+
+def set_seat_limit(
+    tenant_id: str, seat_limit: int | None, updated_by: str | None
+) -> int | None:
+    """Persist a new seat cap. ``None`` means unlimited.
+
+    Lowering the cap below the current usage is allowed: it blocks all
+    new seats but does not retro-evict existing members. The admin must
+    revoke pending invites or remove members to come back under quota.
+    Raises ``ValueError`` on invalid input (negative, zero, or beyond
+    :data:`SEAT_LIMIT_MAX`).
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    if seat_limit is not None:
+        if not isinstance(seat_limit, int) or isinstance(seat_limit, bool):
+            raise ValueError("seat_limit must be an integer or null")
+        if seat_limit < 1:
+            raise ValueError("seat_limit must be at least 1, or null for unlimited")
+        if seat_limit > SEAT_LIMIT_MAX:
+            raise ValueError(f"seat_limit must not exceed {SEAT_LIMIT_MAX}")
+
+    from .db import TenantSettingsRow, get_session as _gs, init_db as _init
+
+    _init()
+    with _gs() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        now = datetime.now(UTC)
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                seat_limit=seat_limit,
+                updated_at=now,
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.seat_limit = seat_limit
+            row.updated_at = now
+            row.updated_by = updated_by
+        s.commit()
+    return seat_limit
+
+
+def _enforce_seat_capacity(session, tenant_id: str) -> None:
+    """Raise :class:`SeatLimitExceeded` if adding one more seat would
+    exceed ``seat_limit``. NULL/0 limit means unlimited.
+
+    Called from inside ``upsert_member`` (only for net-new members) and
+    ``create_invitation`` (for every new invitation, since pending
+    invites count toward the cap).
+    """
+    from .db import TenantSettingsRow
+
+    row = session.execute(
+        select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+    ).scalar_one_or_none()
+    limit = row.seat_limit if row is not None else None
+    if not limit or limit <= 0:
+        return
+    in_use = _count_seats_in_session(session, tenant_id)
+    if in_use >= limit:
+        raise SeatLimitExceeded(tenant_id, limit, in_use)

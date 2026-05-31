@@ -13,6 +13,7 @@ import {
   Shield,
   Clock,
   XCircle,
+  Seat,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -76,6 +77,14 @@ export default function MembersSettingsPage() {
     fetcher,
     { revalidateOnFocus: false },
   );
+  const seats = useSWR<{
+    tenant_id: string;
+    seat_limit: number | null;
+    seats_in_use: { members: number; pending_invitations: number; total: number };
+    seats_available: number | null;
+  }>("/api/workspace/seats", fetcher, { revalidateOnFocus: false });
+  const [seatDraft, setSeatDraft] = useState<string>("");
+  const [seatBusy, setSeatBusy] = useState(false);
 
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("operator");
@@ -205,6 +214,50 @@ export default function MembersSettingsPage() {
 
       {!unauth && !forbidden && (
         <>
+          <SeatPanel
+            data={seats.data}
+            loading={!seats.data && !seats.error}
+            draft={seatDraft}
+            setDraft={setSeatDraft}
+            busy={seatBusy}
+            otp={otp}
+            onSave={async (next) => {
+              setSeatBusy(true);
+              setFlash(null);
+              try {
+                const res = await fetch("/api/workspace/seats", {
+                  method: "PUT",
+                  headers: {
+                    "content-type": "application/json",
+                    ...(otp ? { "x-mfa-otp": otp } : {}),
+                  },
+                  body: JSON.stringify({ seat_limit: next }),
+                });
+                const body = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                  throw new Error(
+                    typeof body?.detail === "string"
+                      ? body.detail
+                      : `${res.status} ${res.statusText}`,
+                  );
+                }
+                setSeatDraft("");
+                setFlash({
+                  kind: "ok",
+                  msg:
+                    next === null
+                      ? "Seat limit removed. Workspace is now unlimited."
+                      : `Seat limit set to ${next}.`,
+                });
+                seats.mutate();
+              } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                setFlash({ kind: "err", msg });
+              } finally {
+                setSeatBusy(false);
+              }
+            }}
+          />
           <section className="mb-8 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="mb-1 flex items-center gap-2 text-base font-semibold text-slate-900">
               <EnvelopeSimple size={20} weight="duotone" className="text-slate-700" />
@@ -411,6 +464,180 @@ export default function MembersSettingsPage() {
           </section>
         </>
       )}
+    </div>
+  );
+}
+
+type SeatSummary = {
+  tenant_id: string;
+  seat_limit: number | null;
+  seats_in_use: { members: number; pending_invitations: number; total: number };
+  seats_available: number | null;
+};
+
+function SeatPanel({
+  data,
+  loading,
+  draft,
+  setDraft,
+  busy,
+  otp,
+  onSave,
+}: {
+  data: SeatSummary | undefined;
+  loading: boolean;
+  draft: string;
+  setDraft: (v: string) => void;
+  busy: boolean;
+  otp: string;
+  onSave: (next: number | null) => Promise<void>;
+}) {
+  const limit = data?.seat_limit ?? null;
+  const total = data?.seats_in_use.total ?? 0;
+  const available = data?.seats_available ?? null;
+  const atCap = limit !== null && total >= limit;
+  const nearCap =
+    limit !== null && !atCap && total >= Math.max(1, Math.floor(limit * 0.8));
+
+  const pct = limit && limit > 0 ? Math.min(100, Math.round((total / limit) * 100)) : 0;
+  const barTone = atCap
+    ? "bg-rose-500"
+    : nearCap
+      ? "bg-amber-500"
+      : "bg-emerald-500";
+
+  const parsed = draft.trim() === "" ? null : Number(draft);
+  const draftValid =
+    draft.trim() === "" || (Number.isInteger(parsed) && (parsed as number) >= 1);
+
+  return (
+    <section className="mb-8 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="flex items-start gap-2">
+          <Seat size={20} weight="duotone" className="mt-0.5 text-slate-700" />
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Seats</h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              A seat is one active member or one pending invitation. Lower the
+              cap to block new seats without removing anyone.
+            </p>
+          </div>
+        </div>
+        {limit !== null && (
+          <span
+            className={
+              atCap
+                ? "inline-flex items-center rounded-md bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-200"
+                : nearCap
+                  ? "inline-flex items-center rounded-md bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200"
+                  : "inline-flex items-center rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200"
+            }
+          >
+            {atCap ? "At cap" : nearCap ? "Near cap" : "Healthy"}
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="h-16 animate-pulse rounded-md bg-slate-100" />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+            <Stat label="In use" value={String(total)} />
+            <Stat
+              label="Members"
+              value={String(data?.seats_in_use.members ?? 0)}
+            />
+            <Stat
+              label="Pending"
+              value={String(data?.seats_in_use.pending_invitations ?? 0)}
+            />
+            <Stat
+              label="Available"
+              value={limit === null ? "Unlimited" : String(available ?? 0)}
+            />
+          </div>
+
+          {limit !== null && (
+            <div className="mt-4">
+              <div className="mb-1 flex items-center justify-between text-xs text-slate-500">
+                <span>
+                  {total} of {limit} used
+                </span>
+                <span>{pct}%</span>
+              </div>
+              <div
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={limit}
+                aria-valuenow={total}
+                className="h-2 w-full overflow-hidden rounded-full bg-slate-100"
+              >
+                <div
+                  className={`h-full ${barTone}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-end">
+            <label className="flex-1">
+              <span className="mb-1 block text-xs font-medium text-slate-700">
+                Seat limit
+              </span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder={limit === null ? "Unlimited" : String(limit)}
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+              />
+              {!draftValid && (
+                <span className="mt-1 block text-xs text-rose-600">
+                  Enter a whole number greater than zero, or leave blank for
+                  unlimited.
+                </span>
+              )}
+            </label>
+            <button
+              type="button"
+              disabled={busy || !draftValid || draft.trim() === ""}
+              onClick={() => onSave(parsed as number)}
+              className="inline-flex items-center justify-center rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+            >
+              {busy ? "Saving" : "Save limit"}
+            </button>
+            <button
+              type="button"
+              disabled={busy || limit === null}
+              onClick={() => onSave(null)}
+              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Remove cap
+            </button>
+          </div>
+          {!otp && (
+            <p className="mt-2 text-xs text-slate-500">
+              Saving requires an MFA code. Add yours in the invite section
+              below before changing the cap.
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+      <div className="text-[11px] uppercase tracking-wide text-slate-500">
+        {label}
+      </div>
+      <div className="mt-0.5 text-lg font-semibold text-slate-900">{value}</div>
     </div>
   );
 }

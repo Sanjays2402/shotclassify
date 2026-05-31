@@ -22,6 +22,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from shotclassify_store import memberships_store
+from shotclassify_store.memberships import SeatLimitExceeded
 
 from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
@@ -87,6 +88,16 @@ def update_member_role(
             role=payload.role,
             invited_by=caller,
         )
+    except SeatLimitExceeded as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "seat_limit_exceeded",
+                "message": str(exc),
+                "seat_limit": exc.limit,
+                "seats_in_use": exc.in_use,
+            },
+        ) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     request.state.audit_target_id = record.id
@@ -170,6 +181,16 @@ def create_invitation(payload: CreateInvitationRequest, request: Request) -> dic
             invited_by=caller,
             ttl_days=payload.ttl_days,
         )
+    except SeatLimitExceeded as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "seat_limit_exceeded",
+                "message": str(exc),
+                "seat_limit": exc.limit,
+                "seats_in_use": exc.in_use,
+            },
+        ) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     body = record.to_dict()
@@ -222,4 +243,66 @@ def accept_invitation(payload: AcceptInvitationRequest, request: Request) -> dic
     return {
         "invitation": invitation.to_dict(),
         "membership": membership.to_dict(),
+    }
+
+
+# ---------------------------------------------------------------- seats
+
+
+class SeatLimitUpdate(BaseModel):
+    # ``None`` (or the literal JSON ``null``) means unlimited. Any
+    # positive integer becomes the new cap. Lowering the cap below the
+    # current usage is allowed and blocks new seats; it never evicts
+    # existing members.
+    seat_limit: int | None = Field(default=None, ge=1, le=memberships_store.SEAT_LIMIT_MAX)
+
+
+@router.get("/workspace/seats", dependencies=[require_role("admin")])
+def get_seats(request: Request) -> dict:
+    """Return seat accounting for the current workspace.
+
+    Response shape:
+
+    ``{"tenant_id": ..., "seat_limit": int|null,
+       "seats_in_use": {"members": int, "pending_invitations": int, "total": int},
+       "seats_available": int|null}``
+
+    ``seats_available`` is ``null`` when the cap is unlimited.
+    """
+    tenant_id = _require_tenant(request)
+    limit = memberships_store.get_seat_limit(tenant_id)
+    in_use = memberships_store.count_seats_in_use(tenant_id)
+    available: int | None
+    if limit is None:
+        available = None
+    else:
+        available = max(0, limit - in_use["total"])
+    return {
+        "tenant_id": tenant_id,
+        "seat_limit": limit,
+        "seats_in_use": in_use,
+        "seats_available": available,
+    }
+
+
+@router.put(
+    "/workspace/seats",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def set_seats(payload: SeatLimitUpdate, request: Request) -> dict:
+    tenant_id = _require_tenant(request)
+    caller = getattr(request.state, "principal", None)
+    try:
+        new_limit = memberships_store.set_seat_limit(
+            tenant_id, payload.seat_limit, updated_by=caller
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    in_use = memberships_store.count_seats_in_use(tenant_id)
+    request.state.audit_target_id = tenant_id
+    return {
+        "tenant_id": tenant_id,
+        "seat_limit": new_limit,
+        "seats_in_use": in_use,
+        "seats_available": None if new_limit is None else max(0, new_limit - in_use["total"]),
     }
