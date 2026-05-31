@@ -7,6 +7,7 @@ from .db import (
     Base,
     ClassificationRow,
     SavedViewRow,
+    SessionRow,
     TenantSettingsRow,
     get_engine,
     get_session,
@@ -14,6 +15,8 @@ from .db import (
 )
 from .repository import Repository
 from .saved_views import SavedViewRepository
+from . import sessions as session_store
+from .sessions import SessionInfo
 from .retention import (
     PurgeResult,
     get_retention_days,
@@ -34,6 +37,9 @@ __all__ = [
     "AuditLogRow",
     "ClassificationRow",
     "SavedViewRow",
+    "SessionRow",
+    "SessionInfo",
+    "session_store",
     "TenantSettingsRow",
     "get_engine",
     "get_session",

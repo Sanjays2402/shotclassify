@@ -2,6 +2,33 @@
 
 ShotClassify is a real-time screenshot classifier with confidence scores, OCR, history, share links, and a programmatic /v1 API.
 
+## What's new: revocable browser sessions
+
+Browser sessions are now tracked server-side. Every cookie carries an opaque session id that maps to a row in the `sessions` table, so the app can show every device a user is signed in on, revoke any one of them, and force-logout every other device with one click. The signed-cookie-only approach we used to ship could not actually invalidate a stolen cookie before its 30-day TTL, which is a deal-blocker for SOC2 CC6.1 and for most enterprise security reviews. It can now.
+
+Manage your sessions in the dashboard at `/settings/sessions`, or via the API:
+
+```sh
+# List your active sessions (uses the sc_session cookie)
+curl -s http://localhost:7441/v1/sessions -b cookies.txt | jq
+
+# Revoke a single session by id
+curl -s -X DELETE http://localhost:7441/v1/sessions/$SID -b cookies.txt | jq
+
+# Force-logout every other device but keep this one signed in
+curl -s -X POST 'http://localhost:7441/v1/sessions/revoke-all?keep_current=true' \
+  -b cookies.txt | jq
+```
+
+`POST /auth/logout` also revokes the underlying session row so a copied cookie cannot be replayed. Admins get `GET /v1/sessions/admin` and `POST /v1/sessions/admin/revoke-principal?principal=<login>` to kick any user out of every device. Cross-principal isolation, force-logout-keep-current, and the logout-revokes-row contract are covered by `tests/test_sessions.py`.
+
+### Try it
+
+```sh
+make dev        # API on :7441, web on :3000
+open http://localhost:3000/settings/sessions
+```
+
 ## What's new: per-tenant data retention policy
 
 Admins can now set a per-tenant retention window in days. Classifications older than the window are hard-deleted by the retention job. The audit log is preserved for compliance, blob files are unlinked, and the policy is enforced strictly per tenant so one workspace's policy can never touch another workspace's data. Set it to 0 or leave it empty to keep data forever, which matches the prior behavior so existing deployments are unaffected.

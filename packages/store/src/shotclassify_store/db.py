@@ -127,6 +127,35 @@ class TenantSettingsRow(Base):
     updated_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
+class SessionRow(Base):
+    """Server-side record of an issued session cookie.
+
+    Lets the app revoke individual sessions or force-logout every session
+    for a principal, which the stateless signed-cookie approach cannot do
+    on its own. Every authenticated request validates the cookie's ``sid``
+    against this table and bumps ``last_seen_at`` so admins can see live
+    activity.
+    """
+
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    principal: Mapped[str] = mapped_column(String(128), index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()
@@ -173,6 +202,8 @@ def init_db() -> None:
                 Base.metadata.tables["saved_views"].create(bind=conn)
             if not insp.has_table("tenant_settings"):
                 Base.metadata.tables["tenant_settings"].create(bind=conn)
+            if not insp.has_table("sessions"):
+                Base.metadata.tables["sessions"].create(bind=conn)
     except Exception:
         # Best-effort. Real schema management lives in alembic.
         pass

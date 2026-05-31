@@ -13,6 +13,8 @@ import {
   CheckCircle,
   Clock,
   Broom,
+  Devices,
+  SignOut,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -282,7 +284,213 @@ export default function SecuritySettingsPage() {
       </section>
 
       <RetentionSection />
+      <SessionsSection />
     </div>
+  );
+}
+
+type SessionRow = {
+  id: string;
+  principal: string;
+  created_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+  client_ip: string | null;
+  user_agent: string | null;
+  current: boolean;
+};
+
+type SessionsResponse = {
+  sessions: SessionRow[];
+  current: string | null;
+};
+
+function formatWhen(iso: string): string {
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
+function shortAgent(ua: string | null): string {
+  if (!ua) return "Unknown client";
+  // Trim to something recognizable; full UA is in the tooltip.
+  const m =
+    ua.match(/(Edg|Chrome|Firefox|Safari|curl|httpx|python-requests)[\/ ]?[\d.]*/i) ??
+    null;
+  return m ? m[0] : ua.slice(0, 48);
+}
+
+function SessionsSection() {
+  const { data, error, isLoading, mutate } = useSWR<SessionsResponse>(
+    "/api/sessions",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+  const [busy, setBusy] = useState<string | null>(null);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(
+    null,
+  );
+
+  const status = error as ApiError | undefined;
+  const unauth = status?.status === 401;
+  const forbidden = status?.status === 403;
+
+  const revokeOne = async (id: string) => {
+    setBusy(id);
+    setFlash(null);
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Revoke failed (${res.status}).`);
+      setFlash({ kind: "ok", msg: "Session revoked." });
+      await mutate();
+    } catch (e) {
+      setFlash({
+        kind: "err",
+        msg: e instanceof Error ? e.message : "Revoke failed.",
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const revokeAllOthers = async () => {
+    if (
+      !confirm(
+        "Sign out of every other session? Other devices will need to log in again.",
+      )
+    )
+      return;
+    setBusy("__all__");
+    setFlash(null);
+    try {
+      const res = await fetch("/api/sessions/revoke-all?keep_current=true", {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error(`Revoke-all failed (${res.status}).`);
+      const body = (await res.json()) as { revoked: number };
+      setFlash({
+        kind: "ok",
+        msg: `Signed ${body.revoked} other ${body.revoked === 1 ? "session" : "sessions"} out.`,
+      });
+      await mutate();
+    } catch (e) {
+      setFlash({
+        kind: "err",
+        msg: e instanceof Error ? e.message : "Revoke-all failed.",
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const sessions = data?.sessions ?? [];
+  const otherCount = sessions.filter((s) => !s.current && !s.revoked_at).length;
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-center gap-2 mb-2">
+        <Devices size={20} weight="duotone" className="text-indigo-600" />
+        <h2 className="text-base font-semibold">Active sessions</h2>
+        <button
+          type="button"
+          onClick={revokeAllOthers}
+          disabled={busy !== null || otherCount === 0}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900"
+        >
+          <SignOut size={14} weight="duotone" />
+          Sign out other sessions
+        </button>
+      </div>
+      <p className="text-sm text-zinc-500 mb-4">
+        Every signed-in device for this account. Revoke a session to log that
+        device out immediately even if the cookie is still on disk.
+      </p>
+
+      {flash ? (
+        <div
+          className={`mb-3 rounded-md px-3 py-2 text-sm ${
+            flash.kind === "ok"
+              ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+              : "bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300"
+          }`}
+        >
+          {flash.msg}
+        </div>
+      ) : null}
+
+      {isLoading ? (
+        <div className="space-y-2" aria-busy="true">
+          <div className="h-14 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+          <div className="h-14 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+        </div>
+      ) : unauth ? (
+        <p className="text-sm text-zinc-500">Sign in to view your sessions.</p>
+      ) : forbidden ? (
+        <p className="text-sm text-zinc-500">
+          This account is not permitted to view sessions.
+        </p>
+      ) : status ? (
+        <p className="text-sm text-rose-600">
+          {status.message || "Could not load sessions."}
+        </p>
+      ) : sessions.length === 0 ? (
+        <p className="text-sm text-zinc-500">
+          No active sessions. API-key callers do not create sessions.
+        </p>
+      ) : (
+        <ul className="divide-y divide-zinc-100 rounded-md border border-zinc-200 dark:divide-zinc-900 dark:border-zinc-800">
+          {sessions.map((s) => (
+            <li
+              key={s.id}
+              className="flex flex-col gap-2 px-3 py-3 text-sm sm:flex-row sm:items-center sm:gap-4"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className="truncate font-medium text-zinc-900 dark:text-zinc-100"
+                    title={s.user_agent ?? ""}
+                  >
+                    {shortAgent(s.user_agent)}
+                  </span>
+                  {s.current ? (
+                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
+                      This device
+                    </span>
+                  ) : null}
+                  {s.revoked_at ? (
+                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+                      Revoked
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-500">
+                  <span>IP {s.client_ip ?? "unknown"}</span>
+                  <span>Last seen {formatWhen(s.last_seen_at)}</span>
+                  <span>Expires {formatWhen(s.expires_at)}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => revokeOne(s.id)}
+                disabled={busy !== null || !!s.revoked_at}
+                aria-label={s.current ? "Sign out of this device" : "Revoke session"}
+                className="inline-flex items-center gap-1.5 self-start rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 sm:self-auto dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900"
+              >
+                <Trash size={14} weight="duotone" />
+                {s.current ? "Sign out" : "Revoke"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

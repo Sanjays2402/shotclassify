@@ -9,8 +9,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from shotclassify_common import get_settings
+from shotclassify_store import session_store
 
-from ..middleware.auth import issue_session
+from ..middleware.auth import _decode_sid, issue_session
+from ..middleware.tenant import tenant_for_principal
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -66,15 +68,28 @@ def callback(request: Request, code: str, state: str):
         login_name = u.json().get("login")
     if s.auth_allowed_github_login and login_name != s.auth_allowed_github_login:
         raise HTTPException(403, "Not in allowlist.")
+    client_ip = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    cookie, _sid = issue_session(
+        login_name,
+        client_ip=client_ip,
+        user_agent=user_agent,
+        tenant_id=tenant_for_principal(login_name),
+    )
     resp = RedirectResponse("/")
     resp.set_cookie(
-        "sc_session", issue_session(login_name), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30
+        "sc_session", cookie, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30
     )
     return resp
 
 
 @router.post("/logout")
-def logout():
+def logout(request: Request):
+    # Revoke the server-side session row so the cookie cannot be replayed
+    # even if the user neglects to clear it.
+    sid = _decode_sid(request.cookies.get("sc_session"))
+    if sid:
+        session_store.revoke(sid)
     resp = RedirectResponse("/", status_code=303)
     resp.delete_cookie("sc_session")
     return resp
