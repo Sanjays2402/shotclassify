@@ -6,7 +6,7 @@ import io
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from shotclassify_common import Category, ClassificationRecord
@@ -118,6 +118,7 @@ def list_history(
     min_conf: float | None = Query(None, ge=0.0, le=1.0),
     max_conf: float | None = Query(None, ge=0.0, le=1.0),
     sort: str = Query("new", pattern="^(new|old|conf_asc|conf_desc)$"),
+    tag: str | None = Query(None, max_length=32, description="Filter by a single tag (case-insensitive)."),
 ) -> list[ClassificationRecord]:
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
@@ -132,6 +133,7 @@ def list_history(
         min_conf=min_conf,
         max_conf=max_conf,
         sort=sort,
+        tag=tag,
     )
     total = repo.count_filtered(
         category=category,
@@ -141,6 +143,7 @@ def list_history(
         until=until,
         min_conf=min_conf,
         max_conf=max_conf,
+        tag=tag,
     )
     response.headers["x-total-count"] = str(total)
     response.headers["x-offset"] = str(offset)
@@ -176,3 +179,57 @@ def delete(item_id: str, request: Request):
     if not Repository().delete(item_id, tenant_id=tenant_id):
         raise HTTPException(404, "Not found.")
     return {"ok": True}
+
+
+@router.patch(
+    "/{item_id}",
+    response_model=ClassificationRecord,
+    dependencies=[require_role("operator")],
+)
+def patch(
+    item_id: str,
+    request: Request,
+    payload: dict = Body(
+        ...,
+        examples=[{"label": "Q3 receipts", "tags": ["finance", "reviewed"]}],
+    ),
+) -> ClassificationRecord:
+    """Rename a saved shot and/or replace its tag list.
+
+    Body fields (all optional):
+      * ``label`` (string|null): rename. ``null`` clears.
+      * ``tags`` (list[string]): replaces the full tag list. Empty list clears.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Body must be a JSON object.")
+    allowed = {"label", "tags"}
+    unknown = set(payload) - allowed
+    if unknown:
+        raise HTTPException(400, f"Unknown field(s): {sorted(unknown)}")
+    label_in = payload.get("label", ...)
+    tags_in = payload.get("tags", None)
+    clear_label = False
+    label_val: str | None = None
+    if label_in is not ...:
+        if label_in is None:
+            clear_label = True
+        elif isinstance(label_in, str):
+            label_val = label_in
+        else:
+            raise HTTPException(400, "`label` must be a string or null.")
+    if tags_in is not None:
+        if not isinstance(tags_in, list) or not all(isinstance(t, str) for t in tags_in):
+            raise HTTPException(400, "`tags` must be a list of strings.")
+        if len(tags_in) > 64:
+            raise HTTPException(400, "Too many tags (max 16 kept).")
+    tenant_id = getattr(request.state, "tenant_id", None)
+    rec = Repository().update_meta(
+        item_id,
+        label=label_val,
+        tags=tags_in,
+        tenant_id=tenant_id,
+        clear_label=clear_label,
+    )
+    if not rec:
+        raise HTTPException(404, "Not found.")
+    return rec

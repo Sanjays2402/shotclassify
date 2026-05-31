@@ -40,6 +40,11 @@ class ClassificationRow(Base):
     # Nullable so rows written before the migration remain readable; the
     # repository normalizes NULL to the default tenant at query time.
     tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # User-editable label (rename) and free-form tags. Both are optional and
+    # surfaced through PATCH /v1/history/{id}. ``tags`` is a JSON list of
+    # lowercase strings; the repository normalizes input before write.
+    label: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    tags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
 
 class ApiKeyRow(Base):
@@ -97,4 +102,23 @@ def get_session():
 
 
 def init_db() -> None:
-    Base.metadata.create_all(get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(engine)
+    # Lightweight in-place migration for SQLite dev databases that predate the
+    # ``label`` / ``tags`` columns. Production Postgres deploys should run
+    # ``alembic upgrade head``; this just keeps local dev painless.
+    try:
+        from sqlalchemy import inspect, text
+
+        insp = inspect(engine)
+        if not insp.has_table("classifications"):
+            return
+        cols = {c["name"] for c in insp.get_columns("classifications")}
+        with engine.begin() as conn:
+            if "label" not in cols:
+                conn.execute(text("ALTER TABLE classifications ADD COLUMN label VARCHAR(256)"))
+            if "tags" not in cols:
+                conn.execute(text("ALTER TABLE classifications ADD COLUMN tags JSON"))
+    except Exception:
+        # Best-effort. Real schema management lives in alembic.
+        pass

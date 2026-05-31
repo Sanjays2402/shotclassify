@@ -10,7 +10,7 @@ from shotclassify_common import (
     ProcessResult,
     RouteDecision,
 )
-from sqlalchemy import func, or_, select
+from sqlalchemy import Text, func, or_, select
 
 from .db import ClassificationRow, get_session, init_db
 
@@ -138,6 +138,7 @@ class Repository:
         min_conf: float | None = None,
         max_conf: float | None = None,
         sort: str = "new",
+        tag: str | None = None,
     ):
         from sqlalchemy import asc, desc
 
@@ -167,6 +168,12 @@ class Repository:
             stmt = stmt.where(ClassificationRow.confidence >= float(min_conf))
         if max_conf is not None:
             stmt = stmt.where(ClassificationRow.confidence <= float(max_conf))
+        if tag:
+            # JSON tag-membership match. SQLite stores JSON as text, so we
+            # fall back to a substring LIKE on a quoted token, which is
+            # adequate for the small, normalized tag vocabulary we write.
+            needle = f'%"{tag.strip().lower()}"%'
+            stmt = stmt.where(ClassificationRow.tags.cast(Text).ilike(needle))
         stmt = self._scope_tenant(stmt, tenant_id)
         return stmt
 
@@ -182,6 +189,7 @@ class Repository:
         min_conf: float | None = None,
         max_conf: float | None = None,
         sort: str = "new",
+        tag: str | None = None,
     ) -> list[ClassificationRecord]:
         stmt = self._list_stmt(
             category=category,
@@ -192,6 +200,7 @@ class Repository:
             min_conf=min_conf,
             max_conf=max_conf,
             sort=sort,
+            tag=tag,
         )
         if offset:
             stmt = stmt.offset(int(offset))
@@ -209,6 +218,7 @@ class Repository:
         until: "datetime | None" = None,
         min_conf: float | None = None,
         max_conf: float | None = None,
+        tag: str | None = None,
     ) -> int:
         from sqlalchemy import func
 
@@ -220,6 +230,7 @@ class Repository:
             until=until,
             min_conf=min_conf,
             max_conf=max_conf,
+            tag=tag,
         ).order_by(None).with_only_columns(func.count(ClassificationRow.id))
         with get_session() as s:
             return int(s.execute(stmt).scalar() or 0)
@@ -234,6 +245,49 @@ class Repository:
         if tenant_id is not None and row.tenant_id not in (None, tenant_id):
             return None
         return self._to_record(row)
+
+    def update_meta(
+        self,
+        item_id: str,
+        label: str | None = None,
+        tags: list[str] | None = None,
+        tenant_id: str | None = None,
+        clear_label: bool = False,
+    ) -> ClassificationRecord | None:
+        """Update the user-editable label and/or tags on a single record.
+
+        Passing ``clear_label=True`` removes the label. ``tags`` replaces the
+        full list when provided (use an empty list to clear). The repository
+        normalizes tag strings (trim, lowercase, dedupe, cap at 16 entries
+        and 32 chars each) before writing.
+        """
+        with get_session() as s:
+            row = s.get(ClassificationRow, item_id)
+            if not row:
+                return None
+            if tenant_id is not None and row.tenant_id not in (None, tenant_id):
+                return None
+            if clear_label:
+                row.label = None
+            elif label is not None:
+                cleaned = label.strip()
+                row.label = cleaned[:256] if cleaned else None
+            if tags is not None:
+                seen: set[str] = set()
+                cleaned_tags: list[str] = []
+                for t in tags:
+                    if not isinstance(t, str):
+                        continue
+                    norm = t.strip().lower()[:32]
+                    if not norm or norm in seen:
+                        continue
+                    seen.add(norm)
+                    cleaned_tags.append(norm)
+                    if len(cleaned_tags) >= 16:
+                        break
+                row.tags = cleaned_tags
+            s.commit()
+        return self.get(item_id, tenant_id=tenant_id)
 
     def correct(
         self,
@@ -391,4 +445,6 @@ class Repository:
             route=RouteDecision.model_validate(row.route or {"action": "none"}),
             image_path=row.image_path,
             user_corrected_to=Category(row.user_corrected_to) if row.user_corrected_to else None,
+            label=row.label,
+            tags=list(row.tags or []),
         )

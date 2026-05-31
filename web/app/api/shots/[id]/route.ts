@@ -31,3 +31,23 @@ export async function DELETE(
     headers: { "content-type": res.headers.get("content-type") ?? "application/json" },
   });
 }
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const body = await req.text();
+  const res = await fetch(`${API}/v1/history/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: {
+      "x-api-key": KEY,
+      "content-type": "application/json",
+    },
+    body,
+  });
+  return new NextResponse(await res.text(), {
+    status: res.status,
+    headers: { "content-type": res.headers.get("content-type") ?? "application/json" },
+  });
+}

@@ -2,6 +2,28 @@
 
 Screenshot classifier with vision LLM, OCR, structured extraction, and action routing.
 
+## What's new: rename and tag your shots
+
+Every saved classification can now be renamed and tagged from the shot
+detail page. Labels and tags are scoped to the caller's tenant and the
+`/shots` history page filters by tag. Click any tag chip in the table to
+filter the list to that tag in one click.
+
+```bash
+# Rename and tag a saved shot. `label: null` clears the rename.
+curl -s -X PATCH http://127.0.0.1:7441/v1/history/$SHOT_ID \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"label": "Q3 receipts", "tags": ["finance", "reviewed"]}'
+
+# List only shots carrying a tag.
+curl -s "http://127.0.0.1:7441/v1/history?tag=finance&limit=20" \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY"
+```
+
+Open `http://127.0.0.1:3000/shots/<id>` in the web app to use the editor.
+Tags are normalized to lowercase, deduped, and capped at 16 per shot.
+
 ## What's new: web sign-in
 
 The web UI now has a real GitHub sign-in flow. Hit `/signin` (or the avatar in

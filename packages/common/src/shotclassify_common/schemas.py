@@ -170,3 +170,5 @@ class ClassificationRecord(BaseModel):
     route: RouteDecision
     image_path: str | None = None
     user_corrected_to: Category | None = None
+    label: str | None = None
+    tags: list[str] = Field(default_factory=list)

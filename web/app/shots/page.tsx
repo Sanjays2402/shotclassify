@@ -29,6 +29,8 @@ type Row = {
   elapsed_ms?: number;
   source?: string;
   created_at: string;
+  label?: string | null;
+  tags?: string[];
 };
 
 function fmtTime(iso: string): string {
@@ -53,6 +55,8 @@ export default function ShotsPage() {
   const [until, setUntil] = useState("");
   const [minConfPct, setMinConfPct] = useState(0); // 0..100
   const [sort, setSort] = useState<"new" | "old" | "conf_desc" | "conf_asc">("new");
+  const [tag, setTag] = useState("");
+  const [tagDebounced, setTagDebounced] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
 
   useEffect(() => {
@@ -60,10 +64,18 @@ export default function ShotsPage() {
     return () => clearTimeout(t);
   }, [q]);
 
+  useEffect(() => {
+    const t = setTimeout(
+      () => setTagDebounced(tag.trim().toLowerCase().slice(0, 32)),
+      250
+    );
+    return () => clearTimeout(t);
+  }, [tag]);
+
   // Reset to first page whenever a filter changes.
   useEffect(() => {
     setPage(0);
-  }, [cat, qDebounced, limit, since, until, minConfPct, sort]);
+  }, [cat, qDebounced, limit, since, until, minConfPct, sort, tagDebounced]);
 
   const togglePick = (id: string) => {
     setPicked((prev) => {
@@ -93,8 +105,9 @@ export default function ShotsPage() {
       until: toIsoEnd(until),
       min_conf: minConfPct > 0 ? minConfPct / 100 : undefined,
       sort,
+      tag: tagDebounced || undefined,
     }),
-    [limit, page, cat, qDebounced, since, until, minConfPct, sort]
+    [limit, page, cat, qDebounced, since, until, minConfPct, sort, tagDebounced]
   );
 
   const { data: payload, error, isLoading } = useSWR<{
@@ -193,6 +206,20 @@ export default function ShotsPage() {
         </select>
 
         <label className="flex items-center gap-1.5 text-[12px] opacity-80">
+          <span className="eyebrow">Tag</span>
+          <input
+            type="text"
+            className="num text-[12px] px-2 py-1.5 rounded-sm border bg-white w-[140px]"
+            style={{ borderColor: "var(--color-rule)" }}
+            value={tag}
+            placeholder="any"
+            maxLength={32}
+            onChange={(e) => setTag(e.target.value)}
+            aria-label="Filter by tag"
+          />
+        </label>
+
+        <label className="flex items-center gap-1.5 text-[12px] opacity-80">
           <span className="eyebrow">From</span>
           <input
             type="date"
@@ -240,6 +267,7 @@ export default function ShotsPage() {
             setUntil("");
             setMinConfPct(0);
             setSort("new");
+            setTag("");
             setPage(0);
             setPicked([]);
           }}
@@ -362,8 +390,33 @@ export default function ShotsPage() {
                     <td className="num text-[11px] opacity-70">
                       {r.source ?? "api"}
                     </td>
-                    <td className="text-[12px] max-w-[260px] truncate">
-                      {r.filename}
+                    <td className="text-[12px] max-w-[260px]">
+                      <div className="truncate" title={(r.label && r.label.trim()) || r.filename}>
+                        {(r.label && r.label.trim()) || r.filename}
+                      </div>
+                      {r.tags && r.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {r.tags.slice(0, 4).map((t) => (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                setTag(t);
+                              }}
+                              className="num text-[10px] px-1.5 py-[1px] rounded-sm border border-black/15 bg-black/[0.03] hover:bg-black/[0.06]"
+                              title={`Filter by tag: ${t}`}
+                            >
+                              {t}
+                            </button>
+                          ))}
+                          {r.tags.length > 4 && (
+                            <span className="num text-[10px] opacity-50">
+                              +{r.tags.length - 4}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="num text-[11px] opacity-70 whitespace-nowrap">
                       {fmtTime(r.created_at)}

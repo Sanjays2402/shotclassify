@@ -17,6 +17,7 @@ import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
 import { SampleBadge } from "@/components/SampleBadge";
 import { UmpireControls } from "@/components/UmpireControls";
+import LabelTagsEditor from "@/components/LabelTagsEditor";
 import ShareActions from "@/components/ShareActions";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import {
@@ -42,6 +43,8 @@ type Detail = {
   ocr_text?: string;
   image_path?: string | null;
   user_corrected_to?: Category | null;
+  label?: string | null;
+  tags?: string[];
   // Server may also include richer fields.
   classification?: {
     primary: Category;
@@ -84,6 +87,8 @@ export default function ShotDetail({
           elapsed_ms: seed.elapsed_ms,
           source: seed.source,
           ocr_text: "lorem ipsum sample ocr text · this record is seeded",
+          label: null,
+          tags: [],
         } as Detail;
       })()
     : null;
@@ -132,8 +137,13 @@ export default function ShotDetail({
             </span>
           </div>
           <h1 className="h-display text-[24px] mt-3 truncate max-w-[60ch]">
-            {rec.filename}
+            {(rec.label && rec.label.trim()) || rec.filename}
           </h1>
+          {rec.label && rec.label.trim() && rec.label.trim() !== rec.filename && (
+            <div className="num text-[11px] opacity-60 mt-0.5 truncate max-w-[60ch]">
+              file: {rec.filename}
+            </div>
+          )}
           <div className="num text-[11px] opacity-70 mt-1">
             {fmt(rec.created_at)} · {rec.source ?? "api"} ·{" "}
             {rec.elapsed_ms != null ? ms(rec.elapsed_ms) : "latency n/a"}
@@ -238,6 +248,14 @@ export default function ShotDetail({
             id={rec.id}
             primary={rec.primary_category}
             corrected={rec.user_corrected_to ?? null}
+            disabled={isSample}
+          />
+
+          <LabelTagsEditor
+            id={rec.id}
+            label={rec.label ?? null}
+            tags={rec.tags ?? []}
+            filenameFallback={rec.filename}
             disabled={isSample}
           />
 
