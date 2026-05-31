@@ -2,6 +2,31 @@
 
 Screenshot classifier with vision LLM, OCR, structured extraction, and action routing.
 
+## What's new: web sign-in
+
+The web UI now has a real GitHub sign-in flow. Hit `/signin` (or the avatar in
+the header) to start a GitHub OAuth round-trip; the resulting `sc_session`
+cookie is what every authenticated page already uses for per-user history,
+keys, webhooks, and quota.
+
+### Try it
+
+```bash
+# Backend
+make api          # FastAPI on http://127.0.0.1:7441
+
+# Web
+cd web && pnpm dev   # http://localhost:3000/signin
+
+# Check session from the CLI
+curl -s http://127.0.0.1:7441/auth/whoami -H "X-API-Key: $SHOTCLASSIFY_API_KEY"
+# => {"principal": "api-key:..."}
+```
+
+Set `AUTH_OAUTH_CLIENT_ID` / `AUTH_OAUTH_CLIENT_SECRET` on the API to enable
+the GitHub button; without them `/signin` still works and shows an actionable
+empty state.
+
 ![landing](docs/screenshots/landing.png)
 
 ## What it does

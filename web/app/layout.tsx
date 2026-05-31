@@ -6,6 +6,7 @@ import Ticker from "@/components/Ticker";
 import HotKeys from "@/components/HotKeys";
 import { QuotaMeter } from "@/components/QuotaMeter";
 import OnboardingTour from "@/components/OnboardingTour";
+import AuthMenu from "@/components/AuthMenu";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -72,6 +73,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/webhooks">Webhooks</NavLink>
               <NavLink href="/usage">Usage</NavLink>
               <NavLink href="/account">Account</NavLink>
+              <NavLink href="/signin">Sign in</NavLink>
               <NavLink href="/welcome">Welcome</NavLink>
             </nav>
             <div className="ml-auto flex items-center gap-3">
@@ -79,6 +81,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <span className="eyebrow hidden sm:inline">Press</span>
               <span className="kbd">U</span>
               <span className="eyebrow hidden sm:inline">to ingest</span>
+              <AuthMenu />
             </div>
           </div>
         </header>
