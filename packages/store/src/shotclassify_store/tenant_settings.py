@@ -91,12 +91,20 @@ def set_ip_allowlist(
 from dataclasses import dataclass
 
 
+# Roles allowed for SSO domain auto-join. ``admin`` is intentionally
+# excluded: anyone who controls DNS for an allowed domain could otherwise
+# self-promote to admin on first sign-in. Admins must still be invited or
+# promoted explicitly.
+AUTO_JOIN_ROLES: tuple[str, ...] = ("operator", "viewer")
+
+
 @dataclass(frozen=True)
 class SsoConfig:
     tenant_id: str
     enforced: bool
     domain: str | None
     provider: str | None
+    auto_join_role: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -104,6 +112,7 @@ class SsoConfig:
             "enforced": self.enforced,
             "domain": self.domain,
             "provider": self.provider,
+            "auto_join_role": self.auto_join_role,
         }
 
 
@@ -122,6 +131,7 @@ def get_sso_config(tenant_id: str) -> SsoConfig:
             enforced=bool(getattr(row, "sso_enforced", False)),
             domain=getattr(row, "sso_domain", None),
             provider=getattr(row, "sso_provider", None),
+            auto_join_role=getattr(row, "sso_auto_join_role", None),
         )
 
 
@@ -132,6 +142,7 @@ def set_sso_config(
     domain: str | None,
     provider: str | None,
     updated_by: str | None,
+    auto_join_role: str | None = None,
 ) -> SsoConfig:
     """Update the per-tenant SSO settings.
 
@@ -153,6 +164,19 @@ def set_sso_config(
         p = provider.strip()[:64]
         if p:
             norm_provider = p
+    norm_auto_join: str | None = None
+    if auto_join_role:
+        ajr = auto_join_role.strip().lower()
+        if ajr:
+            if ajr not in AUTO_JOIN_ROLES:
+                raise ValueError(
+                    f"invalid auto_join_role {auto_join_role!r}: must be one of {AUTO_JOIN_ROLES}"
+                )
+            if not norm_domain:
+                # Auto-join needs a domain to match against; refuse the
+                # half-configured state instead of silently doing nothing.
+                raise ValueError("auto_join_role requires a domain to be set")
+            norm_auto_join = ajr
     init_db()
     with get_session() as s:
         # Domain uniqueness across tenants: refuse to overwrite another
@@ -179,6 +203,7 @@ def set_sso_config(
                 sso_enforced=enforced,
                 sso_domain=norm_domain,
                 sso_provider=norm_provider,
+                sso_auto_join_role=norm_auto_join,
                 updated_at=datetime.now(UTC),
                 updated_by=updated_by,
             )
@@ -187,6 +212,7 @@ def set_sso_config(
             row.sso_enforced = enforced
             row.sso_domain = norm_domain
             row.sso_provider = norm_provider
+            row.sso_auto_join_role = norm_auto_join
             row.updated_at = datetime.now(UTC)
             row.updated_by = updated_by
         s.commit()
@@ -195,6 +221,7 @@ def set_sso_config(
         enforced=enforced,
         domain=norm_domain,
         provider=norm_provider,
+        auto_join_role=norm_auto_join,
     )
 
 

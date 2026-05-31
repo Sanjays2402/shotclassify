@@ -31,6 +31,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from shotclassify_common import get_settings
 from shotclassify_store import tenant_for_sso_domain
+from shotclassify_store.memberships import role_for_member, upsert_member
 from shotclassify_store.tenant_settings import get_sso_config
 
 from ..middleware.auth import issue_session
@@ -224,6 +225,29 @@ def callback(
         tenant_id=tenant_id,
         auth_method="sso",
     )
+    # Domain auto-join. When the resolved tenant configured an auto-join
+    # role and this principal's email domain matches the tenant's
+    # ``sso_domain``, create a membership on first sign-in. This is the
+    # standard "everyone at acme.com is a viewer in the Acme workspace"
+    # enterprise SSO behaviour. Existing memberships are never downgraded.
+    try:
+        if tenant_id and email and "@" in email:
+            domain_part = email.split("@", 1)[1].lower()
+            cfg = get_sso_config(tenant_id)
+            if (
+                cfg.auto_join_role
+                and cfg.domain
+                and cfg.domain == domain_part
+                and role_for_member(tenant_id, principal) is None
+            ):
+                upsert_member(
+                    tenant_id=tenant_id,
+                    principal=principal,
+                    role=cfg.auto_join_role,
+                    invited_by="sso:auto-join",
+                )
+    except Exception:  # noqa: BLE001 - never block sign-in on auto-join issues
+        pass
     resp = RedirectResponse("/")
     resp.set_cookie(
         "sc_session", cookie, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30
@@ -247,6 +271,25 @@ def _test_issue(request: Request):
     principal = body.get("principal") or "sso-user@example.com"
     tenant_id = body.get("tenant_id") or tenant_for_principal(principal)
     method = body.get("auth_method") or "sso"
+    # Mirror the real callback's auto-join behavior for tests.
+    try:
+        if tenant_id and principal and "@" in principal:
+            domain_part = principal.split("@", 1)[1].lower()
+            cfg = get_sso_config(tenant_id)
+            if (
+                cfg.auto_join_role
+                and cfg.domain
+                and cfg.domain == domain_part
+                and role_for_member(tenant_id, principal) is None
+            ):
+                upsert_member(
+                    tenant_id=tenant_id,
+                    principal=principal,
+                    role=cfg.auto_join_role,
+                    invited_by="sso:auto-join",
+                )
+    except Exception:  # noqa: BLE001
+        pass
     cookie, sid = issue_session(
         principal,
         client_ip=request.client.host if request.client else None,

@@ -35,6 +35,7 @@ from .retention import (
     set_retention_days,
 )
 from .tenant_settings import (
+    AUTO_JOIN_ROLES,
     SsoConfig,
     get_ip_allowlist,
     get_sso_config,
@@ -72,6 +73,7 @@ __all__ = [
     "purge_expired_all_tenants",
     "list_tenants_with_retention",
     "SsoConfig",
+    "AUTO_JOIN_ROLES",
     "get_sso_config",
     "set_sso_config",
     "tenant_for_sso_domain",

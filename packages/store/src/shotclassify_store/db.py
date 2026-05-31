@@ -138,6 +138,13 @@ class TenantSettingsRow(Base):
     sso_enforced: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sso_domain: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     sso_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Domain auto-join: when set, an SSO sign-in whose email domain matches
+    # ``sso_domain`` and who is not yet a member of this tenant gets a
+    # membership created automatically with this role. NULL disables auto-join
+    # so admins keep the legacy invite-only flow. ``viewer`` is the safe
+    # default we recommend; ``admin`` is rejected at the API layer to prevent
+    # a self-service privilege escalation path through DNS-controlled email.
+    sso_auto_join_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -327,6 +334,10 @@ def init_db() -> None:
                 if "sso_provider" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN sso_provider VARCHAR(64)"
+                    ))
+                if "sso_auto_join_role" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN sso_auto_join_role VARCHAR(16)"
                     ))
             if insp.has_table("sessions"):
                 scols = {c["name"] for c in insp.get_columns("sessions")}

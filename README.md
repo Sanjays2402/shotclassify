@@ -266,6 +266,20 @@ curl -s -X POST http://127.0.0.1:7441/v1/mfa/verify \
 
 Without an enrolled credential, mutating admin endpoints return `401 {"error":"mfa_enrollment_required"}`. With one enrolled but the window lapsed, they return `401 {"error":"mfa_required","window_seconds":900}` so the UI can prompt for a fresh code. Coverage in `tests/test_mfa_step_up.py` proves enrollment unlocks the action, an expired stamp blocks it, and a re-challenge restores access.
 
+## What's new: SSO domain auto-join for zero-touch onboarding
+
+Enterprise buyers expect "everyone at acme.com lands in the Acme workspace" without an admin clicking invite for every hire. Each workspace can now set an `auto_join_role` alongside its SSO `domain`. The first time someone from that domain completes the OIDC sign-in, a membership is created automatically with that role. Existing memberships are never downgraded, users from other domains never auto-join, and `admin` is rejected as an auto-join role so DNS control alone cannot promote anyone to admin.
+
+Try it:
+
+```
+curl -s -X PUT http://127.0.0.1:7441/v1/settings/security/sso \
+  -H 'x-api-key: ADMIN_KEY' -H 'content-type: application/json' \
+  -d '{"enforced": false, "domain": "acme.com", "provider": "Okta", "auto_join_role": "viewer"}'
+```
+
+The same control lives in the dashboard at http://localhost:3000/settings/security under the SSO card ("Domain auto-join").
+
 ## What's new: enterprise SSO (OIDC) with per-workspace enforcement
 
 Wire one OIDC identity provider (Google Workspace, Okta, Azure AD, Auth0, Keycloak) for the deployment, then opt each tenant in by claiming its email domain and turning on enforcement. When `enforced=true`, the auth middleware refuses any session for that tenant that was not minted via `/auth/sso/callback`. API-key (machine-to-machine) callers are unaffected.

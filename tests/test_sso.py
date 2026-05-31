@@ -171,3 +171,79 @@ def test_sso_config_public_endpoint(monkeypatch, tmp_path):
     body = r.json()
     assert body["enabled"] is False  # not configured in tests
     assert "issuer" in body
+
+
+def test_sso_domain_auto_join_creates_viewer_membership(monkeypatch, tmp_path):
+    """First SSO sign-in for an unknown user in the configured domain
+    gets a viewer membership automatically. Existing memberships are
+    not modified, and users from other domains never auto-join."""
+    c = _client(monkeypatch, tmp_path)
+
+    # Admin configures domain + auto-join role.
+    r = c.put(
+        "/v1/settings/security/sso",
+        headers={"x-api-key": "acme-admin"},
+        json={
+            "enforced": False,
+            "domain": "acme.com",
+            "provider": "Okta",
+            "auto_join_role": "viewer",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["auto_join_role"] == "viewer"
+
+    # New SSO sign-in for an acme.com user. The dev-only _test_issue
+    # endpoint mirrors the real OIDC callback's auto-join hook.
+    new_user = "alice@acme.com"
+    r2 = c.post(f"/auth/sso/_test/issue?principal={new_user}&tenant_id=acme")
+    assert r2.status_code == 200, r2.text
+
+    # Membership was created with the configured role.
+    from shotclassify_store.memberships import role_for_member
+
+    assert role_for_member("acme", new_user) == "viewer"
+
+    # Sign-in from an unrelated domain does not auto-join.
+    other = "bob@notacme.example"
+    r3 = c.post(f"/auth/sso/_test/issue?principal={other}&tenant_id=acme")
+    assert r3.status_code == 200
+    assert role_for_member("acme", other) is None
+
+
+def test_sso_auto_join_role_admin_is_rejected(monkeypatch, tmp_path):
+    """``admin`` is not allowed as an auto-join role: anyone controlling
+    DNS for an allowed domain would otherwise self-promote."""
+    c = _client(monkeypatch, tmp_path)
+    r = c.put(
+        "/v1/settings/security/sso",
+        headers={"x-api-key": "acme-admin"},
+        json={
+            "enforced": False,
+            "domain": "acme.com",
+            "provider": "Okta",
+            "auto_join_role": "admin",
+        },
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_sso_auto_join_does_not_downgrade_existing_member(monkeypatch, tmp_path):
+    """Existing admin membership must survive a fresh SSO login under a
+    domain configured for viewer auto-join."""
+    c = _client(monkeypatch, tmp_path)
+    c.put(
+        "/v1/settings/security/sso",
+        headers={"x-api-key": "acme-admin"},
+        json={
+            "enforced": False,
+            "domain": "acme.com",
+            "provider": "Okta",
+            "auto_join_role": "viewer",
+        },
+    )
+    from shotclassify_store.memberships import role_for_member, upsert_member
+
+    upsert_member(tenant_id="acme", principal="carol@acme.com", role="admin")
+    c.post("/auth/sso/_test/issue?principal=carol@acme.com&tenant_id=acme")
+    assert role_for_member("acme", "carol@acme.com") == "admin"

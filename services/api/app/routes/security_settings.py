@@ -132,10 +132,13 @@ def put_sso_route(request: Request, payload: dict = Body(...)) -> dict:
     enforced = bool(payload.get("enforced", False))
     domain = payload.get("domain")
     provider = payload.get("provider")
+    auto_join_role = payload.get("auto_join_role")
     if domain is not None and not isinstance(domain, str):
         raise HTTPException(422, "'domain' must be a string or null.")
     if provider is not None and not isinstance(provider, str):
         raise HTTPException(422, "'provider' must be a string or null.")
+    if auto_join_role is not None and not isinstance(auto_join_role, str):
+        raise HTTPException(422, "'auto_join_role' must be a string or null.")
     actor = getattr(request.state, "principal", None)
     try:
         cfg = set_sso_config(
@@ -143,6 +146,7 @@ def put_sso_route(request: Request, payload: dict = Body(...)) -> dict:
             enforced=enforced,
             domain=domain or None,
             provider=provider or None,
+            auto_join_role=auto_join_role or None,
             updated_by=actor,
         )
     except ValueError as exc:

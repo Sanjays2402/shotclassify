@@ -718,6 +718,7 @@ type SsoConfig = {
   enforced: boolean;
   domain: string | null;
   provider: string | null;
+  auto_join_role: "viewer" | "operator" | null;
 };
 
 type SsoPublic = { enabled: boolean; issuer: string | null };
@@ -736,6 +737,7 @@ function SsoSection() {
   const [enforced, setEnforced] = useState(false);
   const [domain, setDomain] = useState("");
   const [provider, setProvider] = useState("");
+  const [autoJoin, setAutoJoin] = useState<"" | "viewer" | "operator">("");
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
 
@@ -744,6 +746,7 @@ function SsoSection() {
       setEnforced(data.enforced);
       setDomain(data.domain ?? "");
       setProvider(data.provider ?? "");
+      setAutoJoin((data.auto_join_role ?? "") as "" | "viewer" | "operator");
     }
   }, [data]);
 
@@ -755,7 +758,8 @@ function SsoSection() {
     !!data &&
     (enforced !== data.enforced ||
       (domain || null) !== data.domain ||
-      (provider || null) !== data.provider);
+      (provider || null) !== data.provider ||
+      (autoJoin || null) !== data.auto_join_role);
 
   const save = async () => {
     setBusy(true);
@@ -768,6 +772,7 @@ function SsoSection() {
           enforced,
           domain: domain.trim() || null,
           provider: provider.trim() || null,
+          auto_join_role: autoJoin || null,
         }),
       });
       if (!res.ok) {
@@ -860,6 +865,32 @@ function SsoSection() {
             </label>
           </div>
 
+          <label className="mt-4 flex flex-col gap-1 rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+            <span className="font-medium">Domain auto-join</span>
+            <span className="text-xs text-zinc-500">
+              When a user from this domain signs in via SSO for the first
+              time, automatically add them to the workspace with this role.
+              Leave off to keep invite-only onboarding. The admin role is
+              never available here to prevent privilege escalation through
+              DNS control.
+            </span>
+            <select
+              value={autoJoin}
+              onChange={(e) => setAutoJoin(e.target.value as "" | "viewer" | "operator")}
+              disabled={!domain.trim()}
+              className="mt-1 max-w-xs rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 disabled:cursor-not-allowed disabled:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:disabled:bg-zinc-950"
+            >
+              <option value="">Off (invite only)</option>
+              <option value="viewer">Viewer</option>
+              <option value="operator">Operator</option>
+            </select>
+            {!domain.trim() && autoJoin ? (
+              <span className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                Set an email domain above to enable auto-join.
+              </span>
+            ) : null}
+          </label>
+
           <label className="mt-4 flex items-start gap-3 rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-800">
             <input
               type="checkbox"
@@ -880,6 +911,7 @@ function SsoSection() {
             <p className="text-xs text-zinc-500">
               Status: {data?.enforced ? "Enforced" : "Available but not required"}
               {data?.domain ? <> · Domain {data.domain}</> : null}
+              {data?.auto_join_role ? <> · Auto-join {data.auto_join_role}</> : null}
             </p>
             <button
               type="button"
