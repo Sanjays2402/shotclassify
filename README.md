@@ -2,7 +2,39 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, and an admin dashboard.
 
-## What's new: tenant-scoped webhook subsystem
+## What's new: audit log UI for workspace admins
+
+The audit trail that the FastAPI middleware has been writing on every
+authenticated mutation now has a first-class admin surface at
+`/settings/audit`. Workspace admins can filter by principal or path
+prefix, expand any row to see the request ID, tenant, target, and the
+full `extra` payload, and export the filtered result set to CSV.
+
+The page calls a new Next.js proxy at `/api/audit` that forwards the
+browser session cookie (or workspace API key) to FastAPI's `/v1/audit`
+endpoint, which is already guarded by `require_role("admin")` and is
+tenant scoped by the existing audit middleware. Non-admins get a clear
+"admin role required" empty state instead of a raw 403.
+
+A new `Audit` entry in the global nav joins `Security`, `MFA`,
+`Sessions`, `Data`, and `Members` so the full enterprise settings set
+is reachable from one place.
+
+### Try it
+
+```bash
+cd web && npm run dev       # http://localhost:3000/settings/audit
+
+# Or call the proxy directly with a workspace admin API key:
+curl -sS "http://localhost:3000/api/audit?limit=50&path_prefix=/v1/history" \
+  -H "x-api-key: $SHOTCLASSIFY_KEY"
+
+# CSV export respects the active filters:
+curl -sS "http://localhost:3000/api/audit?limit=500&format=csv" \
+  -H "x-api-key: $SHOTCLASSIFY_KEY" -o audit.csv
+```
+
+## Previous: tenant-scoped webhook subsystem
 
 Webhook subscriptions, deliveries, the per-workspace outbound
 allowlist, dispatch fan-out, and redelivery are now strictly
