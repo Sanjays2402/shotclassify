@@ -24,6 +24,8 @@ from . import api_keys as api_keys_store
 from .api_keys import ApiKeyRecord
 from . import memberships as memberships_store
 from .memberships import InvitationRecord, MembershipRecord
+from . import scim as scim_store
+from .scim import ScimConfig
 from . import webhooks as webhooks_store
 from .repository import Repository
 from .saved_views import SavedViewRepository

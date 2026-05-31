@@ -66,6 +66,12 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
         # the generic literal "api-key"); for OAuth users, look up by login.
         lookup_key = api_key if api_key else principal
         resolved: str | None = tenant_for_principal(lookup_key)
+        # SCIM bearer requests already pinned a tenant in the auth layer.
+        # That binding is authoritative and not overridable by X-Tenant so a
+        # leaked SCIM token cannot read another workspace by passing a
+        # header.
+        if getattr(request.state, "scim_authenticated", False):
+            return await call_next(request)
         # DB-backed API keys carry a hard tenant binding. This takes
         # precedence over the env-var map and is NOT overridable by
         # X-Tenant, so a leaked key can never read across tenants.

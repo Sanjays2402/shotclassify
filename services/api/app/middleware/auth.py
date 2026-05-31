@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from itsdangerous import BadSignature, URLSafeSerializer
 from shotclassify_common import get_settings
-from shotclassify_store import api_keys_store, memberships_store, session_store
+from shotclassify_store import api_keys_store, memberships_store, scim_store, session_store
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -100,6 +100,33 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
         path = request.url.path
         if not s.auth_enabled or path in PUBLIC_PATHS or path.startswith("/blob"):
             return await call_next(request)
+        # SCIM 2.0 bearer auth. Only honored under /scim/v2/* so a leaked
+        # SCIM token cannot reach the rest of the API surface. The token is
+        # resolved to a tenant_id via a SHA-256 index lookup; missing or
+        # disabled tenants fall through to the 401 path below.
+        if path.startswith("/scim/v2/") or path == "/scim/v2":
+            authz = request.headers.get("authorization") or ""
+            if authz.lower().startswith("bearer "):
+                bearer = authz.split(" ", 1)[1].strip()
+                tenant_id = scim_store.get_tenant_by_scim_token(bearer)
+                if tenant_id:
+                    request.state.principal = f"scim:{tenant_id}"
+                    request.state.tenant_id = tenant_id
+                    request.state.scim_authenticated = True
+                    # SCIM provisioning needs admin-level membership writes.
+                    # The scope is constrained by the path prefix above so
+                    # this elevated role never bleeds outside /scim/v2.
+                    request.state.role = "admin"
+                    request.state.auth_scopes = ["scim:provision"]
+                    return await call_next(request)
+            return JSONResponse(
+                {
+                    "schemas": ["urn:ietf:params:scim:api:messages:2.0:Error"],
+                    "status": "401",
+                    "detail": "SCIM bearer token missing, invalid, or disabled.",
+                },
+                status_code=401,
+            )
         api_key = request.headers.get("x-api-key")
         if api_key:
             # DB-backed keys are the source of truth. They carry their own

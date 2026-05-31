@@ -162,6 +162,17 @@ class TenantSettingsRow(Base):
     # buyers can prove which storage region is in effect during a security
     # review. Storage backend selection itself is a deploy-time concern.
     data_residency: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # SCIM 2.0 provisioning token. When ``scim_enabled`` is True an external
+    # identity provider (Okta, Azure AD, Google Workspace) can call
+    # ``/scim/v2/*`` with ``Authorization: Bearer <token>`` to provision and
+    # de-provision users in this tenant. ``scim_token_hash`` is a SHA-256 of
+    # the bearer token; the plaintext is shown exactly once at rotation time.
+    # Tenant-scoped so a leaked token can never reach another workspace.
+    scim_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    scim_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    scim_token_last_four: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    scim_token_rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scim_default_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -427,6 +438,27 @@ def init_db() -> None:
                 if "data_residency" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN data_residency VARCHAR(32)"
+                    ))
+                # 0017 SCIM provisioning columns.
+                if "scim_enabled" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN scim_enabled BOOLEAN NOT NULL DEFAULT 0"
+                    ))
+                if "scim_token_hash" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN scim_token_hash VARCHAR(64)"
+                    ))
+                if "scim_token_last_four" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN scim_token_last_four VARCHAR(8)"
+                    ))
+                if "scim_token_rotated_at" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN scim_token_rotated_at TIMESTAMP"
+                    ))
+                if "scim_default_role" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN scim_default_role VARCHAR(16)"
                     ))
             if insp.has_table("sessions"):
                 scols = {c["name"] for c in insp.get_columns("sessions")}

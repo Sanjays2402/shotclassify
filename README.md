@@ -2,33 +2,41 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
-## What's new: API-side webhooks with HMAC and replay
+## What's new: SCIM 2.0 provisioning for Okta, Azure AD, Google Workspace
 
-The FastAPI service now ships its own outbound webhook subsystem so server-to-server integrations no longer have to go through the Next.js dashboard proxy. Subscriptions live in `webhook_subscriptions`, every attempt is recorded in `webhook_deliveries`, and the dispatcher signs each payload with HMAC-SHA256 over the raw JSON body. Failures back off (1s, 4s, 16s, 64s) up to 4 attempts and land in the delivery log either way, so admins can search and replay them.
+The FastAPI service now speaks SCIM 2.0 (RFC 7644) so enterprise IdPs can auto provision and de provision workspace members without API key handouts. Each workspace mints its own bearer token, only the SHA-256 is stored, and lookups go through that hash index so the plaintext never appears in logs or backups. Disabling SCIM in the admin console breaks glass immediately: every subsequent SCIM call returns 401 even before the admin rotates.
 
-Everything is tenant-scoped: every store call requires an explicit `tenant_id` and filters on it, so an admin in tenant A cannot list, fetch, revoke, or replay tenant B's webhooks. Create / revoke / replay are admin-only, MFA-gated, and honor `?dry_run=true`. `/v1/classify`, `/v1/classify/batch`, and `/v1/classify/{id}/reclassify` now fan `classify.completed` out to every matching active subscription from a background task so the request handler is never blocked on receiver latency.
+The whole `/scim/v2/*` router is tenant scoped at the query layer, not just at the URL. A SCIM token for tenant A cannot list, read, mutate, or delete users in tenant B. The test suite proves that property end to end, plus that SCIM cannot mint workspace admins (privilege escalation through whoever owns the IdP attribute store), cannot demote or delete the last admin, and that rotation atomically invalidates the previous token in the same transaction.
 
-The signing secret is returned exactly once at create time; only its SHA-256 hash is stored, and that hash is what the dispatcher uses as the HMAC key. Receivers re-derive the same key by hashing the plaintext secret they were shown.
+Token rotation, enable / disable, and default-role changes all sit behind workspace admin role plus MFA step up. Provisioned users default to viewer; an admin can switch the per-tenant default to operator. The `admin` role itself is never assignable from SCIM by design.
 
 ### Try it
 
-Local dashboard: <http://localhost:3000/admin/api-webhooks>
+Local dashboard: <http://localhost:3000/settings/security/scim>
 
 ```bash
-# Register a subscription (admin role + tenant header).
-curl -sS -X POST http://localhost:7441/v1/webhooks \
-  -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme" \
-  -H 'content-type: application/json' \
-  -d '{"url":"https://example.com/hook","events":["classify.completed"],"description":"prod"}'
-# Response includes the signing secret exactly once.
+# Mint the bearer (admin + MFA step up; returned exactly once).
+curl -sS -X POST http://localhost:7441/v1/scim/token/rotate \
+  -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme" -H "x-mfa-otp: 123456"
 
-# List, recent deliveries, replay.
-curl -s http://localhost:7441/v1/webhooks \
-  -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme"
-curl -s http://localhost:7441/v1/webhooks/deliveries/recent \
-  -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme"
-curl -sS -X POST http://localhost:7441/v1/webhooks/deliveries/{id}/replay \
-  -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme"
+# IdP capability discovery (uses the SCIM bearer, not the API key).
+curl -s http://localhost:7441/scim/v2/ServiceProviderConfig \
+  -H "Authorization: Bearer $SCIM_TOKEN"
+
+# Provision a user.
+curl -sS -X POST http://localhost:7441/scim/v2/Users \
+  -H "Authorization: Bearer $SCIM_TOKEN" \
+  -H 'content-type: application/scim+json' \
+  -d '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],
+       "userName":"alice@acme.test","active":true,
+       "roles":[{"value":"operator"}]}'
+
+# De-provision (Okta sends this shape on group removal).
+curl -sS -X PATCH http://localhost:7441/scim/v2/Users/alice@acme.test \
+  -H "Authorization: Bearer $SCIM_TOKEN" \
+  -H 'content-type: application/scim+json' \
+  -d '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+       "Operations":[{"op":"replace","path":"active","value":false}]}'
 ```
 
 Receiver-side signature verification:
