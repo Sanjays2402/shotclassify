@@ -53,6 +53,8 @@ upload ---->  |  FastAPI   | -----> | pipeline thread |
 
 With the API and web both running, open <http://127.0.0.1:3000/demo>. Click any of the four sample screenshots (receipt, code snippet, stack trace, chat) and the page runs the real OCR plus vision pipeline, then renders the class probability bars, latency, model rationale, and OCR transcript. No upload, no signup.
 
+For your own frames, open <http://127.0.0.1:3000/upload> and drop one or more images. Each file gets its own result card with a thumbnail, the primary call and its confidence, round-trip latency, full per-class confidence bars, the model's rationale, and the OCR transcript. Cards stream in parallel, errors stay scoped to the failing file, and any card opens the full replay at `/shots/{id}`.
+
 One-shot curl against the same endpoint the demo page calls:
 
 ```bash
