@@ -15,6 +15,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 
+import { isKindEnabled } from "./notification-prefs";
+
 export type NotificationKind =
   | "classify.completed"
   | "webhook.failed"
@@ -69,7 +71,10 @@ export async function notify(input: {
   title: string;
   body: string;
   href?: string | null;
-}): Promise<Notification> {
+}): Promise<Notification | null> {
+  // Honour per-deployment notification preferences. When a kind is muted
+  // the call becomes a no-op so callers don't need to know about prefs.
+  if (!(await isKindEnabled(input.kind))) return null;
   const title = (input.title || "").trim().slice(0, 140) || "Notification";
   const body = (input.body || "").trim().slice(0, 480);
   const item: Notification = {

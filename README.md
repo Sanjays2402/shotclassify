@@ -2,6 +2,32 @@
 
 Screenshot classifier with vision LLM, OCR, structured extraction, and action routing. Drop in an image, get back a category with confidence and a saved record you can browse, share, or pull back via API.
 
+## What's new: notification preferences
+
+The `/notifications` page now has a Preferences card that lets you mute
+any notification kind (`classify.completed`, `webhook.failed`,
+`system`). Muted kinds are dropped at the source by `notify()`, so they
+never show up in the bell or the inbox until you re-enable them. Prefs
+are persisted to `storage/notification_prefs.json` and exposed as a
+first-class API at `/api/notifications/prefs`. Defaults stay backwards
+compatible: every kind is enabled until you change it.
+
+### Try it
+
+```bash
+# Open the inbox and flip a switch under "Preferences":
+open http://localhost:3000/notifications
+
+# Or drive it from the API:
+curl http://localhost:3000/api/notifications/prefs
+
+curl -X PUT http://localhost:3000/api/notifications/prefs \
+  -H 'content-type: application/json' \
+  -d '{"enabled":{"classify.completed":false}}'
+```
+
+Covered by `web/lib/notification-prefs.test.mts`.
+
 ## What's new: scoped API keys (read vs. read+write)
 
 When you generate a key at `/keys` you now pick its scope. Read-only

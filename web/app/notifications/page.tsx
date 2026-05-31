@@ -14,6 +14,7 @@ import {
   ArrowSquareOut,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
+import { NotificationPrefsCard } from "@/components/NotificationPrefsCard";
 
 type Notif = {
   id: string;
@@ -187,6 +188,8 @@ export default function NotificationsPage() {
           </button>
         </div>
       </div>
+
+      <NotificationPrefsCard />
 
       <div
         className="rounded-md border overflow-hidden"
