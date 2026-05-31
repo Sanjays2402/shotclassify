@@ -10,6 +10,8 @@ import {
   rotateKeyAt,
   listKeysAt,
   verifyAndTouchAt,
+  normalizeScopes,
+  hasScope,
 } from "./keystore-core";
 
 async function tmpStore() {
@@ -64,6 +66,56 @@ test("rotateKey returns null for unknown id", async () => {
   try {
     const out = await rotateKeyAt(file, "nope-not-a-real-id");
     assert.equal(out, null);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("normalizeScopes defaults, dedupes, and read+write implies read", () => {
+  assert.deepEqual(normalizeScopes(undefined), ["read", "write"]);
+  assert.deepEqual(normalizeScopes([]), ["read", "write"]);
+  assert.deepEqual(normalizeScopes(["read"]), ["read"]);
+  assert.deepEqual(normalizeScopes(["write"]), ["read", "write"]);
+  assert.deepEqual(normalizeScopes(["read", "read", "write"]), ["read", "write"]);
+  assert.deepEqual(normalizeScopes(["bogus"]), ["read", "write"]);
+});
+
+test("hasScope honors stored scopes and legacy default", () => {
+  assert.equal(hasScope({ scopes: ["read"] }, "read"), true);
+  assert.equal(hasScope({ scopes: ["read"] }, "write"), false);
+  assert.equal(hasScope({ scopes: ["read", "write"] }, "write"), true);
+  // legacy / undefined keeps existing behavior (full access).
+  assert.equal(hasScope({}, "write"), true);
+  assert.equal(hasScope({}, "read"), true);
+});
+
+test("createKey persists scopes and rotate preserves them", async () => {
+  const { file, dir } = await tmpStore();
+  try {
+    const { key } = await createKeyAt(file, "readonly-dashboard", ["read"]);
+    assert.deepEqual(key.scopes, ["read"]);
+    const rotated = await rotateKeyAt(file, key.id);
+    assert.deepEqual(rotated!.key.scopes, ["read"]);
+    const verified = await verifyAndTouchAt(file, rotated!.plaintext);
+    assert.deepEqual(verified!.scopes, ["read"]);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("verifyAndTouch backfills legacy keys missing scopes", async () => {
+  const { file, dir } = await tmpStore();
+  try {
+    const { key, plaintext } = await createKeyAt(file, "legacy");
+    // Simulate an old-format on-disk record with no scopes field.
+    const raw = await fs.readFile(file, "utf8");
+    const parsed = JSON.parse(raw);
+    delete parsed[0].scopes;
+    await fs.writeFile(file, JSON.stringify(parsed));
+    const verified = await verifyAndTouchAt(file, plaintext);
+    assert.ok(verified);
+    assert.deepEqual(verified!.scopes, ["read", "write"]);
+    assert.equal(verified!.id, key.id);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

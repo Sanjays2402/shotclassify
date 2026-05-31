@@ -13,6 +13,8 @@ import {
   ArrowsClockwise,
 } from "@phosphor-icons/react/dist/ssr";
 
+type KeyScope = "read" | "write";
+
 type KeyRow = {
   id: string;
   name: string;
@@ -21,6 +23,7 @@ type KeyRow = {
   last_used_at: string | null;
   usage_count: number;
   rotated_at?: string | null;
+  scopes?: KeyScope[];
 };
 
 function fmtDate(iso: string | null): string {
@@ -41,6 +44,7 @@ export default function KeysPage() {
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newScope, setNewScope] = useState<"read" | "write">("write");
   const [revealed, setRevealed] = useState<{
     name: string;
     plaintext: string;
@@ -73,7 +77,10 @@ export default function KeysPage() {
       const r = await fetch("/api/keys", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: newName }),
+        body: JSON.stringify({
+          name: newName,
+          scopes: newScope === "write" ? ["read", "write"] : ["read"],
+        }),
       });
       if (!r.ok) {
         const t = await r.text().catch(() => "");
@@ -208,6 +215,29 @@ export default function KeysPage() {
               }}
             />
           </div>
+          <div className="min-w-[180px]">
+            <label htmlFor="key-scope" className="eyebrow block mb-1">
+              Scope
+            </label>
+            <select
+              id="key-scope"
+              value={newScope}
+              onChange={(e) => setNewScope(e.target.value as "read" | "write")}
+              className="w-full rounded-md border px-3 py-2 text-[13px] bg-white outline-none focus:ring-2"
+              style={{ borderColor: "var(--color-rule)" }}
+              aria-describedby="key-scope-help"
+            >
+              <option value="write">Read and write (classify)</option>
+              <option value="read">Read only (list, fetch, usage)</option>
+            </select>
+            <p
+              id="key-scope-help"
+              className="mt-1 text-[11px]"
+              style={{ color: "var(--color-ink-mute)" }}
+            >
+              Read-only keys are safe to embed in dashboards.
+            </p>
+          </div>
           <button
             type="button"
             onClick={onCreate}
@@ -336,6 +366,7 @@ export default function KeysPage() {
                 <tr>
                   <th className="px-3 py-2">Name</th>
                   <th className="px-3 py-2">Prefix</th>
+                  <th className="px-3 py-2">Scope</th>
                   <th className="px-3 py-2 hidden sm:table-cell">Created</th>
                   <th className="px-3 py-2 hidden md:table-cell">Last used</th>
                   <th className="px-3 py-2 text-right">Calls</th>
@@ -354,6 +385,32 @@ export default function KeysPage() {
                     </td>
                     <td className="px-3 py-2 font-mono text-[12px]">
                       {k.prefix}...
+                    </td>
+                    <td className="px-3 py-2">
+                      {(() => {
+                        const scopes = k.scopes ?? ["read", "write"];
+                        const canWrite = scopes.includes("write");
+                        const label = canWrite ? "read+write" : "read";
+                        return (
+                          <span
+                            className="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-mono"
+                            style={{
+                              borderColor: "var(--color-rule)",
+                              background: canWrite
+                                ? "#f6fbf8"
+                                : "var(--color-chalk)",
+                              color: canWrite
+                                ? "var(--color-felt, #1a7a4a)"
+                                : "var(--color-ink-mute)",
+                            }}
+                            title={canWrite
+                              ? "Can call POST /v1/classify and all read endpoints."
+                              : "Read-only. POST /v1/classify will return 403 insufficient_scope."}
+                          >
+                            {label}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2 hidden sm:table-cell" style={{ color: "var(--color-ink-mute)" }}>
                       {fmtDate(k.created_at)}

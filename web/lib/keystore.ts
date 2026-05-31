@@ -11,9 +11,11 @@ import {
   verifyAndTouchAt,
   type StoredKey,
   type CreatedKey,
+  type KeyScope,
 } from "./keystore-core";
 
-export type { StoredKey, CreatedKey } from "./keystore-core";
+export type { StoredKey, CreatedKey, KeyScope } from "./keystore-core";
+export { hasScope, normalizeScopes, ALL_SCOPES } from "./keystore-core";
 
 const STORE_PATH = defaultStorePath();
 
@@ -21,8 +23,8 @@ export function listKeys(): Promise<StoredKey[]> {
   return listKeysAt(STORE_PATH);
 }
 
-export function createKey(name: string): Promise<CreatedKey> {
-  return createKeyAt(STORE_PATH, name);
+export function createKey(name: string, scopes?: unknown): Promise<CreatedKey> {
+  return createKeyAt(STORE_PATH, name, scopes);
 }
 
 export function rotateKey(id: string): Promise<CreatedKey | null> {

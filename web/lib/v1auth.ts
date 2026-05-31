@@ -2,7 +2,7 @@
 // Centralizes API-key extraction, validation, and structured error envelopes.
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAndTouch, type StoredKey } from "@/lib/keystore";
+import { verifyAndTouch, hasScope, type StoredKey, type KeyScope } from "@/lib/keystore";
 
 export const UPSTREAM_API =
   process.env.SHOTCLASSIFY_API_BASE || "http://127.0.0.1:7441";
@@ -30,6 +30,7 @@ export function v1Error(
 
 export async function authenticate(
   req: NextRequest,
+  requiredScope: KeyScope = "read",
 ): Promise<{ key: StoredKey } | NextResponse> {
   const token = extractToken(req);
   if (!token) {
@@ -43,6 +44,13 @@ export async function authenticate(
   if (!key) {
     return v1Error(401, "invalid_key", "API key is invalid or revoked.");
   }
+  if (!hasScope(key, requiredScope)) {
+    return v1Error(
+      403,
+      "insufficient_scope",
+      `This API key is missing the '${requiredScope}' scope.`,
+    );
+  }
   return { key };
 }
 
@@ -50,6 +58,7 @@ export function keyHeaders(key: StoredKey): Record<string, string> {
   return {
     "x-api-key-id": key.id,
     "x-api-key-usage": String(key.usage_count),
+    "x-api-key-scopes": (key.scopes ?? ["read", "write"]).join(","),
   };
 }
 

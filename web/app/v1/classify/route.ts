@@ -2,7 +2,7 @@
 // sk_live_* token via Authorization: Bearer ..., then proxies the
 // multipart form-data body to the upstream FastAPI /v1/classify.
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAndTouch } from "@/lib/keystore";
+import { verifyAndTouch, hasScope } from "@/lib/keystore";
 import { dispatchEvent } from "@/lib/webhooks";
 import { notifyClassifyCompleted } from "@/lib/notifications";
 
@@ -40,6 +40,13 @@ export async function POST(req: NextRequest) {
   const key = await verifyAndTouch(token);
   if (!key) {
     return errorResponse(401, "invalid_key", "API key is invalid or revoked.");
+  }
+  if (!hasScope(key, "write")) {
+    return errorResponse(
+      403,
+      "insufficient_scope",
+      "This API key is read-only. Create a key with the 'write' scope to call /v1/classify.",
+    );
   }
 
   // Validate body: must be multipart/form-data with a 'file' field.

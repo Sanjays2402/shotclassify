@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
         created_at: key.created_at,
         last_used_at: key.last_used_at,
         usage_count: key.usage_count,
+        scopes: key.scopes ?? ["read", "write"],
       },
     },
     { headers: keyHeaders(key) },

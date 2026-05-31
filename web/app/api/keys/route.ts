@@ -20,7 +20,8 @@ export async function POST(req: NextRequest) {
     /* empty body is ok */
   }
   const name = typeof body?.name === "string" ? body.name : "";
-  const { key, plaintext } = await createKey(name);
+  const scopes = body?.scopes;
+  const { key, plaintext } = await createKey(name, scopes);
   const { hash, ...safe } = key;
   return NextResponse.json({ key: safe, plaintext }, { status: 201 });
 }

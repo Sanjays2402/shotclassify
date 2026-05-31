@@ -3,6 +3,27 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 
+export type KeyScope = "read" | "write";
+
+export const ALL_SCOPES: KeyScope[] = ["read", "write"];
+
+export function normalizeScopes(input: unknown): KeyScope[] {
+  if (!Array.isArray(input)) return ["read", "write"];
+  const seen = new Set<KeyScope>();
+  for (const raw of input) {
+    if (raw === "read" || raw === "write") seen.add(raw);
+  }
+  if (seen.size === 0) return ["read", "write"];
+  // 'write' implies 'read' for ergonomic intent.
+  if (seen.has("write")) seen.add("read");
+  return ALL_SCOPES.filter((s) => seen.has(s));
+}
+
+export function hasScope(key: { scopes?: KeyScope[] }, needed: KeyScope): boolean {
+  const scopes = key.scopes ?? ["read", "write"];
+  return scopes.includes(needed);
+}
+
 export type StoredKey = {
   id: string;
   name: string;
@@ -12,6 +33,7 @@ export type StoredKey = {
   last_used_at: string | null;
   usage_count: number;
   rotated_at?: string | null;
+  scopes?: KeyScope[];
 };
 
 export type CreatedKey = {
@@ -68,6 +90,7 @@ export async function listKeysAt(file: string): Promise<StoredKey[]> {
 export async function createKeyAt(
   file: string,
   name: string,
+  scopes?: unknown,
 ): Promise<CreatedKey> {
   const cleanName = (name || "").trim().slice(0, 80) || "Untitled key";
   const plaintext = newToken();
@@ -80,6 +103,7 @@ export async function createKeyAt(
     last_used_at: null,
     usage_count: 0,
     rotated_at: null,
+    scopes: normalizeScopes(scopes),
   };
   const all = await readAll(file);
   all.push(key);
@@ -102,6 +126,7 @@ export async function rotateKeyAt(
     hash: sha256(plaintext),
     last_used_at: null,
     rotated_at: new Date().toISOString(),
+    scopes: existing.scopes && existing.scopes.length > 0 ? existing.scopes : ["read", "write"],
   };
   all[idx] = rotated;
   await writeAll(file, all);
@@ -125,6 +150,10 @@ export async function verifyAndTouchAt(
   const all = await readAll(file);
   const match = all.find((k) => k.hash === hash);
   if (!match) return null;
+  if (!match.scopes || match.scopes.length === 0) {
+    // Backfill legacy keys with full scope set on first verify.
+    match.scopes = ["read", "write"];
+  }
   match.last_used_at = new Date().toISOString();
   match.usage_count += 1;
   await writeAll(file, all);

@@ -2,6 +2,37 @@
 
 Screenshot classifier with vision LLM, OCR, structured extraction, and action routing. Drop in an image, get back a category with confidence and a saved record you can browse, share, or pull back via API.
 
+## What's new: scoped API keys (read vs. read+write)
+
+When you generate a key at `/keys` you now pick its scope. Read-only
+keys can list and fetch shots and report their own usage, but cannot
+call `POST /v1/classify` (the classifier returns `403
+insufficient_scope` with a clear message). Read+write keys behave like
+before. The scope is shown as a badge in the keys table, returned on
+`GET /v1/usage`, and surfaced as `x-api-key-scopes` on every
+`/v1/*` response so dashboards can show the calling key's permissions.
+Legacy keys with no stored scope keep working with full access and get
+backfilled on next use.
+
+### Try it
+
+```bash
+# 1. Open the keys page and create a read-only key.
+open http://localhost:3000/keys   # pick "Read only" in the Scope dropdown
+
+# 2. List your shots (works with read-only).
+curl -H "Authorization: Bearer sk_live_YOUR_READ_KEY" \
+  http://localhost:3000/v1/shots?limit=5
+
+# 3. Try to classify (read-only key gets blocked).
+curl -i -X POST \
+  -H "Authorization: Bearer sk_live_YOUR_READ_KEY" \
+  -F "file=@samples/example.png" \
+  http://localhost:3000/v1/classify
+# -> HTTP/1.1 403 Forbidden
+# -> {"error":{"code":"insufficient_scope",...}}
+```
+
 ## What's new: per-webhook delivery log with one-click replay
 
 Every webhook subscription now has its own detail page at
