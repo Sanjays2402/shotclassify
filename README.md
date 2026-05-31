@@ -2,6 +2,30 @@
 
 Screenshot classifier with vision LLM, OCR, structured extraction, and action routing. Drop in an image, get back a category with confidence and a saved record you can browse, share, or pull back via API.
 
+## What's new: notifications search, kind filter, and pagination
+
+The `/notifications` inbox is now usable past the first 25 entries.
+There is a real search box (matches title, body, and kind), a kind
+selector (Classifications / Webhook failures / System), an "unread
+only" toggle, and a `Load more` cursor at the bottom. Filters are
+applied server-side via the same `/api/notifications` route, which
+now accepts `q`, `kind`, `unread_only`, `cursor`, and `limit`. The
+bell and any caller that doesn't pass query params keeps the
+original `{items, unread}` response shape so existing integrations
+don't break.
+
+### Try it
+
+```bash
+open http://localhost:3000/notifications
+
+# Or drive the paged endpoint directly:
+curl 'http://localhost:3000/api/notifications?paged=1&limit=25'
+curl 'http://localhost:3000/api/notifications?q=webhook&kind=webhook.failed&unread_only=1'
+```
+
+Covered by `web/lib/notif-query.test.mts` (7 tests).
+
 ## What's new: notification preferences
 
 The `/notifications` page now has a Preferences card that lets you mute
