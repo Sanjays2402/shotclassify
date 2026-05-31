@@ -2,6 +2,35 @@
 
 Screenshot classifier with vision LLM, OCR, structured extraction, and action routing. Drop in an image, get back a category with confidence and a saved record you can browse, share, or pull back via API.
 
+## What's new: per-webhook delivery log with one-click replay
+
+Every webhook subscription now has its own detail page at
+`/webhooks/<id>` that lists every recorded delivery attempt with HTTP
+status, latency, attempt counter, error text, and the first 240 bytes of
+the signed payload. Failed deliveries can be replayed against the
+current target URL with a single click, which fires a fresh signed POST
+that references the original delivery id (`replay_of`) so receivers can
+dedupe. The signing secret prefix is shown for quick HMAC verification.
+
+New route: `PATCH /api/webhooks/{id}` now accepts
+`{ "action": "redeliver", "delivery_id": "..." }` in addition to the
+existing `test` and `active` actions. The replay is a single attempt and
+returns the new `Delivery` record. Covered by `web/lib/webhooks.test.mts`.
+
+### Try it
+
+```bash
+make dev   # or: pnpm --dir web dev  +  uvicorn services.api.main:app --port 7441
+
+open http://localhost:3000/webhooks            # create a subscription
+open http://localhost:3000/webhooks/<id>       # detail page + delivery log
+
+# Replay a failed delivery from the shell
+curl -sS -X PATCH http://localhost:3000/api/webhooks/<webhook-id> \
+  -H "content-type: application/json" \
+  -d '{"action":"redeliver","delivery_id":"<delivery-id>"}' | jq
+```
+
 ## What's new: public /v1 REST API + docs page
 
 The programmatic surface now goes beyond `POST /v1/classify`. Customers

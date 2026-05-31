@@ -5,6 +5,7 @@ import {
   setActive,
   testFire,
   listDeliveries,
+  redeliver,
 } from "@/lib/webhooks";
 
 export const runtime = "nodejs";
@@ -69,6 +70,30 @@ export async function PATCH(
     const delivery = await testFire(hook);
     return NextResponse.json({ delivery });
   }
+  if (body?.action === "redeliver") {
+    const deliveryId = typeof body?.delivery_id === "string" ? body.delivery_id : "";
+    if (!deliveryId) {
+      return NextResponse.json(
+        { error: { code: "invalid_input", message: "delivery_id is required." } },
+        { status: 400 },
+      );
+    }
+    const result = await redeliver(deliveryId);
+    if ("error" in result) {
+      return NextResponse.json(
+        { error: { code: result.error, message: result.error === "delivery_not_found" ? "Delivery not found." : "Webhook no longer exists." } },
+        { status: 404 },
+      );
+    }
+    // Ensure the redelivered delivery belongs to this webhook.
+    if (result.delivery.webhook_id !== id) {
+      return NextResponse.json(
+        { error: { code: "mismatch", message: "Delivery does not belong to this webhook." } },
+        { status: 400 },
+      );
+    }
+    return NextResponse.json({ delivery: result.delivery });
+  }
   if (typeof body?.active === "boolean") {
     const updated = await setActive(id, body.active);
     if (!updated) {
@@ -82,7 +107,7 @@ export async function PATCH(
     });
   }
   return NextResponse.json(
-    { error: { code: "no_op", message: "Provide 'active' or action='test'." } },
+    { error: { code: "no_op", message: "Provide 'active', action='test', or action='redeliver'." } },
     { status: 400 },
   );
 }

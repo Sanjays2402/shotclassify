@@ -265,6 +265,48 @@ export async function dispatchEvent(
   }
 }
 
+// Replay a recorded delivery against its current webhook target.
+// Returns the new Delivery, or null if either the delivery or its webhook
+// no longer exists. Single attempt, awaited so the UI can show the result.
+export async function redeliver(
+  deliveryId: string,
+): Promise<{ delivery: Delivery } | { error: "delivery_not_found" | "webhook_not_found" }> {
+  const all = await readJson<Delivery[]>(DELIVERIES_PATH, []);
+  const prior = all.find((d) => d.id === deliveryId);
+  if (!prior) return { error: "delivery_not_found" };
+  const hook = await getWebhook(prior.webhook_id);
+  if (!hook) return { error: "webhook_not_found" };
+  // Reconstruct the body we can replay. We only stored a preview, so we send
+  // a replay envelope that references the original delivery for traceability.
+  const payload = {
+    event: prior.event,
+    replay_of: prior.id,
+    original_at: prior.created_at,
+    original_payload_preview: prior.payload_preview,
+    delivered_at: new Date().toISOString(),
+  };
+  const body = JSON.stringify(payload);
+  const sig = sign(hook.secret, body);
+  const r = await attemptDelivery(hook, body, sig, prior.event, 1);
+  const now = new Date().toISOString();
+  const delivery: Delivery = {
+    id: crypto.randomUUID(),
+    webhook_id: hook.id,
+    event: prior.event,
+    url: hook.url,
+    status: r.ok ? "success" : "failed",
+    attempt: 1,
+    http_status: r.status,
+    error: r.error,
+    latency_ms: r.latency,
+    created_at: now,
+    payload_preview: body.slice(0, 240),
+  };
+  await recordDelivery(delivery);
+  await bumpCounters(hook.id, r.ok, now);
+  return { delivery };
+}
+
 // Synchronous test ping (single attempt, awaited so the UI can show the result).
 export async function testFire(
   hook: Webhook,

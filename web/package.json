@@ -26,6 +26,7 @@
     "eslint": "9.13.0",
     "eslint-config-next": "15.0.3",
     "postcss": "8.4.49",
+    "server-only": "^0.0.1",
     "tailwindcss": "^4.3.0",
     "typescript": "5.6.3"
   }

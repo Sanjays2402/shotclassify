@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Broadcast as Webhooks,
@@ -383,6 +384,15 @@ export default function WebhooksPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  <Link
+                    href={`/webhooks/${encodeURIComponent(h.id)}`}
+                    className="btn btn-secondary text-xs px-2 py-1"
+                    aria-label="View webhook details and delivery log"
+                    title="Details"
+                  >
+                    <span className="hidden sm:inline">Details</span>
+                    <span className="sm:hidden">View</span>
+                  </Link>
                   <button
                     type="button"
                     className="btn btn-secondary text-xs px-2 py-1"
