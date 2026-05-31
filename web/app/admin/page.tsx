@@ -22,6 +22,7 @@ import {
   WebhooksLogo,
   Gavel,
   Scales,
+  Gauge,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -258,6 +259,13 @@ export default function AdminConsolePage() {
           value="Manage"
           href="/admin/api-webhooks"
           sub="signed deliveries"
+        />
+        <StatCard
+          icon={<Gauge size={18} weight="duotone" />}
+          label="Rate limits"
+          value="Configure"
+          href="/settings/security/rate-limits"
+          sub="per workspace, per key"
         />
         <StatCard
           icon={<Gavel size={18} weight="duotone" />}
