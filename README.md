@@ -2651,6 +2651,36 @@ For ad hoc capture inside application code use
 `shotclassify_common.capture_exception(exc)`, which returns the Sentry event
 id when initialized and `None` otherwise; it never raises.
 
+## Per-tenant upload size cap
+
+Workspace admins can cap the byte size of any single image accepted by the classify routes (`POST /v1/classify`, `POST /v1/classify/batch`, `POST /v1/queue`). Oversized uploads are refused with HTTP 413 `upload_too_large` before the payload is buffered to disk or sent to the model, so a single tenant cannot exhaust shared worker memory or drive up inference cost.
+
+Try it:
+
+- UI: `http://localhost:3000/settings/security` then the "Upload size cap" section (admin role, MFA step-up required to save).
+- API:
+
+```bash
+# read the current policy (null = no cap, falls back to the deployment global)
+curl -s http://localhost:7441/v1/settings/security/upload-size \
+  -H "X-API-Key: $SHOTCLASSIFY_API_KEY"
+
+# enforce a 10 MiB per-upload cap for this workspace
+curl -s -X PUT http://localhost:7441/v1/settings/security/upload-size \
+  -H "X-API-Key: $SHOTCLASSIFY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"max_upload_bytes": 10485760}'
+
+# clear the policy
+curl -s -X PUT http://localhost:7441/v1/settings/security/upload-size \
+  -H "X-API-Key: $SHOTCLASSIFY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"max_upload_bytes": null}'
+```
+
+The policy is strictly tenant-scoped: tenant A's cap cannot be read or enforced against tenant B (covered by `tests/test_upload_size_policy.py`).
+
 ## License
 
 MIT. See `LICENSE`.
+

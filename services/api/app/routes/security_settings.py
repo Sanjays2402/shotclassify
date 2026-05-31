@@ -47,6 +47,10 @@ from shotclassify_store import (
     set_tenant_oidc,
     set_webhook_egress_allowed_hosts,
     WEBHOOK_EGRESS_HOSTS_MAX,
+    UPLOAD_BYTES_MIN,
+    UPLOAD_BYTES_MAX,
+    get_upload_size_policy,
+    set_upload_size_policy,
 )
 from datetime import timedelta
 from shotclassify_store.sessions import SESSION_TTL, clip_active_for_tenant
@@ -792,3 +796,52 @@ def put_webhook_egress_hosts_route(
         "hosts": normalized,
         "max_hosts": WEBHOOK_EGRESS_HOSTS_MAX,
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant max upload byte cap (classify routes)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/upload-size", dependencies=[require_role("admin")])
+def get_upload_size_route(request: Request) -> dict:
+    """Return the tenant's per-upload byte cap (or null = no policy)."""
+    tenant_id = _tenant(request)
+    return get_upload_size_policy(tenant_id).to_dict()
+
+
+@router.put(
+    "/upload-size",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_upload_size_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Set or clear the per-tenant max upload size in bytes.
+
+    Body: ``{"max_upload_bytes": int|null}``. ``null`` clears the policy
+    and the tenant falls back to the deployment-wide global limit. When
+    set, every ``POST /v1/classify``, ``POST /v1/classify/batch``, and
+    ``POST /v1/queue`` upload whose declared or buffered size exceeds
+    the cap is rejected with HTTP 413 ``upload_too_large`` before the
+    bytes hit disk or the model.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "JSON object body required.")
+    if "max_upload_bytes" not in payload:
+        raise HTTPException(
+            422, "Field 'max_upload_bytes' is required (int or null)."
+        )
+    raw = payload["max_upload_bytes"]
+    if raw is not None and (isinstance(raw, bool) or not isinstance(raw, int)):
+        raise HTTPException(422, "max_upload_bytes must be an integer or null.")
+    actor = getattr(request.state, "principal", None)
+    try:
+        cfg = set_upload_size_policy(
+            tenant_id, max_upload_bytes=raw, updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return cfg.to_dict()

@@ -1409,3 +1409,92 @@ def webhook_host_matches_allowlist(host: str, allowlist: list[str]) -> bool:
             if h == e:
                 return True
     return False
+
+
+# --- Per-tenant max upload size (classify routes) ------------------------
+
+# Bounds for the per-tenant upload cap. The floor (32 KiB) is large enough
+# for any real image our pipeline accepts; the ceiling (256 MiB) is well
+# above any legitimate single-image workload and serves only to keep
+# admins from typing a value that would defeat the purpose of the cap.
+UPLOAD_BYTES_MIN: int = 32 * 1024
+UPLOAD_BYTES_MAX: int = 256 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class UploadSizePolicy:
+    tenant_id: str
+    max_upload_bytes: int | None  # None = no policy (legacy)
+
+    def to_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "max_upload_bytes": self.max_upload_bytes,
+            "min_bytes": UPLOAD_BYTES_MIN,
+            "max_bytes": UPLOAD_BYTES_MAX,
+        }
+
+
+def get_upload_size_policy(tenant_id: str | None) -> UploadSizePolicy:
+    """Return the per-tenant cap on a single classify upload, in bytes."""
+    if not tenant_id:
+        return UploadSizePolicy(tenant_id="", max_upload_bytes=None)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return UploadSizePolicy(tenant_id=tenant_id, max_upload_bytes=None)
+        return UploadSizePolicy(
+            tenant_id=tenant_id,
+            max_upload_bytes=getattr(row, "max_upload_bytes", None),
+        )
+
+
+def set_upload_size_policy(
+    tenant_id: str,
+    *,
+    max_upload_bytes: int | None,
+    updated_by: str | None,
+) -> UploadSizePolicy:
+    """Persist (or clear) the tenant's max upload size in bytes.
+
+    ``None`` clears the policy and the tenant falls back to the global
+    deployment limit. Raises ``ValueError`` on non-integer or
+    out-of-range values so the API layer can return 422.
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    norm: int | None
+    if max_upload_bytes is None:
+        norm = None
+    else:
+        if isinstance(max_upload_bytes, bool) or not isinstance(max_upload_bytes, int):
+            raise ValueError("max_upload_bytes must be an integer or null")
+        if max_upload_bytes < UPLOAD_BYTES_MIN or max_upload_bytes > UPLOAD_BYTES_MAX:
+            raise ValueError(
+                f"max_upload_bytes must be between {UPLOAD_BYTES_MIN} "
+                f"and {UPLOAD_BYTES_MAX} bytes"
+            )
+        norm = max_upload_bytes
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                max_upload_bytes=norm,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.max_upload_bytes = norm
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return UploadSizePolicy(tenant_id=tenant_id, max_upload_bytes=norm)

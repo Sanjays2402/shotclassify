@@ -292,6 +292,15 @@ class TenantSettingsRow(Base):
     webhook_egress_allowed_hosts: Mapped[list[str] | None] = mapped_column(
         JSON, nullable=True
     )
+    # Per-tenant cap on the byte size of any single upload accepted by
+    # the classify routes (``/v1/classify``, ``/v1/classify/batch``,
+    # ``/v1/queue``). NULL = no per-tenant cap (legacy behaviour); the
+    # process-wide global from ``shotclassify_common.settings`` still
+    # applies. When set, oversized uploads are rejected with HTTP 413
+    # ``upload_too_large`` *before* the file is buffered to disk, which
+    # protects shared workers from runaway memory and gives procurement
+    # a per-workspace abuse-and-cost control they can demonstrate.
+    max_upload_bytes: Mapped[int | None] = mapped_column(nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -850,6 +859,11 @@ def init_db() -> None:
                 if "webhook_egress_allowed_hosts" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN webhook_egress_allowed_hosts JSON"
+                    ))
+                # 0033 per-tenant max upload byte cap for classify routes.
+                if "max_upload_bytes" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN max_upload_bytes INTEGER"
                     ))
             if insp.has_table("sessions"):
                 scols = {c["name"] for c in insp.get_columns("sessions")}

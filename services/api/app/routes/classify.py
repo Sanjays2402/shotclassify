@@ -8,7 +8,11 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Reque
 from shotclassify_common import Category, ProcessResult, get_settings
 from shotclassify_common.pipeline import process_image
 from shotclassify_common.utils import ensure_dir, new_id
-from shotclassify_store import Repository, webhooks_store
+from shotclassify_store import (
+    Repository,
+    get_upload_size_policy,
+    webhooks_store,
+)
 
 from ..middleware.rbac import require_role, require_scope
 from .usage import enforce_quota
@@ -61,14 +65,76 @@ def _dispatch_classify_event(
         pass
 
 
-def _save_upload(upload: UploadFile) -> tuple[str, str]:
+def _resolve_upload_cap(tenant_id: str | None) -> int | None:
+    """Return the byte cap that applies to a single upload for this tenant.
+
+    Per-tenant policy takes precedence. When no per-tenant policy is set
+    we return ``None`` so existing deployments keep their legacy
+    behaviour (gated only by the reverse proxy / global body size).
+    """
+    if not tenant_id:
+        return None
+    pol = get_upload_size_policy(tenant_id)
+    return pol.max_upload_bytes
+
+
+def _enforce_upload_cap(upload: UploadFile, cap: int | None) -> None:
+    """Reject an upload that already announces a size beyond ``cap``.
+
+    Multipart uploads carry a ``Content-Length`` / ``size`` hint long
+    before the bytes are buffered to disk. Catching the violation here
+    keeps a hostile or buggy client from spending tenant disk and
+    pipeline time on a payload that will be discarded anyway. The
+    streaming reader in ``_save_upload`` re-checks the actual buffered
+    length so a missing or lying header cannot bypass the cap.
+    """
+    if cap is None:
+        return
+    declared = getattr(upload, "size", None)
+    if isinstance(declared, int) and declared > cap:
+        raise HTTPException(
+            413,
+            {
+                "error": "upload_too_large",
+                "max_upload_bytes": cap,
+                "declared_bytes": declared,
+                "filename": upload.filename,
+            },
+        )
+
+
+def _save_upload(upload: UploadFile, cap: int | None = None) -> tuple[str, str]:
     s = get_settings()
     rid = new_id()
     upload_dir = ensure_dir(Path(s.storage_local_dir) / "uploads")
     suffix = Path(upload.filename or "image.png").suffix or ".png"
     dest = upload_dir / f"{rid}{suffix}"
+    chunk_size = 1024 * 1024
+    written = 0
     with dest.open("wb") as f:
-        f.write(upload.file.read())
+        while True:
+            chunk = upload.file.read(chunk_size)
+            if not chunk:
+                break
+            written += len(chunk)
+            if cap is not None and written > cap:
+                # Stop, drop the partial file, and tell the caller why
+                # before the model ever sees the payload.
+                f.close()
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
+                raise HTTPException(
+                    413,
+                    {
+                        "error": "upload_too_large",
+                        "max_upload_bytes": cap,
+                        "buffered_bytes": written,
+                        "filename": upload.filename,
+                    },
+                )
+            f.write(chunk)
     return rid, str(dest)
 
 
@@ -85,7 +151,9 @@ async def classify(
     tenant_id = getattr(request.state, "tenant_id", None)
     request_id = getattr(request.state, "request_id", None)
     enforce_quota(principal, tenant_id=tenant_id)
-    rid, path = _save_upload(file)
+    cap = _resolve_upload_cap(tenant_id)
+    _enforce_upload_cap(file, cap)
+    rid, path = _save_upload(file, cap)
     result = await asyncio.to_thread(
         process_image, path, note, True, rid, principal, tenant_id
     )
@@ -112,7 +180,10 @@ async def classify_batch(
     tenant_id = getattr(request.state, "tenant_id", None)
     request_id = getattr(request.state, "request_id", None)
     enforce_quota(principal, tenant_id=tenant_id)
-    saved = [_save_upload(f) for f in files]
+    cap = _resolve_upload_cap(tenant_id)
+    for f in files:
+        _enforce_upload_cap(f, cap)
+    saved = [_save_upload(f, cap) for f in files]
     tasks = [
         asyncio.to_thread(process_image, p, note, True, rid, principal, tenant_id)
         for rid, p in saved
@@ -171,9 +242,12 @@ async def correct(item_id: str, request: Request, category: str = Form(...)):
 
 
 @router.post("/queue", response_model=dict)
-async def enqueue(file: UploadFile = File(...), background: BackgroundTasks = None):
+async def enqueue(request: Request, file: UploadFile = File(...), background: BackgroundTasks = None):
     """Enqueue via Redis RQ if available; otherwise run inline as background task."""
-    rid, path = _save_upload(file)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    cap = _resolve_upload_cap(tenant_id)
+    _enforce_upload_cap(file, cap)
+    rid, path = _save_upload(file, cap)
     try:
         from redis import Redis  # type: ignore
         from rq import Queue  # type: ignore

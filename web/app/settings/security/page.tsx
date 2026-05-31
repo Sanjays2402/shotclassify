@@ -16,6 +16,7 @@ import {
   Devices,
   SignOut,
   Key as KeyIcon,
+  CloudArrowUp,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -291,6 +292,7 @@ export default function SecuritySettingsPage() {
       <ApiKeyTtlPolicySection />
       <ApiKeyInactivityPolicySection />
       <ApiKeyMaxActivePolicySection />
+      <UploadSizePolicySection />
       <MfaPolicySection />
       <CorsOriginsSection />
       <SessionsSection />
@@ -2708,6 +2710,244 @@ function ApiKeyMaxActivePolicySection() {
           </div>
         </>
       ) : null}
+    </section>
+  );
+}
+
+type UploadSizeResponse = {
+  tenant_id: string;
+  max_upload_bytes: number | null;
+  min_bytes: number;
+  max_bytes: number;
+};
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KiB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
+
+function UploadSizePolicySection() {
+  const { data, error, isLoading, mutate } = useSWR<UploadSizeResponse>(
+    "/api/settings/security/upload-size",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+
+  const [enforce, setEnforce] = useState<boolean>(false);
+  const [mib, setMib] = useState<string>("");
+  const [otp, setOtp] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!data) return;
+    if (data.max_upload_bytes != null) {
+      setEnforce(true);
+      setMib(String(Math.max(1, Math.round(data.max_upload_bytes / (1024 * 1024)))));
+    } else {
+      setEnforce(false);
+      setMib("10");
+    }
+  }, [data?.max_upload_bytes]);
+
+  const status = error as ApiError | undefined;
+  const unauth = status?.status === 401;
+  const forbidden = status?.status === 403;
+
+  const presets: Array<{ label: string; mib: number }> = [
+    { label: "1 MiB", mib: 1 },
+    { label: "5 MiB", mib: 5 },
+    { label: "10 MiB", mib: 10 },
+    { label: "25 MiB", mib: 25 },
+    { label: "50 MiB", mib: 50 },
+  ];
+
+  async function save() {
+    if (!data) return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      let body: { max_upload_bytes: number | null };
+      if (!enforce) {
+        body = { max_upload_bytes: null };
+      } else {
+        const parsed = Math.trunc(Number(mib));
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          setFlash({ kind: "err", msg: "Enter a positive size in MiB." });
+          setBusy(false);
+          return;
+        }
+        const bytes = parsed * 1024 * 1024;
+        if (bytes < data.min_bytes || bytes > data.max_bytes) {
+          setFlash({
+            kind: "err",
+            msg: `Size must be between ${fmtBytes(data.min_bytes)} and ${fmtBytes(data.max_bytes)}.`,
+          });
+          setBusy(false);
+          return;
+        }
+        body = { max_upload_bytes: bytes };
+      }
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (otp.trim()) headers["x-mfa-otp"] = otp.trim();
+      const res = await fetch("/api/settings/security/upload-size", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setFlash({ kind: "err", msg: text || `Save failed (${res.status})` });
+        setBusy(false);
+        return;
+      }
+      const next: UploadSizeResponse = await res.json();
+      setFlash({ kind: "ok", msg: "Saved." });
+      setOtp("");
+      await mutate(next, { revalidate: false });
+    } catch (e) {
+      setFlash({ kind: "err", msg: (e as Error).message || "Save failed" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-center gap-2 mb-2">
+        <CloudArrowUp size={20} weight="duotone" className="text-sky-600" />
+        <h2 className="text-base font-semibold">Upload size cap</h2>
+        {data?.tenant_id ? (
+          <span className="ml-auto rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+            tenant: {data.tenant_id}
+          </span>
+        ) : null}
+      </div>
+      <p className="text-sm text-zinc-500 mb-4">
+        Cap the byte size of any single image accepted by the classify
+        endpoints. Oversized uploads are refused with HTTP 413 before
+        the bytes are buffered to disk or sent to the model, which keeps
+        a single tenant from exhausting shared worker memory or driving
+        up inference cost.
+      </p>
+
+      {isLoading ? (
+        <div className="space-y-2" aria-busy="true">
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+        </div>
+      ) : unauth ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Sign in to manage the upload cap.
+        </div>
+      ) : forbidden ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Admin role required to change the upload cap.
+        </div>
+      ) : !data ? (
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+          Could not load upload size policy.
+        </div>
+      ) : (
+        <>
+          <div className="mb-4 flex flex-wrap items-center gap-3 text-sm">
+            <span className="text-zinc-500">Current:</span>
+            <span className="rounded-md bg-zinc-100 px-2 py-1 font-mono text-xs dark:bg-zinc-900">
+              {data.max_upload_bytes == null
+                ? "no cap (global limit only)"
+                : `${fmtBytes(data.max_upload_bytes)} per upload`}
+            </span>
+          </div>
+
+          <label className="mb-3 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={enforce}
+              onChange={(e) => setEnforce(e.target.checked)}
+              className="h-4 w-4 rounded border-zinc-300 text-sky-600 focus:ring-sky-500"
+            />
+            <span>Enforce a per-upload size cap for this workspace</span>
+          </label>
+
+          {enforce ? (
+            <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block text-sm">
+                <span className="mb-1 block text-zinc-600 dark:text-zinc-400">
+                  Max upload size (MiB)
+                </span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={Math.floor(data.max_bytes / (1024 * 1024))}
+                  value={mib}
+                  onChange={(e) => setMib(e.target.value)}
+                  className="w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 font-mono text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:border-zinc-700 dark:bg-zinc-900"
+                />
+              </label>
+              <div className="flex flex-wrap items-end gap-1.5">
+                {presets.map((p) => (
+                  <button
+                    key={p.mib}
+                    type="button"
+                    onClick={() => setMib(String(p.mib))}
+                    className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900"
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <label className="mb-3 block text-sm">
+            <span className="mb-1 block text-zinc-600 dark:text-zinc-400">
+              MFA code (required to save)
+            </span>
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value)}
+              placeholder="6 digit code"
+              className="w-40 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 font-mono text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          </label>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FloppyDisk size={16} weight="duotone" />
+              {busy ? "Saving" : "Save policy"}
+            </button>
+            <span className="text-xs text-zinc-500">
+              Range: {fmtBytes(data.min_bytes)} to {fmtBytes(data.max_bytes)}.
+            </span>
+          </div>
+
+          {flash ? (
+            <p
+              className={`mt-3 text-sm ${
+                flash.kind === "ok"
+                  ? "text-emerald-700 dark:text-emerald-300"
+                  : "text-rose-700 dark:text-rose-300"
+              }`}
+              role="status"
+            >
+              {flash.msg}
+            </p>
+          ) : null}
+        </>
+      )}
     </section>
   );
 }
