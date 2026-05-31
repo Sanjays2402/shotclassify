@@ -33,7 +33,7 @@ export async function DELETE(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  const auth = await authenticate(req, "write");
+  const auth = await authenticate(req, "admin");
   if (auth instanceof NextResponse) return auth;
 
   const { id } = await ctx.params;

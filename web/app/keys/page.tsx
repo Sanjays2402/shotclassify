@@ -13,7 +13,7 @@ import {
   ArrowsClockwise,
 } from "@phosphor-icons/react/dist/ssr";
 
-type KeyScope = "read" | "write";
+type KeyScope = "read" | "write" | "admin";
 
 type KeyRow = {
   id: string;
@@ -44,7 +44,7 @@ export default function KeysPage() {
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newScope, setNewScope] = useState<"read" | "write">("write");
+  const [newScope, setNewScope] = useState<"read" | "write" | "admin">("write");
   const [revealed, setRevealed] = useState<{
     name: string;
     plaintext: string;
@@ -79,7 +79,12 @@ export default function KeysPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: newName,
-          scopes: newScope === "write" ? ["read", "write"] : ["read"],
+          scopes:
+            newScope === "admin"
+              ? ["read", "write", "admin"]
+              : newScope === "write"
+                ? ["read", "write"]
+                : ["read"],
         }),
       });
       if (!r.ok) {
@@ -222,13 +227,14 @@ export default function KeysPage() {
             <select
               id="key-scope"
               value={newScope}
-              onChange={(e) => setNewScope(e.target.value as "read" | "write")}
+              onChange={(e) => setNewScope(e.target.value as "read" | "write" | "admin")}
               className="w-full rounded-md border px-3 py-2 text-[13px] bg-white outline-none focus:ring-2"
               style={{ borderColor: "var(--color-rule)" }}
               aria-describedby="key-scope-help"
             >
               <option value="write">Read and write (classify)</option>
               <option value="read">Read only (list, fetch, usage)</option>
+              <option value="admin">Admin (manage webhooks, full access)</option>
             </select>
             <p
               id="key-scope-help"
@@ -394,8 +400,13 @@ export default function KeysPage() {
                     <td className="px-3 py-2">
                       {(() => {
                         const scopes = k.scopes ?? ["read", "write"];
+                        const isAdmin = scopes.includes("admin");
                         const canWrite = scopes.includes("write");
-                        const label = canWrite ? "read+write" : "read";
+                        const label = isAdmin
+                          ? "admin"
+                          : canWrite
+                            ? "read+write"
+                            : "read";
                         return (
                           <span
                             className="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-mono"
@@ -408,9 +419,13 @@ export default function KeysPage() {
                                 ? "var(--color-felt, #1a7a4a)"
                                 : "var(--color-ink-mute)",
                             }}
-                            title={canWrite
-                              ? "Can call POST /v1/classify and all read endpoints."
-                              : "Read-only. POST /v1/classify will return 403 insufficient_scope."}
+                            title={
+                              isAdmin
+                                ? "Admin scope. Can manage webhooks plus all classify and read endpoints."
+                                : canWrite
+                                  ? "Can call POST /v1/classify and all read endpoints."
+                                  : "Read-only. POST /v1/classify will return 403 insufficient_scope."
+                            }
                           >
                             {label}
                           </span>

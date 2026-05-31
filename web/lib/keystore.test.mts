@@ -78,6 +78,15 @@ test("normalizeScopes defaults, dedupes, and read+write implies read", () => {
   assert.deepEqual(normalizeScopes(["write"]), ["read", "write"]);
   assert.deepEqual(normalizeScopes(["read", "read", "write"]), ["read", "write"]);
   assert.deepEqual(normalizeScopes(["bogus"]), ["read", "write"]);
+  // admin implies write implies read
+  assert.deepEqual(normalizeScopes(["admin"]), ["read", "write", "admin"]);
+  assert.deepEqual(normalizeScopes(["admin", "read"]), ["read", "write", "admin"]);
+});
+
+test("hasScope respects admin tier and hierarchy", () => {
+  assert.equal(hasScope({ scopes: ["read", "write", "admin"] }, "admin"), true);
+  assert.equal(hasScope({ scopes: ["read", "write"] }, "admin"), false);
+  assert.equal(hasScope({ scopes: ["read"] }, "admin"), false);
 });
 
 test("hasScope honors stored scopes and legacy default", () => {

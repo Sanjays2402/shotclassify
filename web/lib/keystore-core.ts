@@ -3,18 +3,23 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 
-export type KeyScope = "read" | "write";
+export type KeyScope = "read" | "write" | "admin";
 
-export const ALL_SCOPES: KeyScope[] = ["read", "write"];
+export const ALL_SCOPES: KeyScope[] = ["read", "write", "admin"];
 
 export function normalizeScopes(input: unknown): KeyScope[] {
   if (!Array.isArray(input)) return ["read", "write"];
   const seen = new Set<KeyScope>();
   for (const raw of input) {
-    if (raw === "read" || raw === "write") seen.add(raw);
+    if (raw === "read" || raw === "write" || raw === "admin") seen.add(raw);
   }
   if (seen.size === 0) return ["read", "write"];
-  // 'write' implies 'read' for ergonomic intent.
+  // 'admin' implies 'write' implies 'read'. Enterprise customers expect a
+  // strict hierarchy so an admin token never has to be paired with lower
+  // scopes to perform mundane reads.
+  if (seen.has("admin")) {
+    seen.add("write");
+  }
   if (seen.has("write")) seen.add("read");
   return ALL_SCOPES.filter((s) => seen.has(s));
 }

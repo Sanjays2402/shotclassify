@@ -4,7 +4,9 @@
 //
 // Authenticated with the same `Authorization: Bearer sk_...` or `x-api-key`
 // header the rest of /v1 uses. Listing requires the `read` scope; create
-// requires `write`.
+// requires the `admin` scope. Webhooks deliver workspace data to external
+// systems, so registering one is treated as an administrative integration
+// change rather than a routine write.
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, v1Error } from "@/lib/v1auth";
 import {
@@ -32,7 +34,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await authenticate(req, "write");
+  const auth = await authenticate(req, "admin");
   if (auth instanceof NextResponse) return auth;
 
   let body: any = null;

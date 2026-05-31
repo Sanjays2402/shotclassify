@@ -123,6 +123,28 @@ Full reference is rendered at http://localhost:3000/api-docs.
 
 > Real-time screenshot classifier with confidence scoring, OCR, history, sharing, API keys, webhooks, and a Cmd+K command palette.
 
+## What's new: admin scope for API keys
+
+API keys now support three scope tiers: `read`, `write`, and `admin`. Admin
+implies write implies read, enforced server-side via `normalizeScopes`.
+Registering or deleting a webhook through `/v1/webhooks` now requires the
+`admin` scope so an integration token cannot quietly pipe workspace data
+to a third party with a routine write key. Read and classify behavior is
+unchanged. Pick the tier on the keys page or toggle it inline on the key
+detail page.
+
+Try it:
+
+```bash
+open http://localhost:3000/keys
+# create a read+write key, then try registering a webhook
+curl -sS -X POST http://localhost:3000/v1/webhooks \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "content-type: application/json" \
+  -d '{"url":"https://example.com/hook"}'
+# -> {"error":{"code":"insufficient_scope","message":"This API key is missing the 'admin' scope."}}
+```
+
 ## What's new: per-key usage detail page
 
 Every API key now has its own page at `/keys/<id>` with a 30-day request

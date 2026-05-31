@@ -17,7 +17,7 @@ import {
   Warning,
 } from "@phosphor-icons/react/dist/ssr";
 
-type KeyScope = "read" | "write";
+type KeyScope = "read" | "write" | "admin";
 
 type KeyDetail = {
   id: string;
@@ -191,7 +191,8 @@ export default function KeyDetailPage() {
       const current = new Set<KeyScope>(data.key.scopes ?? ["read", "write"]);
       if (present) current.delete(scope);
       else current.add(scope);
-      // 'write' implies 'read' (mirrors server-side normalize)
+      // mirror server-side normalize: admin implies write implies read
+      if (current.has("admin")) current.add("write");
       if (current.has("write")) current.add("read");
       const next = Array.from(current);
       if (next.length === 0) return; // require at least one
@@ -515,11 +516,12 @@ export default function KeyDetailPage() {
               className="text-[12px] mt-1"
               style={{ color: "var(--color-ink-mute)" }}
             >
-              Read covers GET endpoints. Write covers POST /v1/classify. Write
-              implies read.
+              Read covers GET endpoints. Write covers POST /v1/classify and
+              implies read. Admin is required to register or delete webhooks
+              and implies write.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
-              {(["read", "write"] as KeyScope[]).map((scope) => {
+              {(["read", "write", "admin"] as KeyScope[]).map((scope) => {
                 const has = (data.key.scopes ?? ["read", "write"]).includes(
                   scope,
                 );
