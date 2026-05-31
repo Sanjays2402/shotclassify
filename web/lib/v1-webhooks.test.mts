@@ -32,16 +32,17 @@ const { createWebhook, listWebhooks, getWebhook, deleteWebhook } = await import(
 );
 
 test("v1 webhooks: create then list returns the new subscription", async () => {
-  const before = await listWebhooks();
+  const before = await listWebhooks("default");
   const hook = await createWebhook({
     url: "https://example.com/incoming",
     description: "ci test hook",
     events: ["classify.completed"],
+    workspaceId: "default",
   });
   assert.ok(hook.id);
   assert.ok(hook.secret.startsWith("whsec_"));
   assert.equal(hook.url, "https://example.com/incoming");
-  const after = await listWebhooks();
+  const after = await listWebhooks("default");
   assert.equal(after.length, before.length + 1);
   assert.ok(after.find((h) => h.id === hook.id));
 });
@@ -49,21 +50,22 @@ test("v1 webhooks: create then list returns the new subscription", async () => {
 test("v1 webhooks: get and delete round-trip", async () => {
   const hook = await createWebhook({
     url: "https://example.com/another",
+    workspaceId: "default",
   });
-  const fetched = await getWebhook(hook.id);
+  const fetched = await getWebhook(hook.id, "default");
   assert.ok(fetched);
   assert.equal(fetched?.url, "https://example.com/another");
-  const ok = await deleteWebhook(hook.id);
+  const ok = await deleteWebhook(hook.id, "default");
   assert.equal(ok, true);
-  const gone = await getWebhook(hook.id);
+  const gone = await getWebhook(hook.id, "default");
   assert.equal(gone, null);
-  const okAgain = await deleteWebhook(hook.id);
+  const okAgain = await deleteWebhook(hook.id, "default");
   assert.equal(okAgain, false);
 });
 
 test("v1 webhooks: createWebhook rejects non-http URLs", async () => {
   await assert.rejects(
-    () => createWebhook({ url: "ftp://example.com/x" }),
+    () => createWebhook({ url: "ftp://example.com/x", workspaceId: "default" }),
     /http/,
   );
 });

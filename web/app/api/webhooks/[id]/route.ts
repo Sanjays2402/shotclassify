@@ -8,6 +8,7 @@ import {
   listDeliveryEvents,
   redeliver,
 } from "@/lib/webhooks";
+import { DEFAULT_WORKSPACE_ID } from "@/lib/keystore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const hook = await getWebhook(id);
+  const hook = await getWebhook(id, DEFAULT_WORKSPACE_ID);
   if (!hook) {
     return NextResponse.json(
       { error: { code: "not_found", message: "Webhook not found." } },
@@ -34,8 +35,8 @@ export async function GET(
       ? statusParam
       : undefined;
   const event = eventParam && eventParam.length > 0 ? eventParam : undefined;
-  const page = await listDeliveriesPage(id, { status, event, offset, limit });
-  const events = await listDeliveryEvents(id);
+  const page = await listDeliveriesPage(id, DEFAULT_WORKSPACE_ID, { status, event, offset, limit });
+  const events = await listDeliveryEvents(id, DEFAULT_WORKSPACE_ID);
   return NextResponse.json({
     webhook: { ...hook, secret: undefined, secret_prefix: hook.secret.slice(0, 12) },
     deliveries: page.deliveries,
@@ -52,7 +53,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const ok = await deleteWebhook(id);
+  const ok = await deleteWebhook(id, DEFAULT_WORKSPACE_ID);
   if (!ok) {
     return NextResponse.json(
       { error: { code: "not_found", message: "Webhook not found." } },
@@ -77,7 +78,7 @@ export async function PATCH(
     );
   }
   if (body?.action === "test") {
-    const hook = await getWebhook(id);
+    const hook = await getWebhook(id, DEFAULT_WORKSPACE_ID);
     if (!hook) {
       return NextResponse.json(
         { error: { code: "not_found", message: "Webhook not found." } },
@@ -95,7 +96,7 @@ export async function PATCH(
         { status: 400 },
       );
     }
-    const result = await redeliver(deliveryId);
+    const result = await redeliver(deliveryId, DEFAULT_WORKSPACE_ID);
     if ("error" in result) {
       return NextResponse.json(
         { error: { code: result.error, message: result.error === "delivery_not_found" ? "Delivery not found." : "Webhook no longer exists." } },
@@ -112,7 +113,7 @@ export async function PATCH(
     return NextResponse.json({ delivery: result.delivery });
   }
   if (typeof body?.active === "boolean") {
-    const updated = await setActive(id, body.active);
+    const updated = await setActive(id, body.active, DEFAULT_WORKSPACE_ID);
     if (!updated) {
       return NextResponse.json(
         { error: { code: "not_found", message: "Webhook not found." } },

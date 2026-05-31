@@ -2,7 +2,38 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, and an admin dashboard.
 
-## What's new: workspace-wide GDPR export and erasure
+## What's new: tenant-scoped webhook subsystem
+
+Webhook subscriptions, deliveries, the per-workspace outbound
+allowlist, dispatch fan-out, and redelivery are now strictly
+partitioned by `workspace_id`. A caller in `acme` cannot list, fetch,
+delete, redeliver, or even discover the existence of a webhook owned
+by `globex`, and `dispatchEvent(workspace, ...)` only targets that
+workspace's hooks. Legacy rows written before this change are
+transparently bound to the default workspace on read so existing
+installs keep working without a manual migration.
+
+Every webhook API route (`/api/webhooks*`, `/v1/webhooks*`, allowlist
+endpoints) now resolves the caller's tenant from the API key or
+session and passes it through to the store layer. Cross-tenant access
+is covered by a dedicated test (`lib/webhooks-tenant-isolation.test.mts`)
+that verifies list isolation, get/delete refusal, dispatch fan-out
+scoping, delivery + redeliver scoping, and allowlist partitioning.
+
+### Try it
+
+```bash
+cd web && npm test          # 88 tests, includes 5 cross-tenant cases
+npm run dev                 # http://localhost:3000/webhooks
+
+# Create a webhook in your workspace (key determines tenant)
+curl -sS -X POST http://localhost:3000/v1/webhooks \
+  -H "x-api-key: $SHOTCLASSIFY_KEY" \
+  -H "content-type: application/json" \
+  -d '{"url":"https://example.com/hook","events":["classify.completed"]}'
+```
+
+## Previous: workspace-wide GDPR export and erasure
 
 Workspace owners can now export everything stored for their workspace
 as a single ZIP bundle, and permanently erase it. The endpoint is

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dispatchEvent } from "@/lib/webhooks";
+import { DEFAULT_WORKSPACE_ID } from "@/lib/keystore";
 import { notifyClassifyCompleted } from "@/lib/notifications";
 
 const API = process.env.SHOTCLASSIFY_API_BASE || "http://127.0.0.1:7441";
@@ -16,7 +17,7 @@ export async function POST(req: NextRequest) {
   if (res.ok) {
     try {
       const parsed = JSON.parse(body);
-      dispatchEvent("classify.completed", {
+      dispatchEvent(DEFAULT_WORKSPACE_ID, "classify.completed", {
         event: "classify.completed",
         delivered_at: new Date().toISOString(),
         source: "/api/classify",

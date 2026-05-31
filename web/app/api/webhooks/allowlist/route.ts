@@ -6,12 +6,13 @@ import {
   readWebhookAllowlist,
   writeWebhookAllowlist,
 } from "@/lib/webhook-allowlist";
+import { DEFAULT_WORKSPACE_ID } from "@/lib/keystore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const hostnames = await readWebhookAllowlist();
+  const hostnames = await readWebhookAllowlist(DEFAULT_WORKSPACE_ID);
   return NextResponse.json({ hostnames });
 }
 
@@ -37,7 +38,7 @@ export async function PUT(req: NextRequest) {
       { status: 400 },
     );
   }
-  const accepted = await writeWebhookAllowlist(input);
+  const accepted = await writeWebhookAllowlist(input, DEFAULT_WORKSPACE_ID);
   const rejected = input.filter(
     (v: unknown) => typeof v === "string" && !accepted.includes(v.trim().toLowerCase()),
   );

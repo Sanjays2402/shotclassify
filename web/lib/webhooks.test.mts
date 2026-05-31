@@ -68,6 +68,7 @@ test("redeliver replays a prior delivery against the current webhook", async () 
     url: srv.url,
     description: "test",
     events: ["classify.completed"],
+    workspaceId: "default",
   });
 
   // Seed a prior failed delivery by writing the deliveries file directly.
@@ -89,7 +90,7 @@ test("redeliver replays a prior delivery against the current webhook", async () 
     JSON.stringify([seed]),
   );
 
-  const result = await redeliver("deliv-1");
+  const result = await redeliver("deliv-1", "default");
   assert.ok(!("error" in result), "should not error");
   if ("error" in result) return;
   assert.equal(result.delivery.webhook_id, hook.id);
@@ -101,14 +102,14 @@ test("redeliver replays a prior delivery against the current webhook", async () 
   const parsed = JSON.parse(calls[0].body);
   assert.equal(parsed.replay_of, "deliv-1");
 
-  const all = await listDeliveries(hook.id, 10);
+  const all = await listDeliveries(hook.id, "default", 10);
   assert.equal(all.length, 2, "redeliver appended a new delivery");
 
   await srv.close();
 });
 
 test("redeliver returns delivery_not_found when delivery id is unknown", async () => {
-  const result = await redeliver("does-not-exist");
+  const result = await redeliver("does-not-exist", "default");
   assert.deepEqual(result, { error: "delivery_not_found" });
 });
 
@@ -120,6 +121,7 @@ test("listDeliveriesPage filters by status and event and paginates", async () =>
     url: "http://127.0.0.1:1/none",
     description: "filter-test",
     events: ["classify.completed"],
+    workspaceId: "default",
   });
 
   const now = Date.now();
@@ -150,17 +152,17 @@ test("listDeliveriesPage filters by status and event and paginates", async () =>
   );
   await fs.writeFile(existingPath, JSON.stringify([...existing, ...seeded]));
 
-  const failed = await listDeliveriesPage(hook.id, { status: "failed" });
+  const failed = await listDeliveriesPage(hook.id, "default", { status: "failed" });
   assert.equal(failed.total, 2);
   assert.equal(failed.deliveries.length, 2);
   assert.ok(failed.deliveries.every((d) => d.status === "failed"));
 
-  const ping = await listDeliveriesPage(hook.id, { event: "test.ping" });
+  const ping = await listDeliveriesPage(hook.id, "default", { event: "test.ping" });
   assert.equal(ping.total, 1);
   assert.equal(ping.deliveries[0].event, "test.ping");
 
-  const pageA = await listDeliveriesPage(hook.id, { limit: 2, offset: 0 });
-  const pageB = await listDeliveriesPage(hook.id, { limit: 2, offset: 2 });
+  const pageA = await listDeliveriesPage(hook.id, "default", { limit: 2, offset: 0 });
+  const pageB = await listDeliveriesPage(hook.id, "default", { limit: 2, offset: 2 });
   assert.equal(pageA.limit, 2);
   assert.equal(pageA.deliveries.length, 2);
   assert.equal(pageA.has_more, true);

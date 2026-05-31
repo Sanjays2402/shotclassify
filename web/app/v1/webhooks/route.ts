@@ -14,6 +14,7 @@ import {
   listWebhooks,
   type Webhook,
 } from "@/lib/webhooks";
+import { workspaceOf } from "@/lib/keystore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,7 +30,7 @@ export async function GET(req: NextRequest) {
   const auth = await authenticate(req, "read");
   if (auth instanceof NextResponse) return auth;
 
-  const hooks = await listWebhooks();
+  const hooks = await listWebhooks(workspaceOf(auth.key));
   return NextResponse.json({ webhooks: hooks.map(publicView) });
 }
 
@@ -75,7 +76,7 @@ export async function POST(req: NextRequest) {
 
   let hook: Webhook;
   try {
-    hook = await createWebhook({ url, description, events });
+    hook = await createWebhook({ url, description, events, workspaceId: workspaceOf(auth.key) });
   } catch (err: any) {
     return v1Error(
       400,

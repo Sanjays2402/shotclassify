@@ -39,9 +39,31 @@ export type StoredKey = {
   usage_count: number;
   rotated_at?: string | null;
   scopes?: KeyScope[];
+  /**
+   * Tenant binding for this key. Webhook subscriptions, allowlists, and
+   * deliveries are partitioned by this value so two customers sharing the
+   * same install never observe each other's integrations. Legacy keys with
+   * no workspace are treated as belonging to DEFAULT_WORKSPACE_ID.
+   */
+  workspace_id?: string;
   /** Per-UTC-day request counts, keyed YYYY-MM-DD. Trimmed to ~90 days. */
   daily_usage?: Record<string, number>;
 };
+
+export const DEFAULT_WORKSPACE_ID = "default";
+
+export function workspaceOf(key: { workspace_id?: string | null }): string {
+  const w = (key.workspace_id || "").trim();
+  return w || DEFAULT_WORKSPACE_ID;
+}
+
+export function normalizeWorkspaceId(input: unknown): string {
+  if (typeof input !== "string") return DEFAULT_WORKSPACE_ID;
+  const v = input.trim().toLowerCase();
+  if (!v) return DEFAULT_WORKSPACE_ID;
+  if (!/^[a-z0-9][a-z0-9_\-]{0,62}$/.test(v)) return DEFAULT_WORKSPACE_ID;
+  return v;
+}
 
 const DAILY_USAGE_RETENTION_DAYS = 90;
 
@@ -140,6 +162,7 @@ export async function createKeyAt(
   file: string,
   name: string,
   scopes?: unknown,
+  workspaceId?: unknown,
 ): Promise<CreatedKey> {
   const cleanName = (name || "").trim().slice(0, 80) || "Untitled key";
   const plaintext = newToken();
@@ -153,6 +176,7 @@ export async function createKeyAt(
     usage_count: 0,
     rotated_at: null,
     scopes: normalizeScopes(scopes),
+    workspace_id: normalizeWorkspaceId(workspaceId),
   };
   const all = await readAll(file);
   all.push(key);

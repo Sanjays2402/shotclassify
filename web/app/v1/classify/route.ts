@@ -2,7 +2,7 @@
 // sk_live_* token via Authorization: Bearer ..., then proxies the
 // multipart form-data body to the upstream FastAPI /v1/classify.
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAndTouch, hasScope } from "@/lib/keystore";
+import { verifyAndTouch, hasScope, workspaceOf } from "@/lib/keystore";
 import { dispatchEvent } from "@/lib/webhooks";
 import { notifyClassifyCompleted } from "@/lib/notifications";
 
@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
   if (upstream.ok) {
     try {
       const parsed = JSON.parse(body);
-      dispatchEvent("classify.completed", {
+      dispatchEvent(workspaceOf(key), "classify.completed", {
         event: "classify.completed",
         delivered_at: new Date().toISOString(),
         source: "/v1/classify",

@@ -10,9 +10,11 @@ import crypto from "node:crypto";
 import { notifyWebhookFailed } from "./notifications";
 import { checkOutboundUrl } from "./url-safety";
 import { readWebhookAllowlist } from "./webhook-allowlist";
+import { DEFAULT_WORKSPACE_ID, normalizeWorkspaceId } from "./keystore-core";
 
 export type Webhook = {
   id: string;
+  workspace_id: string;
   url: string;
   description: string;
   secret: string; // shown to user; used for HMAC
@@ -26,6 +28,7 @@ export type Webhook = {
 
 export type Delivery = {
   id: string;
+  workspace_id: string;
   webhook_id: string;
   event: string;
   url: string;
@@ -57,6 +60,25 @@ async function readJson<T>(p: string, fallback: T): Promise<T> {
   }
 }
 
+// Backfill workspace_id for legacy rows written before multi-tenancy. Keeps
+// older installs working without a manual migration step.
+function migrateHook(h: Webhook): Webhook {
+  if (!h.workspace_id) return { ...h, workspace_id: DEFAULT_WORKSPACE_ID };
+  return h;
+}
+function migrateDelivery(d: Delivery): Delivery {
+  if (!d.workspace_id) return { ...d, workspace_id: DEFAULT_WORKSPACE_ID };
+  return d;
+}
+async function readHooks(): Promise<Webhook[]> {
+  const raw = await readJson<Webhook[]>(HOOKS_PATH, []);
+  return raw.map(migrateHook);
+}
+async function readDeliveries(): Promise<Delivery[]> {
+  const raw = await readJson<Delivery[]>(DELIVERIES_PATH, []);
+  return raw.map(migrateDelivery);
+}
+
 async function writeJson(p: string, data: unknown): Promise<void> {
   await fs.mkdir(path.dirname(p), { recursive: true });
   const tmp = `${p}.tmp`;
@@ -64,21 +86,30 @@ async function writeJson(p: string, data: unknown): Promise<void> {
   await fs.rename(tmp, p);
 }
 
-export async function listWebhooks(): Promise<Webhook[]> {
-  const all = await readJson<Webhook[]>(HOOKS_PATH, []);
-  return all.sort((a, b) => b.created_at.localeCompare(a.created_at));
+export async function listWebhooks(workspaceId: string): Promise<Webhook[]> {
+  const ws = normalizeWorkspaceId(workspaceId);
+  const all = await readHooks();
+  return all
+    .filter((h) => h.workspace_id === ws)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
-export async function getWebhook(id: string): Promise<Webhook | null> {
-  const all = await readJson<Webhook[]>(HOOKS_PATH, []);
-  return all.find((h) => h.id === id) || null;
+export async function getWebhook(
+  id: string,
+  workspaceId: string,
+): Promise<Webhook | null> {
+  const ws = normalizeWorkspaceId(workspaceId);
+  const all = await readHooks();
+  return all.find((h) => h.id === id && h.workspace_id === ws) || null;
 }
 
 export async function createWebhook(input: {
   url: string;
   description?: string;
   events?: string[];
+  workspaceId: string;
 }): Promise<Webhook> {
+  const ws = normalizeWorkspaceId(input.workspaceId);
   const url = (input.url || "").trim();
   if (!/^https?:\/\//i.test(url)) {
     throw new Error("URL must start with http:// or https://");
@@ -91,13 +122,14 @@ export async function createWebhook(input: {
   // Pre-flight SSRF check. We do a DNS-aware check here so the user gets
   // immediate feedback at save time, then re-check at every delivery in
   // case DNS rebinds to a private address after creation.
-  const allow = await readWebhookAllowlist();
+  const allow = await readWebhookAllowlist(ws);
   const safety = await checkOutboundUrl(url, { allowHostnames: allow });
   if (!safety.ok) {
     throw new Error(`Webhook URL rejected: ${safety.message}`);
   }
   const hook: Webhook = {
     id: crypto.randomUUID(),
+    workspace_id: ws,
     url,
     description: (input.description || "").slice(0, 200),
     secret: `whsec_${crypto.randomBytes(24).toString("base64url")}`,
@@ -111,16 +143,21 @@ export async function createWebhook(input: {
     success_count: 0,
     failure_count: 0,
   };
-  const all = await readJson<Webhook[]>(HOOKS_PATH, []);
+  const all = await readHooks();
   all.push(hook);
   await writeJson(HOOKS_PATH, all);
   return hook;
 }
 
-export async function deleteWebhook(id: string): Promise<boolean> {
-  const all = await readJson<Webhook[]>(HOOKS_PATH, []);
+export async function deleteWebhook(
+  id: string,
+  workspaceId: string,
+): Promise<boolean> {
+  const ws = normalizeWorkspaceId(workspaceId);
+  const all = await readHooks();
+  const target = all.find((h) => h.id === id);
+  if (!target || target.workspace_id !== ws) return false;
   const next = all.filter((h) => h.id !== id);
-  if (next.length === all.length) return false;
   await writeJson(HOOKS_PATH, next);
   return true;
 }
@@ -128,19 +165,20 @@ export async function deleteWebhook(id: string): Promise<boolean> {
 export async function setActive(
   id: string,
   active: boolean,
+  workspaceId: string,
 ): Promise<Webhook | null> {
-  const all = await readJson<Webhook[]>(HOOKS_PATH, []);
+  const ws = normalizeWorkspaceId(workspaceId);
+  const all = await readHooks();
   const h = all.find((x) => x.id === id);
-  if (!h) return null;
+  if (!h || h.workspace_id !== ws) return null;
   h.active = active;
   await writeJson(HOOKS_PATH, all);
   return h;
 }
 
 async function recordDelivery(d: Delivery): Promise<void> {
-  const all = await readJson<Delivery[]>(DELIVERIES_PATH, []);
+  const all = await readDeliveries();
   all.unshift(d);
-  // keep newest MAX_DELIVERIES
   const trimmed = all.slice(0, MAX_DELIVERIES);
   await writeJson(DELIVERIES_PATH, trimmed);
 }
@@ -150,7 +188,7 @@ async function bumpCounters(
   success: boolean,
   at: string,
 ): Promise<void> {
-  const all = await readJson<Webhook[]>(HOOKS_PATH, []);
+  const all = await readHooks();
   const h = all.find((x) => x.id === id);
   if (!h) return;
   h.last_delivery_at = at;
@@ -175,21 +213,25 @@ export type DeliveryPage = {
 };
 
 export async function listDeliveries(
-  webhookId?: string,
+  webhookId: string | undefined,
+  workspaceId: string,
   limitOrFilter: number | DeliveryFilter = 50,
 ): Promise<Delivery[]> {
   const filter: DeliveryFilter =
     typeof limitOrFilter === "number" ? { limit: limitOrFilter } : limitOrFilter;
-  const page = await listDeliveriesPage(webhookId, filter);
+  const page = await listDeliveriesPage(webhookId, workspaceId, filter);
   return page.deliveries;
 }
 
 export async function listDeliveriesPage(
-  webhookId?: string,
+  webhookId: string | undefined,
+  workspaceId: string,
   filter: DeliveryFilter = {},
 ): Promise<DeliveryPage> {
-  const all = await readJson<Delivery[]>(DELIVERIES_PATH, []);
-  let filtered = webhookId ? all.filter((d) => d.webhook_id === webhookId) : all;
+  const ws = normalizeWorkspaceId(workspaceId);
+  const all = await readDeliveries();
+  let filtered = all.filter((d) => d.workspace_id === ws);
+  if (webhookId) filtered = filtered.filter((d) => d.webhook_id === webhookId);
   if (filter.status) {
     filtered = filtered.filter((d) => d.status === filter.status);
   }
@@ -211,10 +253,13 @@ export async function listDeliveriesPage(
 }
 
 export async function listDeliveryEvents(
-  webhookId?: string,
+  webhookId: string | undefined,
+  workspaceId: string,
 ): Promise<string[]> {
-  const all = await readJson<Delivery[]>(DELIVERIES_PATH, []);
-  const filtered = webhookId ? all.filter((d) => d.webhook_id === webhookId) : all;
+  const ws = normalizeWorkspaceId(workspaceId);
+  const all = await readDeliveries();
+  let filtered = all.filter((d) => d.workspace_id === ws);
+  if (webhookId) filtered = filtered.filter((d) => d.webhook_id === webhookId);
   return Array.from(new Set(filtered.map((d) => d.event))).sort();
 }
 
@@ -236,7 +281,7 @@ async function attemptDelivery(
   // Re-validate the URL at delivery time. Defends against DNS rebinding and
   // against allowlist edits made after the subscription was created.
   try {
-    const allow = await readWebhookAllowlist();
+    const allow = await readWebhookAllowlist(hook.workspace_id);
     const safety = await checkOutboundUrl(hook.url, { allowHostnames: allow });
     if (!safety.ok) {
       return {
@@ -296,6 +341,7 @@ async function deliverWithRetries(
     const now = new Date().toISOString();
     const delivery: Delivery = {
       id: crypto.randomUUID(),
+      workspace_id: hook.workspace_id,
       webhook_id: hook.id,
       event,
       url: hook.url,
@@ -324,21 +370,23 @@ async function deliverWithRetries(
   }
 }
 
-// Fire-and-forget dispatch to all active webhooks subscribed to event.
-// Errors are logged into the delivery store, never thrown to the caller.
+// Fire-and-forget dispatch to all active webhooks subscribed to event for a
+// single workspace. Cross-tenant fan-out is impossible by construction: a
+// caller must pass the workspace_id of the API key that triggered the event.
 export async function dispatchEvent(
+  workspaceId: string,
   event: string,
   payload: unknown,
 ): Promise<void> {
+  const ws = normalizeWorkspaceId(workspaceId);
   let hooks: Webhook[] = [];
   try {
-    hooks = await listWebhooks();
+    hooks = await listWebhooks(ws);
   } catch {
     return;
   }
   const targets = hooks.filter((h) => h.active && h.events.includes(event));
   if (targets.length === 0) return;
-  // Wrap each in its own retry promise; do not await (caller already returned).
   for (const h of targets) {
     deliverWithRetries(h, event, payload).catch(() => {});
   }
@@ -347,13 +395,17 @@ export async function dispatchEvent(
 // Replay a recorded delivery against its current webhook target.
 // Returns the new Delivery, or null if either the delivery or its webhook
 // no longer exists. Single attempt, awaited so the UI can show the result.
+// A workspace mismatch returns delivery_not_found so a tenant can never even
+// learn the id space of another tenant's deliveries.
 export async function redeliver(
   deliveryId: string,
+  workspaceId: string,
 ): Promise<{ delivery: Delivery } | { error: "delivery_not_found" | "webhook_not_found" }> {
-  const all = await readJson<Delivery[]>(DELIVERIES_PATH, []);
-  const prior = all.find((d) => d.id === deliveryId);
+  const ws = normalizeWorkspaceId(workspaceId);
+  const all = await readDeliveries();
+  const prior = all.find((d) => d.id === deliveryId && d.workspace_id === ws);
   if (!prior) return { error: "delivery_not_found" };
-  const hook = await getWebhook(prior.webhook_id);
+  const hook = await getWebhook(prior.webhook_id, ws);
   if (!hook) return { error: "webhook_not_found" };
   // Reconstruct the body we can replay. We only stored a preview, so we send
   // a replay envelope that references the original delivery for traceability.
@@ -370,6 +422,7 @@ export async function redeliver(
   const now = new Date().toISOString();
   const delivery: Delivery = {
     id: crypto.randomUUID(),
+    workspace_id: hook.workspace_id,
     webhook_id: hook.id,
     event: prior.event,
     url: hook.url,
@@ -402,6 +455,7 @@ export async function testFire(
   const now = new Date().toISOString();
   const delivery: Delivery = {
     id: crypto.randomUUID(),
+    workspace_id: hook.workspace_id,
     webhook_id: hook.id,
     event: "ping",
     url: hook.url,

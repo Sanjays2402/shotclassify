@@ -2,7 +2,7 @@
 // Centralizes API-key extraction, validation, and structured error envelopes.
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAndTouch, hasScope, type StoredKey, type KeyScope } from "@/lib/keystore";
+import { verifyAndTouch, hasScope, workspaceOf, type StoredKey, type KeyScope } from "@/lib/keystore";
 
 export const UPSTREAM_API =
   process.env.SHOTCLASSIFY_API_BASE || "http://127.0.0.1:7441";
@@ -59,6 +59,7 @@ export function keyHeaders(key: StoredKey): Record<string, string> {
     "x-api-key-id": key.id,
     "x-api-key-usage": String(key.usage_count),
     "x-api-key-scopes": (key.scopes ?? ["read", "write"]).join(","),
+    "x-workspace-id": workspaceOf(key),
   };
 }
 

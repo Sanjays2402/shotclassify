@@ -4,6 +4,7 @@ import {
   createWebhook,
   listDeliveries,
 } from "@/lib/webhooks";
+import { DEFAULT_WORKSPACE_ID } from "@/lib/keystore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const includeDeliveries = url.searchParams.get("deliveries") === "1";
-  const hooks = await listWebhooks();
+  const hooks = await listWebhooks(DEFAULT_WORKSPACE_ID);
   const safe = hooks.map((h) => ({
     ...h,
     // Never re-leak the secret on list. Show prefix only.
@@ -21,7 +22,7 @@ export async function GET(req: NextRequest) {
   if (!includeDeliveries) {
     return NextResponse.json({ webhooks: safe });
   }
-  const deliveries = await listDeliveries(undefined, 50);
+  const deliveries = await listDeliveries(undefined, DEFAULT_WORKSPACE_ID, 50);
   return NextResponse.json({ webhooks: safe, deliveries });
 }
 
@@ -40,6 +41,7 @@ export async function POST(req: NextRequest) {
       url: body?.url,
       description: body?.description,
       events: Array.isArray(body?.events) ? body.events : undefined,
+      workspaceId: DEFAULT_WORKSPACE_ID,
     });
     // Secret returned once at creation.
     return NextResponse.json({ webhook: hook }, { status: 201 });

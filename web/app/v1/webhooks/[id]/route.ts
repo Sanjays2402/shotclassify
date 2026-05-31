@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, v1Error } from "@/lib/v1auth";
 import { deleteWebhook, getWebhook, type Webhook } from "@/lib/webhooks";
+import { workspaceOf } from "@/lib/keystore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ export async function GET(
   const { id } = await ctx.params;
   if (!id) return v1Error(400, "invalid_id", "Missing webhook id.");
 
-  const hook = await getWebhook(id);
+  const hook = await getWebhook(id, workspaceOf(auth.key));
   if (!hook) {
     return v1Error(404, "not_found", `No webhook with id '${id}'.`);
   }
@@ -39,7 +40,7 @@ export async function DELETE(
   const { id } = await ctx.params;
   if (!id) return v1Error(400, "invalid_id", "Missing webhook id.");
 
-  const ok = await deleteWebhook(id);
+  const ok = await deleteWebhook(id, workspaceOf(auth.key));
   if (!ok) {
     return v1Error(404, "not_found", `No webhook with id '${id}'.`);
   }
