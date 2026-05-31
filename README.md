@@ -52,7 +52,9 @@ upload ---->  |  FastAPI   | -----> | pipeline thread |
 
 ## Try it
 
-With the API and web both running, open <http://127.0.0.1:3000/demo>. Click any of the four sample screenshots (receipt, code snippet, stack trace, chat) and the page runs the real OCR plus vision pipeline, then renders the class probability bars, latency, model rationale, and OCR transcript. No upload, no signup.
+With the API and web both running, open <http://127.0.0.1:3000>. The landing page now ships a live one-click sample strip directly under the hero. Pick a receipt, code snippet, stack trace, or chat and the homepage POSTs the real bytes to `/v1/classify` and renders the top-five class probabilities and latency in place, so a first-time visitor sees a real prediction in under a second after the page settles.
+
+For the full inspection view (model rationale, OCR transcript, expected-vs-actual sanity check) open <http://127.0.0.1:3000/demo>. Same four samples, same real OCR plus vision pipeline, more surface area for the result. No upload, no signup.
 
 For your own frames, open <http://127.0.0.1:3000/upload> and drop one or more images. Each file gets its own result card with a thumbnail, the primary call and its confidence, round-trip latency, full per-class confidence bars, the model's rationale, and the OCR transcript. Cards stream in parallel, errors stay scoped to the failing file, and any card opens the full replay at `/shots/{id}`.
 

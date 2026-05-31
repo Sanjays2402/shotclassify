@@ -3,6 +3,7 @@
 import Link from "next/link";
 import useSWR from "swr";
 import Feed from "@/components/Feed";
+import LiveSampleStrip from "@/components/LiveSampleStrip";
 import { Chip } from "@/components/Chip";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import { CATEGORIES, SHORT } from "@/lib/categories";
@@ -57,7 +58,14 @@ export default function HomePage() {
               OCR and per-class probabilities under the hood.
             </p>
             <div className="mt-6 flex flex-wrap items-center gap-3">
-              <Link href="/upload" className="btn btn-cue">
+              <Link href="/demo" className="btn btn-cue">
+                Try it now
+              </Link>
+              <Link href="/upload" className="btn" style={{
+                background: "transparent",
+                color: "var(--color-chalk)",
+                borderColor: "rgba(255,255,255,0.25)",
+              }}>
                 Ingest a frame
               </Link>
               <Link
@@ -84,6 +92,9 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
+      {/* One-click live sample classifier */}
+      <LiveSampleStrip />
 
       {/* Feed + mix */}
       <section className="grid lg:grid-cols-[2fr_1fr] gap-5">
