@@ -109,6 +109,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/settings/security/privacy">Privacy</NavLink>
               <NavLink href="/settings/security/scim">SCIM</NavLink>
               <NavLink href="/settings/security/incidents">Incidents</NavLink>
+              <NavLink href="/settings/security/webhook-egress">Webhook egress</NavLink>
               <NavLink href="/settings/mfa">MFA</NavLink>
               <NavLink href="/settings/sessions">Sessions</NavLink>
               <NavLink href="/settings/data">Data</NavLink>

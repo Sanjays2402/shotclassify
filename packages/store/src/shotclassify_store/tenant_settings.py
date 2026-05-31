@@ -1275,3 +1275,137 @@ def set_api_key_max_active_policy(
             row.updated_by = updated_by
         s.commit()
     return ApiKeyMaxActivePolicy(tenant_id=tenant_id, max_active=norm)
+
+
+# --- Webhook egress host allowlist ---------------------------------------
+
+# Hostname pattern semantics:
+#   "hooks.example.com"   matches exactly that host
+#   ".example.com"        matches any subdomain of example.com (and
+#                         example.com itself), so suffix rules are
+#                         spelled with a leading dot for clarity
+# No bare wildcards. No IP ranges (the existing SSRF block already
+# refuses private/loopback/metadata addresses; this list is for the
+# public-internet destinations the tenant has explicitly approved).
+WEBHOOK_EGRESS_HOSTS_MAX = 64
+_WEBHOOK_HOST_RE = __import__("re").compile(r"^[a-z0-9]([a-z0-9\-\.]{0,253}[a-z0-9])?$")
+
+
+def _normalize_webhook_host(raw: str) -> str:
+    if not isinstance(raw, str):
+        raise ValueError(f"host must be a string: {raw!r}")
+    s = raw.strip().lower()
+    if not s:
+        raise ValueError("host must not be empty")
+    if len(s) > 253:
+        raise ValueError("host too long")
+    # Strip an accidental scheme so an admin pasting "https://x.com"
+    # does not silently configure a non-matching entry.
+    if "://" in s:
+        s = s.split("://", 1)[1]
+    s = s.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    # Strip port: matching is done against the resolved hostname only.
+    if ":" in s and not s.startswith("["):
+        s = s.rsplit(":", 1)[0]
+    if "*" in s:
+        raise ValueError("wildcards are not permitted; use a leading dot for suffix matches")
+    # Allow leading dot suffix form.
+    candidate = s[1:] if s.startswith(".") else s
+    if not _WEBHOOK_HOST_RE.match(candidate):
+        raise ValueError(f"invalid host: {raw!r}")
+    if ".." in s:
+        raise ValueError(f"invalid host: {raw!r}")
+    return s
+
+
+def _normalize_webhook_hosts(raw: list[str] | None) -> list[str]:
+    if not raw:
+        return []
+    if len(raw) > WEBHOOK_EGRESS_HOSTS_MAX:
+        raise ValueError(
+            f"at most {WEBHOOK_EGRESS_HOSTS_MAX} webhook egress hosts are allowed per tenant"
+        )
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        norm = _normalize_webhook_host(item)
+        if norm not in seen:
+            seen.add(norm)
+            out.append(norm)
+    return out
+
+
+def get_webhook_egress_allowed_hosts(tenant_id: str) -> list[str]:
+    """Return the per-tenant webhook destination host allowlist.
+
+    Empty list means no policy: only the deployment-level SSRF block
+    applies (the dispatcher still refuses private/loopback/metadata
+    addresses). When non-empty, every subscription URL host must match.
+    """
+    if not tenant_id:
+        return []
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None or not row.webhook_egress_allowed_hosts:
+            return []
+        return list(row.webhook_egress_allowed_hosts)
+
+
+def set_webhook_egress_allowed_hosts(
+    tenant_id: str, hosts: list[str], updated_by: str | None
+) -> list[str]:
+    """Persist a normalized webhook egress host allowlist for ``tenant_id``."""
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    normalized = _normalize_webhook_hosts(hosts)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                webhook_egress_allowed_hosts=normalized,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.webhook_egress_allowed_hosts = normalized
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return normalized
+
+
+def webhook_host_matches_allowlist(host: str, allowlist: list[str]) -> bool:
+    """Return True when ``host`` matches any normalized allowlist entry.
+
+    Exact hostnames match case-insensitively. Leading-dot entries
+    (``.example.com``) match the bare apex (``example.com``) and any
+    subdomain (``hooks.example.com``, ``api.eu.example.com``). IP
+    literals must match exactly; we never treat ``.0.0.1`` style as a
+    suffix to keep the IP path explicit.
+    """
+    if not host or not allowlist:
+        return False
+    h = host.strip().lower().rstrip(".")
+    if not h:
+        return False
+    for entry in allowlist:
+        e = entry.strip().lower()
+        if not e:
+            continue
+        if e.startswith("."):
+            apex = e[1:]
+            if h == apex or h.endswith(e):
+                return True
+        else:
+            if h == e:
+                return True
+    return False

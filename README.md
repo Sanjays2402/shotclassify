@@ -2,6 +2,29 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: per-tenant webhook egress host allowlist
+
+Every webhook subscription URL the tenant supplies already runs through an SSRF block that refuses private addresses, loopback, link-local, and cloud metadata endpoints. Procurement teams want the next layer too: a per-workspace control that proves outbound webhook traffic can only reach destinations the customer themselves vetted, even if a compromised admin tries to repoint a subscription at an attacker-controlled URL. `tenant_settings.webhook_egress_allowed_hosts` (alembic `0032`) is that control. Entries are exact hostnames (`hooks.example.com`) or leading-dot suffixes (`.example.com`) that match the apex and any subdomain. Wildcards are rejected so a permissive rule never sneaks in. The store enforces the policy at subscription create time (HTTP 422 with the offending host named) AND at delivery time, so removing a host from the list blocks the very next delivery for every existing subscription with a `failed` record whose error reads `egress blocked: host ... not in tenant allowlist`. The HTTP plane lives at `/v1/settings/security/webhook-egress-hosts` (admin role plus MFA step-up on PUT). The web console exposes it at `/settings/security/webhook-egress`. Coverage in `tests/test_webhook_egress_allowlist.py`, including a cross-tenant isolation test that proves tenant A's policy never affects tenant B and vice versa.
+
+Try it locally:
+
+```bash
+make api  # http://127.0.0.1:7441
+
+# Configure the allowlist (admin key; MFA step-up gated in prod).
+curl -sS -X PUT http://127.0.0.1:7441/v1/settings/security/webhook-egress-hosts \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" -H 'content-type: application/json' \
+  -d '{"hosts": [".hooks.example.com"]}'
+
+# A subscription pointed at an off-list host is refused at create time.
+curl -sS -X POST http://127.0.0.1:7441/v1/webhooks \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" -H 'content-type: application/json' \
+  -d '{"url":"https://evil.attacker.test/h","events":["classify.completed"]}'
+# -> 422 host 'evil.attacker.test' is not in this workspace's webhook egress allowlist
+```
+
+Web UI: <http://127.0.0.1:3000/settings/security/webhook-egress>.
+
 ## What's new: authenticated, tenant-scoped screenshot downloads
 
 Uploaded screenshots used to be served by a raw `StaticFiles` mount at `GET /blob/<filename>` with no authentication and no tenant scoping. Anyone who could guess or scrape a 16-byte hex id could pull another tenant's screenshot, which is an immediate procurement red flag (SOC 2 CC6.1, CC6.6, and every enterprise security questionnaire). The mount is gone. Screenshots now live behind `GET /v1/blobs/{record_id}`, which runs through the same auth, RBAC, rate-limit, IP allowlist, browser-origin allowlist, and legal-hold gates as every other `/v1` route. The handler resolves the classification record through `Repository.get(item_id, tenant_id=...)`, so a caller from workspace B asking for workspace A's id gets `HTTP 404 blob_not_found` (same status as a missing record, so cross-tenant existence does not leak) and never sees a byte of image data. The response carries `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff` so downstream proxies and shared caches never retain another tenant's screenshot. The history CSV/JSON export no longer leaks the server-side absolute path either; it now exports a relative `blob_url` that callers must fetch through the same authenticated endpoint. Coverage in `tests/test_blob_tenant_scoping.py`, including the regression that the old `/blob/<filename>` mount is gone.

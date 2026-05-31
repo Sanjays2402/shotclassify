@@ -278,6 +278,20 @@ class TenantSettingsRow(Base):
     # covers server-side callers) with a browser-side control that
     # procurement teams ask for under SOC 2 CC6.6.
     cors_origins: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Per-tenant webhook egress host allowlist. When set, every webhook
+    # subscription URL for this tenant must resolve to a host that
+    # matches one of these patterns (exact hostname or leading-dot
+    # suffix like ``.hooks.example.com``). The validator rejects new or
+    # rotated subscriptions whose host fails the check, and the
+    # dispatcher re-validates at delivery time so a host removed from
+    # the policy stops receiving events on the very next attempt. NULL
+    # or empty list means no policy: SSRF protection (private/loopback
+    # blocking) still applies. This is the SOC 2 CC6.7 / procurement
+    # control that lets a buyer prove webhook traffic for their
+    # workspace can never leave a vetted list of destinations.
+    webhook_egress_allowed_hosts: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -831,6 +845,11 @@ def init_db() -> None:
                 if "cors_origins" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN cors_origins JSON"
+                    ))
+                # 0032 per-tenant webhook egress host allowlist.
+                if "webhook_egress_allowed_hosts" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN webhook_egress_allowed_hosts JSON"
                     ))
             if insp.has_table("sessions"):
                 scols = {c["name"] for c in insp.get_columns("sessions")}

@@ -101,6 +101,7 @@ from .tenant_settings import (
     get_sso_config,
     get_tenant_oidc,
     get_tenant_oidc_secret,
+    get_webhook_egress_allowed_hosts,
     ip_matches_allowlist,
     origin_matches_allowlist,
     set_api_key_ttl_policy,
@@ -114,7 +115,10 @@ from .tenant_settings import (
     set_session_idle_policy,
     set_sso_config,
     set_tenant_oidc,
+    set_webhook_egress_allowed_hosts,
     tenant_for_sso_domain,
+    webhook_host_matches_allowlist,
+    WEBHOOK_EGRESS_HOSTS_MAX,
 )
 
 __all__ = [
@@ -141,6 +145,10 @@ __all__ = [
     "get_cors_origins",
     "set_cors_origins",
     "origin_matches_allowlist",
+    "get_webhook_egress_allowed_hosts",
+    "set_webhook_egress_allowed_hosts",
+    "webhook_host_matches_allowlist",
+    "WEBHOOK_EGRESS_HOSTS_MAX",
     "PurgeResult",
     "get_retention_days",
     "set_retention_days",

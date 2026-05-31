@@ -178,14 +178,35 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:24]}"
 
 
-def validate_url(url: str) -> str:
+def validate_url(url: str, *, tenant_id: str | None = None) -> str:
     """Validate a tenant-supplied webhook URL.
 
     Rejects SSRF-prone targets at subscription create time so tenants
     get an immediate, actionable 400 instead of silent delivery failures
     in the audit log. The dispatcher re-validates at delivery time too
     (DNS records can change between create and fire).
+
+    When ``tenant_id`` is supplied and that tenant has a non-empty
+    webhook-egress host allowlist, the URL's host must also match one
+    of the configured entries. This is the per-tenant control that
+    enterprise procurement requires on top of the deployment-level
+    SSRF block.
     """
+    # Per-tenant allowlist check runs FIRST so an off-list host returns
+    # a deterministic, tenant-scoped error even when DNS for that host
+    # would fail (the SSRF validator does a live DNS lookup).
+    if tenant_id:
+        from urllib.parse import urlparse
+
+        from . import tenant_settings as _ts
+        allowlist = _ts.get_webhook_egress_allowed_hosts(tenant_id)
+        if allowlist:
+            host = (urlparse(url).hostname or "").strip()
+            if not _ts.webhook_host_matches_allowlist(host, allowlist):
+                raise ValueError(
+                    f"URL rejected: host {host!r} is not in this workspace's "
+                    f"webhook egress allowlist"
+                )
     s = get_settings()
     try:
         validate_target(
@@ -227,7 +248,7 @@ def create_subscription(
     init_db()
     if not tenant_id:
         raise ValueError("tenant_id is required.")
-    url = validate_url(url)
+    url = validate_url(url, tenant_id=tenant_id)
     events = validate_events(events)
     secret = f"whsec_{secrets.token_urlsafe(32)}"
     row = WebhookSubscriptionRow(
@@ -653,11 +674,46 @@ def dispatch_event(
     subs = [s for s in list_subscriptions(tenant_id) if s.active]
     if not subs:
         return []
+    # Per-tenant egress host allowlist gate. Evaluated once per event so
+    # a policy tightening blocks the very next delivery without waiting
+    # for the operator to revoke each subscription by hand.
+    from . import tenant_settings as _ts
+    _egress_allowlist = _ts.get_webhook_egress_allowed_hosts(tenant_id)
     body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     results: list[DeliveryRecord] = []
     for sub in subs:
         if not _matches_event(sub.events, event):
             continue
+        if _egress_allowlist:
+            from urllib.parse import urlparse
+            sub_host = (urlparse(sub.url).hostname or "").strip()
+            if not _ts.webhook_host_matches_allowlist(sub_host, _egress_allowlist):
+                recorded_id = _record_delivery(
+                    tenant_id=sub.tenant_id,
+                    subscription_id=sub.id,
+                    event=event,
+                    url=sub.url,
+                    status="failed",
+                    attempt=0,
+                    http_status=None,
+                    error=f"egress blocked: host {sub_host!r} not in tenant allowlist",
+                    latency_ms=0,
+                    payload_preview="",
+                    signature="",
+                    request_id=request_id,
+                )
+                log.warning(
+                    "webhook_egress_blocked_by_tenant_allowlist",
+                    delivery_id=recorded_id,
+                    subscription_id=sub.id,
+                    tenant_id=sub.tenant_id,
+                    webhook_event=event,
+                    host=sub_host,
+                )
+                rec = get_delivery(recorded_id, tenant_id=sub.tenant_id)
+                if rec:
+                    results.append(rec)
+                continue
         primary_key, next_key = _subscription_signing_keys(
             sub.id, tenant_id=tenant_id
         )

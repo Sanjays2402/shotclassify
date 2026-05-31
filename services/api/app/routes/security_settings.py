@@ -31,6 +31,7 @@ from shotclassify_store import (
     get_session_policy,
     get_sso_config,
     get_tenant_oidc,
+    get_webhook_egress_allowed_hosts,
     purge_expired_for_tenant,
     set_api_key_inactivity_policy,
     set_api_key_max_active_policy,
@@ -44,6 +45,8 @@ from shotclassify_store import (
     set_session_idle_policy,
     set_sso_config,
     set_tenant_oidc,
+    set_webhook_egress_allowed_hosts,
+    WEBHOOK_EGRESS_HOSTS_MAX,
 )
 from datetime import timedelta
 from shotclassify_store.sessions import SESSION_TTL, clip_active_for_tenant
@@ -725,3 +728,67 @@ def put_api_key_max_active_route(
     body = cfg.to_dict()
     body["current_active"] = _count_active_keys(tenant_id)
     return body
+
+
+@router.get(
+    "/webhook-egress-hosts",
+    dependencies=[require_role("admin")],
+)
+def get_webhook_egress_hosts_route(request: Request) -> dict:
+    """Return the webhook egress host allowlist for the caller's tenant.
+
+    Empty list means no policy: only the deployment-level SSRF block
+    applies (private addresses, loopback, link-local, cloud metadata
+    endpoints). When non-empty, every subscription URL must resolve to
+    a hostname that matches one of the configured patterns.
+    """
+    tenant_id = _tenant(request)
+    return {
+        "tenant_id": tenant_id,
+        "hosts": get_webhook_egress_allowed_hosts(tenant_id),
+        "max_hosts": WEBHOOK_EGRESS_HOSTS_MAX,
+    }
+
+
+@router.put(
+    "/webhook-egress-hosts",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_webhook_egress_hosts_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Replace the webhook egress host allowlist for the caller's tenant.
+
+    Empty list disables the policy. Entries can be exact hostnames
+    (``hooks.example.com``) or leading-dot suffixes
+    (``.example.com``) which match the apex and any subdomain.
+    Wildcards are rejected so an admin cannot accidentally configure
+    a permissive rule that looks restrictive. Tightening the policy
+    takes effect on the next delivery for every existing subscription;
+    nothing is retroactively unsubscribed.
+    """
+    tenant_id = _tenant(request)
+    raw = payload.get("hosts")
+    if not isinstance(raw, list):
+        raise HTTPException(
+            422,
+            "Field 'hosts' must be a list of hostname strings.",
+        )
+    if len(raw) > WEBHOOK_EGRESS_HOSTS_MAX:
+        raise HTTPException(
+            422,
+            f"At most {WEBHOOK_EGRESS_HOSTS_MAX} hosts are supported per tenant.",
+        )
+    actor = getattr(request.state, "principal", None)
+    try:
+        normalized = set_webhook_egress_allowed_hosts(
+            tenant_id, raw, updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {
+        "tenant_id": tenant_id,
+        "hosts": normalized,
+        "max_hosts": WEBHOOK_EGRESS_HOSTS_MAX,
+    }
