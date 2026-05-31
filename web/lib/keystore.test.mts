@@ -120,3 +120,66 @@ test("verifyAndTouch backfills legacy keys missing scopes", async () => {
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test("verifyAndTouch bumps a per-day counter under daily_usage", async () => {
+  const { file, dir } = await tmpStore();
+  try {
+    const { plaintext } = await createKeyAt(file, "metered");
+    await verifyAndTouchAt(file, plaintext);
+    await verifyAndTouchAt(file, plaintext);
+    const v = await verifyAndTouchAt(file, plaintext);
+    assert.ok(v);
+    const today = new Date().toISOString().slice(0, 10);
+    assert.equal(v!.daily_usage?.[today], 3);
+    assert.equal(v!.usage_count, 3);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("dailyUsageSeries returns a dense window ending today", async () => {
+  const { dailyUsageSeries } = await import("./keystore-core.ts");
+  const now = new Date("2025-06-15T12:00:00Z");
+  const series = dailyUsageSeries(
+    { daily_usage: { "2025-06-14": 4, "2025-06-15": 9, "2025-01-01": 99 } },
+    7,
+    now,
+  );
+  assert.equal(series.length, 7);
+  assert.equal(series[series.length - 1].day, "2025-06-15");
+  assert.equal(series[series.length - 1].count, 9);
+  assert.equal(series[series.length - 2].count, 4);
+  assert.equal(series[0].count, 0);
+});
+
+test("renameKey trims and rejects empty names", async () => {
+  const { renameKeyAt } = await import("./keystore-core.ts");
+  const { file, dir } = await tmpStore();
+  try {
+    const { key } = await createKeyAt(file, "first");
+    const renamed = await renameKeyAt(file, key.id, "  second  ");
+    assert.ok(renamed);
+    assert.equal(renamed!.name, "second");
+    const blank = await renameKeyAt(file, key.id, "   ");
+    assert.equal(blank, null);
+    const all = await listKeysAt(file);
+    assert.equal(all[0].name, "second");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("setKeyScopes normalizes write-implies-read", async () => {
+  const { setKeyScopesAt } = await import("./keystore-core.ts");
+  const { file, dir } = await tmpStore();
+  try {
+    const { key } = await createKeyAt(file, "scoped");
+    const updated = await setKeyScopesAt(file, key.id, ["write"]);
+    assert.ok(updated);
+    assert.deepEqual(updated!.scopes, ["read", "write"]);
+    const readOnly = await setKeyScopesAt(file, key.id, ["read"]);
+    assert.deepEqual(readOnly!.scopes, ["read"]);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

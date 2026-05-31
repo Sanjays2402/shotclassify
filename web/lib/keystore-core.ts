@@ -34,7 +34,51 @@ export type StoredKey = {
   usage_count: number;
   rotated_at?: string | null;
   scopes?: KeyScope[];
+  /** Per-UTC-day request counts, keyed YYYY-MM-DD. Trimmed to ~90 days. */
+  daily_usage?: Record<string, number>;
 };
+
+const DAILY_USAGE_RETENTION_DAYS = 90;
+
+function todayKey(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
+function trimDailyUsage(
+  daily: Record<string, number>,
+  now: Date = new Date(),
+): Record<string, number> {
+  const cutoffMs = now.getTime() - DAILY_USAGE_RETENTION_DAYS * 86_400_000;
+  const out: Record<string, number> = {};
+  for (const [day, count] of Object.entries(daily)) {
+    const t = Date.parse(`${day}T00:00:00Z`);
+    if (!Number.isFinite(t)) continue;
+    if (t < cutoffMs) continue;
+    out[day] = count;
+  }
+  return out;
+}
+
+/**
+ * Build a dense last-N-days series ending today (UTC). Missing days are 0.
+ * Useful for rendering a sparkline without client-side gap filling.
+ */
+export function dailyUsageSeries(
+  key: { daily_usage?: Record<string, number> },
+  days: number,
+  now: Date = new Date(),
+): { day: string; count: number }[] {
+  const out: { day: string; count: number }[] = [];
+  const start = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(start.getTime() - i * 86_400_000);
+    const key_ = d.toISOString().slice(0, 10);
+    out.push({ day: key_, count: key?.daily_usage?.[key_] ?? 0 });
+  }
+  return out;
+}
 
 export type CreatedKey = {
   key: StoredKey;
@@ -154,8 +198,49 @@ export async function verifyAndTouchAt(
     // Backfill legacy keys with full scope set on first verify.
     match.scopes = ["read", "write"];
   }
-  match.last_used_at = new Date().toISOString();
+  const now = new Date();
+  match.last_used_at = now.toISOString();
   match.usage_count += 1;
+  const day = todayKey(now);
+  const daily = match.daily_usage ?? {};
+  daily[day] = (daily[day] ?? 0) + 1;
+  match.daily_usage = trimDailyUsage(daily, now);
   await writeAll(file, all);
   return match;
+}
+
+export async function getKeyAt(
+  file: string,
+  id: string,
+): Promise<StoredKey | null> {
+  const all = await readAll(file);
+  return all.find((k) => k.id === id) ?? null;
+}
+
+export async function renameKeyAt(
+  file: string,
+  id: string,
+  name: string,
+): Promise<StoredKey | null> {
+  const all = await readAll(file);
+  const idx = all.findIndex((k) => k.id === id);
+  if (idx === -1) return null;
+  const clean = (name || "").trim().slice(0, 80);
+  if (!clean) return null;
+  all[idx] = { ...all[idx], name: clean };
+  await writeAll(file, all);
+  return all[idx];
+}
+
+export async function setKeyScopesAt(
+  file: string,
+  id: string,
+  scopes: unknown,
+): Promise<StoredKey | null> {
+  const all = await readAll(file);
+  const idx = all.findIndex((k) => k.id === id);
+  if (idx === -1) return null;
+  all[idx] = { ...all[idx], scopes: normalizeScopes(scopes) };
+  await writeAll(file, all);
+  return all[idx];
 }

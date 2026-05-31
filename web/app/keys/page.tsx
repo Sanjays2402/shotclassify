@@ -381,7 +381,12 @@ export default function KeysPage() {
                     style={{ borderColor: "var(--color-rule)" }}
                   >
                     <td className="px-3 py-2 font-medium truncate max-w-[14ch]">
-                      {k.name}
+                      <a
+                        href={`/keys/${encodeURIComponent(k.id)}`}
+                        className="hover:underline"
+                      >
+                        {k.name}
+                      </a>
                     </td>
                     <td className="px-3 py-2 font-mono text-[12px]">
                       {k.prefix}...

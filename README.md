@@ -2,6 +2,32 @@
 
 > Real-time screenshot classifier with confidence scoring, OCR, history, sharing, API keys, webhooks, and a Cmd+K command palette.
 
+## What's new: per-key usage detail page
+
+Every API key now has its own page at `/keys/<id>` with a 30-day request
+sparkline, inline rename, scope toggle, one-click rotate, revoke, and a
+copy-paste curl that prefills the key prefix. `verifyAndTouch` now records
+a per-UTC-day counter (kept for 90 days) on top of the existing lifetime
+total, so the chart reflects real traffic.
+
+Try it:
+
+```sh
+cd web && npm run dev
+open http://localhost:3000/keys
+# Then click a key row to land on /keys/<id>.
+
+# Detail JSON, including the dense 30-day series:
+curl -s 'http://localhost:3000/api/keys/<id>?days=30' | jq '.usage'
+
+# Rename or scope-edit:
+curl -s -X PATCH http://localhost:3000/api/keys/<id> \
+  -H 'content-type: application/json' \
+  -d '{"name":"ci-bot","scopes":["read"]}' | jq
+```
+
+Covered by `web/lib/keystore.test.mts` (`npm test`).
+
 ## What's new: webhook delivery filters and pagination
 
 The per-webhook delivery log at `/webhooks/<id>` now supports filtering by

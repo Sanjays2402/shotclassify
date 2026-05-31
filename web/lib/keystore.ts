@@ -9,13 +9,17 @@ import {
   rotateKeyAt,
   deleteKeyAt,
   verifyAndTouchAt,
+  getKeyAt,
+  renameKeyAt,
+  setKeyScopesAt,
+  dailyUsageSeries,
   type StoredKey,
   type CreatedKey,
   type KeyScope,
 } from "./keystore-core";
 
 export type { StoredKey, CreatedKey, KeyScope } from "./keystore-core";
-export { hasScope, normalizeScopes, ALL_SCOPES } from "./keystore-core";
+export { hasScope, normalizeScopes, ALL_SCOPES, dailyUsageSeries } from "./keystore-core";
 
 const STORE_PATH = defaultStorePath();
 
@@ -37,4 +41,22 @@ export function deleteKey(id: string): Promise<boolean> {
 
 export function verifyAndTouch(plaintext: string): Promise<StoredKey | null> {
   return verifyAndTouchAt(STORE_PATH, plaintext);
+}
+
+export function getKey(id: string): Promise<StoredKey | null> {
+  return getKeyAt(STORE_PATH, id);
+}
+
+export function renameKey(
+  id: string,
+  name: string,
+): Promise<StoredKey | null> {
+  return renameKeyAt(STORE_PATH, id, name);
+}
+
+export function setKeyScopes(
+  id: string,
+  scopes: unknown,
+): Promise<StoredKey | null> {
+  return setKeyScopesAt(STORE_PATH, id, scopes);
 }
