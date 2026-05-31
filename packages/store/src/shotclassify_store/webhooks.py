@@ -66,6 +66,8 @@ class SubscriptionRecord:
     last_delivery_at: datetime | None
     success_count: int
     failure_count: int
+    secret_rotation_pending: bool = False
+    secret_rotated_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: WebhookSubscriptionRow) -> "SubscriptionRecord":
@@ -82,6 +84,10 @@ class SubscriptionRecord:
             last_delivery_at=row.last_delivery_at,
             success_count=int(row.success_count or 0),
             failure_count=int(row.failure_count or 0),
+            secret_rotation_pending=bool(
+                getattr(row, "secret_hash_next", None)
+            ),
+            secret_rotated_at=getattr(row, "secret_rotated_at", None),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -100,6 +106,12 @@ class SubscriptionRecord:
             ),
             "success_count": self.success_count,
             "failure_count": self.failure_count,
+            "secret_rotation_pending": self.secret_rotation_pending,
+            "secret_rotated_at": (
+                self.secret_rotated_at.isoformat()
+                if self.secret_rotated_at
+                else None
+            ),
         }
 
 
@@ -480,12 +492,26 @@ def _subscription_signing_key(subscription_id: str, *, tenant_id: str) -> str | 
     at create time can re-derive the same value by hashing the secret they
     were shown, so signatures verify without storing a recoverable secret.
     """
+    keys = _subscription_signing_keys(subscription_id, tenant_id=tenant_id)
+    return keys[0] if keys else None
+
+
+def _subscription_signing_keys(
+    subscription_id: str, *, tenant_id: str
+) -> tuple[str | None, str | None]:
+    """Return ``(primary_secret_hash, next_secret_hash)`` for a subscription.
+
+    During a rotation overlap window both are non-None and the dispatcher
+    signs every outbound payload with both, exposing the old signature in
+    ``X-Shotclassify-Signature`` and the new one in
+    ``X-Shotclassify-Signature-Next`` so receivers can roll over.
+    """
     init_db()
     session = get_session()
     try:
         row = (
             session.execute(
-                select(WebhookSubscriptionRow.secret_hash).where(
+                select(WebhookSubscriptionRow).where(
                     WebhookSubscriptionRow.id == subscription_id,
                     WebhookSubscriptionRow.tenant_id == tenant_id,
                 )
@@ -493,7 +519,116 @@ def _subscription_signing_key(subscription_id: str, *, tenant_id: str) -> str | 
             .scalars()
             .first()
         )
-        return row
+        if not row:
+            return (None, None)
+        return (row.secret_hash, row.secret_hash_next)
+    finally:
+        session.close()
+
+
+def rotate_subscription_secret(
+    subscription_id: str, *, tenant_id: str
+) -> tuple[SubscriptionRecord, str] | None:
+    """Mint a new plaintext signing secret and stage it as ``next``.
+
+    The previous secret stays primary until :func:`finalize_subscription_secret_rotation`
+    is called, so receivers have an overlap window during which the
+    dispatcher signs payloads with both keys.
+
+    Returns ``(record, plaintext_new_secret)`` or ``None`` if the
+    subscription does not exist in this tenant or has been revoked.
+    Tenant-scoped: callers must pass the verified ``tenant_id`` from
+    ``request.state.tenant_id``.
+    """
+    init_db()
+    if not tenant_id or not subscription_id:
+        return None
+    session = get_session()
+    try:
+        row = (
+            session.execute(
+                select(WebhookSubscriptionRow).where(
+                    WebhookSubscriptionRow.id == subscription_id,
+                    WebhookSubscriptionRow.tenant_id == tenant_id,
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if row is None or row.revoked_at is not None:
+            return None
+        new_secret = f"whsec_{secrets.token_urlsafe(32)}"
+        row.secret_hash_next = hash_secret(new_secret)
+        row.secret_rotated_at = datetime.now(UTC)
+        session.commit()
+        session.refresh(row)
+        return SubscriptionRecord.from_row(row), new_secret
+    finally:
+        session.close()
+
+
+def finalize_subscription_secret_rotation(
+    subscription_id: str, *, tenant_id: str
+) -> SubscriptionRecord | None:
+    """Promote the staged ``secret_hash_next`` to be the primary key.
+
+    Drops the old secret from the dual-sign overlap. After this call new
+    deliveries are signed only with the rotated secret, so any receiver
+    that has not yet updated will start failing signature verification.
+    """
+    init_db()
+    if not tenant_id or not subscription_id:
+        return None
+    session = get_session()
+    try:
+        row = (
+            session.execute(
+                select(WebhookSubscriptionRow).where(
+                    WebhookSubscriptionRow.id == subscription_id,
+                    WebhookSubscriptionRow.tenant_id == tenant_id,
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if row is None or row.secret_hash_next is None:
+            return None
+        row.secret_hash = row.secret_hash_next
+        row.secret_hash_next = None
+        # Keep secret_rotated_at as the timestamp the new secret took over.
+        row.secret_rotated_at = datetime.now(UTC)
+        session.commit()
+        session.refresh(row)
+        return SubscriptionRecord.from_row(row)
+    finally:
+        session.close()
+
+
+def cancel_subscription_secret_rotation(
+    subscription_id: str, *, tenant_id: str
+) -> SubscriptionRecord | None:
+    """Abandon a pending rotation; the original secret stays primary."""
+    init_db()
+    if not tenant_id or not subscription_id:
+        return None
+    session = get_session()
+    try:
+        row = (
+            session.execute(
+                select(WebhookSubscriptionRow).where(
+                    WebhookSubscriptionRow.id == subscription_id,
+                    WebhookSubscriptionRow.tenant_id == tenant_id,
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if row is None or row.secret_hash_next is None:
+            return None
+        row.secret_hash_next = None
+        session.commit()
+        session.refresh(row)
+        return SubscriptionRecord.from_row(row)
     finally:
         session.close()
 
@@ -523,10 +658,12 @@ def dispatch_event(
     for sub in subs:
         if not _matches_event(sub.events, event):
             continue
-        key = _subscription_signing_key(sub.id, tenant_id=tenant_id)
-        if not key:
+        primary_key, next_key = _subscription_signing_keys(
+            sub.id, tenant_id=tenant_id
+        )
+        if not primary_key:
             continue
-        signature = sign_body(key, body)
+        signature = sign_body(primary_key, body)
         delivery_id_hint = _new_id("whd")
         headers = {
             "Content-Type": "application/json",
@@ -536,6 +673,10 @@ def dispatch_event(
             "X-Shotclassify-Signature": signature,
             "X-Shotclassify-Subscription": sub.id,
         }
+        if next_key:
+            # Dual-sign during a rotation overlap so receivers can roll
+            # over to the new secret without dropping events.
+            headers["X-Shotclassify-Signature-Next"] = sign_body(next_key, body)
         if request_id:
             headers["X-Request-ID"] = request_id
         ok, http_status, err, attempts, latency_ms = _post_with_retries(
@@ -594,14 +735,16 @@ def replay_delivery(
     sub = get_subscription(original.subscription_id, tenant_id=tenant_id)
     if not sub or not sub.active:
         return None
-    key = _subscription_signing_key(sub.id, tenant_id=tenant_id)
-    if not key:
+    primary_key, next_key = _subscription_signing_keys(
+        sub.id, tenant_id=tenant_id
+    )
+    if not primary_key:
         return None
     # Reconstruct as much of the original payload as we kept; the preview
     # column is the canonical truth we persisted, capped at 512 bytes.
     # For replay we re-sign the preview verbatim so receivers can verify.
     body = original.payload_preview.encode("utf-8")
-    signature = sign_body(key, body)
+    signature = sign_body(primary_key, body)
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "shotclassify-webhooks/1",
@@ -611,6 +754,8 @@ def replay_delivery(
         "X-Shotclassify-Subscription": sub.id,
         "X-Shotclassify-Replay-Of": delivery_id,
     }
+    if next_key:
+        headers["X-Shotclassify-Signature-Next"] = sign_body(next_key, body)
     ok, http_status, err, attempts, latency_ms = _post_with_retries(
         url=sub.url, body=body, headers=headers, sleep=sleep
     )

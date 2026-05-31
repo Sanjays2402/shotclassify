@@ -207,3 +207,122 @@ def replay_delivery(
         )
     request.state.audit_target_id = new_record.id
     return {"delivery": new_record.to_dict(), "replayed_from": delivery_id}
+
+
+@router.post(
+    "/{webhook_id}/rotate-secret",
+    dependencies=[require_mfa_step_up(), require_scope("admin")],
+)
+def rotate_webhook_secret(
+    webhook_id: str,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+    _: str = require_role("admin"),
+):
+    """Mint a new HMAC signing secret with an overlap window.
+
+    The existing secret stays primary until the rotation is finalised, so
+    receivers can update their stored secret while the dispatcher signs
+    every outbound payload with BOTH keys: the old one in
+    ``X-Shotclassify-Signature`` and the new one in
+    ``X-Shotclassify-Signature-Next``. The plaintext new secret is
+    returned exactly once.
+    """
+    tenant_id = _require_tenant(request)
+    record = webhooks_store.get_subscription(webhook_id, tenant_id=tenant_id)
+    if not record:
+        raise HTTPException(404, "Webhook not found.")
+    if not record.active:
+        raise HTTPException(409, "Cannot rotate a revoked subscription.")
+    request.state.audit_target_id = webhook_id
+    if dry_run:
+        return mark_dry_run(
+            request,
+            would_rotate={
+                "id": record.id,
+                "url": record.url,
+                "already_pending": record.secret_rotation_pending,
+            },
+        )
+    result = webhooks_store.rotate_subscription_secret(
+        webhook_id, tenant_id=tenant_id
+    )
+    if not result:
+        raise HTTPException(404, "Webhook not found.")
+    rotated, secret = result
+    return {
+        "webhook": rotated.to_dict(),
+        "secret": secret,
+        "secret_warning": (
+            "Store this secret now. We hash it server-side and cannot show "
+            "it again. The previous secret stays valid until you finalise "
+            "the rotation."
+        ),
+    }
+
+
+@router.post(
+    "/{webhook_id}/finalize-secret",
+    dependencies=[require_mfa_step_up(), require_scope("admin")],
+)
+def finalize_webhook_secret(
+    webhook_id: str,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+    _: str = require_role("admin"),
+):
+    """Drop the previous secret from the dual-sign overlap window.
+
+    After this call only the rotated secret is used. Any receiver that
+    has not updated yet will start failing signature verification, so
+    finalise only after confirming the new secret works end to end.
+    """
+    tenant_id = _require_tenant(request)
+    record = webhooks_store.get_subscription(webhook_id, tenant_id=tenant_id)
+    if not record:
+        raise HTTPException(404, "Webhook not found.")
+    if not record.secret_rotation_pending:
+        raise HTTPException(409, "No rotation is in progress for this webhook.")
+    request.state.audit_target_id = webhook_id
+    if dry_run:
+        return mark_dry_run(
+            request,
+            would_finalize={"id": record.id, "url": record.url},
+        )
+    rotated = webhooks_store.finalize_subscription_secret_rotation(
+        webhook_id, tenant_id=tenant_id
+    )
+    if not rotated:
+        raise HTTPException(404, "Webhook not found.")
+    return {"webhook": rotated.to_dict(), "finalized": True}
+
+
+@router.post(
+    "/{webhook_id}/cancel-rotation",
+    dependencies=[require_mfa_step_up(), require_scope("admin")],
+)
+def cancel_webhook_rotation(
+    webhook_id: str,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+    _: str = require_role("admin"),
+):
+    """Abandon a pending rotation; the original secret stays primary."""
+    tenant_id = _require_tenant(request)
+    record = webhooks_store.get_subscription(webhook_id, tenant_id=tenant_id)
+    if not record:
+        raise HTTPException(404, "Webhook not found.")
+    if not record.secret_rotation_pending:
+        raise HTTPException(409, "No rotation is in progress for this webhook.")
+    request.state.audit_target_id = webhook_id
+    if dry_run:
+        return mark_dry_run(
+            request,
+            would_cancel={"id": record.id, "url": record.url},
+        )
+    rotated = webhooks_store.cancel_subscription_secret_rotation(
+        webhook_id, tenant_id=tenant_id
+    )
+    if not rotated:
+        raise HTTPException(404, "Webhook not found.")
+    return {"webhook": rotated.to_dict(), "canceled": True}

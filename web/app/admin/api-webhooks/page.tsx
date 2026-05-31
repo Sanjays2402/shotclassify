@@ -18,6 +18,8 @@ import {
   Trash,
   ArrowSquareOut,
   Pulse,
+  Key,
+  X,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -34,6 +36,8 @@ type Subscription = {
   last_delivery_at: string | null;
   success_count: number;
   failure_count: number;
+  secret_rotation_pending?: boolean;
+  secret_rotated_at?: string | null;
 };
 
 type Delivery = {
@@ -147,6 +151,78 @@ export default function ApiWebhooksPage() {
         const r = await fetch(`/api/v1-webhooks/${encodeURIComponent(id)}`, {
           method: "DELETE",
         });
+        if (!r.ok) throw new Error(await r.text());
+        subs.mutate();
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [subs],
+  );
+
+  const handleRotate = useCallback(
+    async (id: string) => {
+      if (
+        !confirm(
+          `Rotate signing secret for ${id}? The current secret stays valid until you finalise the rotation.`,
+        )
+      )
+        return;
+      setBusy(id);
+      try {
+        const r = await fetch(
+          `/api/v1-webhooks/${encodeURIComponent(id)}/rotate-secret`,
+          { method: "POST" },
+        );
+        if (!r.ok) throw new Error(await r.text());
+        const body = await r.json();
+        setRevealedSecret(body.secret);
+        subs.mutate();
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [subs],
+  );
+
+  const handleFinalize = useCallback(
+    async (id: string) => {
+      if (
+        !confirm(
+          `Finalise rotation for ${id}? Any receiver still on the old secret will start failing signature checks.`,
+        )
+      )
+        return;
+      setBusy(id);
+      try {
+        const r = await fetch(
+          `/api/v1-webhooks/${encodeURIComponent(id)}/finalize-secret`,
+          { method: "POST" },
+        );
+        if (!r.ok) throw new Error(await r.text());
+        subs.mutate();
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [subs],
+  );
+
+  const handleCancelRotation = useCallback(
+    async (id: string) => {
+      if (!confirm(`Cancel pending rotation for ${id}?`)) return;
+      setBusy(id);
+      try {
+        const r = await fetch(
+          `/api/v1-webhooks/${encodeURIComponent(id)}/cancel-rotation`,
+          { method: "POST" },
+        );
         if (!r.ok) throw new Error(await r.text());
         subs.mutate();
       } catch (e) {
@@ -382,15 +458,62 @@ export default function ApiWebhooksPage() {
                     </div>
                   </div>
                   {s.active && (
-                    <button
-                      onClick={() => handleRevoke(s.id)}
-                      disabled={busy === s.id}
-                      className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-white px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50 dark:border-rose-900/40 dark:bg-zinc-950 dark:text-rose-300 dark:hover:bg-rose-950/30"
-                    >
-                      <Trash size={12} weight="bold" /> Revoke
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {s.secret_rotation_pending ? (
+                        <>
+                          <button
+                            onClick={() => handleFinalize(s.id)}
+                            disabled={busy === s.id}
+                            className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-white px-2.5 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 dark:border-emerald-900/40 dark:bg-zinc-950 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
+                          >
+                            <Check size={12} weight="bold" /> Finalise rotation
+                          </button>
+                          <button
+                            onClick={() => handleCancelRotation(s.id)}
+                            disabled={busy === s.id}
+                            className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                          >
+                            <X size={12} weight="bold" /> Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => handleRotate(s.id)}
+                          disabled={busy === s.id}
+                          className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-white px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 dark:border-indigo-900/40 dark:bg-zinc-950 dark:text-indigo-300 dark:hover:bg-indigo-950/30"
+                          title="Mint a new signing secret with an overlap window"
+                        >
+                          <Key size={12} weight="bold" /> Rotate secret
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleRevoke(s.id)}
+                        disabled={busy === s.id}
+                        className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-white px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50 dark:border-rose-900/40 dark:bg-zinc-950 dark:text-rose-300 dark:hover:bg-rose-950/30"
+                      >
+                        <Trash size={12} weight="bold" /> Revoke
+                      </button>
+                    </div>
                   )}
                 </div>
+                {s.secret_rotation_pending && (
+                  <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200">
+                    <ArrowsClockwise
+                      size={14}
+                      weight="duotone"
+                      className="mt-0.5 shrink-0"
+                    />
+                    <div>
+                      Rotation in progress since {fmt(s.secret_rotated_at ?? null)}.
+                      Deliveries are signed with the old secret in{" "}
+                      <code className="font-mono">X-Shotclassify-Signature</code>{" "}
+                      and the new secret in{" "}
+                      <code className="font-mono">X-Shotclassify-Signature-Next</code>.
+                      Update every receiver, confirm deliveries succeed, then
+                      finalise to drop the old secret.
+                    </div>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

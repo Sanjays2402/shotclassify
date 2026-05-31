@@ -2,6 +2,27 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: webhook signing-secret rotation with overlap
+
+Workspace admins can rotate a webhook's HMAC signing secret without dropping events. Rotation mints a new plaintext secret (shown exactly once) and keeps the previous one valid for an overlap window: every outbound delivery is signed twice, with the old key in `X-Shotclassify-Signature` and the new key in `X-Shotclassify-Signature-Next`. Receivers verify either header, swap their stored secret, and the admin finalises the rotation to drop the old key.
+
+All three endpoints require the `admin` role plus a fresh MFA step-up, are tenant-scoped (cross-tenant calls return 404), honour `?dry_run=true`, and are recorded by the existing audit middleware:
+
+* `POST /v1/webhooks/{id}/rotate-secret` returns `{ webhook, secret, secret_warning }`
+* `POST /v1/webhooks/{id}/finalize-secret` drops the previous key
+* `POST /v1/webhooks/{id}/cancel-rotation` abandons a pending rotation
+
+Try it locally (replace `WH_ID` with the id from `POST /v1/webhooks`):
+
+```bash
+make api  # http://localhost:7441
+
+curl -s -X POST http://localhost:7441/v1/webhooks/$WH_ID/rotate-secret \
+  -H 'X-API-Key: <admin-key>' -H 'X-MFA-Token: <step-up>' | jq
+```
+
+The `Admin -> API webhooks` page exposes Rotate / Finalise / Cancel actions on each subscription and surfaces a callout while a rotation is in flight. End-to-end coverage in `tests/test_webhook_secret_rotation.py` (rotation, dry-run, operator denial, cross-tenant denial, dual-sign on the wire against a live listener, and single-sign after finalise).
+
 ## What's new: MFA recovery (backup) codes
 
 Mandatory MFA closes one risk and opens another: a user who loses their phone is locked out of their workspace until an admin intervenes. SOC 2 CC6.1 and NIST 800-63B both expect a documented self-service recovery path, and procurement teams routinely block deals until they see one. Every confirmed second factor can now mint a batch of 10 single-use recovery codes from `Settings -> Security -> MFA`. Plaintext is shown exactly once at generation time; the server only retains a per-code salted SHA-256 hash, so a database leak cannot reveal a working code. Each code satisfies step-up exactly once (NIST 800-63B 5.1.2), is burned atomically on use, and stamps the session's `mfa_verified_at` so the user immediately regains access to admin mutations. Regenerating a batch invalidates the prior set in a single transaction so users never have two live batches at once, and disabling MFA wipes every recovery row for that principal so a stale code can never re-enable step-up after the second factor is gone. Generation itself requires a fresh TOTP step-up (`require_mfa_step_up`) so a stolen cookie alone cannot mint codes, and API key callers are refused outright because recovery is a human-only flow. Coverage in `tests/test_mfa_recovery_codes.py`.

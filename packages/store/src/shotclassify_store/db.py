@@ -439,6 +439,18 @@ class WebhookSubscriptionRow(Base):
     )
     success_count: Mapped[int] = mapped_column(default=0, nullable=False)
     failure_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    # Secret rotation with overlap. When ``secret_hash_next`` is set the
+    # dispatcher signs every outbound delivery with BOTH the old key (in
+    # ``X-Shotclassify-Signature``) and the new key (in
+    # ``X-Shotclassify-Signature-Next``) so receivers can roll over with
+    # zero downtime. Finalising the rotation promotes ``next`` to the
+    # primary and clears the overlap.
+    secret_hash_next: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    secret_rotated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class WebhookDeliveryRow(Base):
