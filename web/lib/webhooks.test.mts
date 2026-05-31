@@ -106,3 +106,66 @@ test("redeliver returns delivery_not_found when delivery id is unknown", async (
   const result = await redeliver("does-not-exist");
   assert.deepEqual(result, { error: "delivery_not_found" });
 });
+
+test("listDeliveriesPage filters by status and event and paginates", async () => {
+  const { createWebhook, listDeliveriesPage, listDeliveryEvents } = await import(
+    "./webhooks"
+  );
+  const hook = await createWebhook({
+    url: "http://127.0.0.1:1/none",
+    description: "filter-test",
+    events: ["classify.completed"],
+  });
+
+  const now = Date.now();
+  const seeded = [
+    { ev: "classify.completed", st: "success" as const },
+    { ev: "classify.completed", st: "failed" as const },
+    { ev: "classify.completed", st: "failed" as const },
+    { ev: "test.ping", st: "success" as const },
+    { ev: "classify.completed", st: "success" as const },
+    { ev: "classify.completed", st: "success" as const },
+  ].map((s, i) => ({
+    id: `f-${i}`,
+    webhook_id: hook.id,
+    event: s.ev,
+    url: "http://127.0.0.1:1/none",
+    status: s.st,
+    attempt: 1,
+    http_status: s.st === "success" ? 200 : 500,
+    error: s.st === "failed" ? "HTTP 500" : null,
+    latency_ms: 5,
+    created_at: new Date(now + i).toISOString(),
+    payload_preview: "{}",
+  }));
+  // Append rather than overwrite so prior tests still pass.
+  const existingPath = path.join(tmpDir, "webhook_deliveries.json");
+  const existing = JSON.parse(
+    (await fs.readFile(existingPath, "utf-8").catch(() => "[]")) || "[]",
+  );
+  await fs.writeFile(existingPath, JSON.stringify([...existing, ...seeded]));
+
+  const failed = await listDeliveriesPage(hook.id, { status: "failed" });
+  assert.equal(failed.total, 2);
+  assert.equal(failed.deliveries.length, 2);
+  assert.ok(failed.deliveries.every((d) => d.status === "failed"));
+
+  const ping = await listDeliveriesPage(hook.id, { event: "test.ping" });
+  assert.equal(ping.total, 1);
+  assert.equal(ping.deliveries[0].event, "test.ping");
+
+  const pageA = await listDeliveriesPage(hook.id, { limit: 2, offset: 0 });
+  const pageB = await listDeliveriesPage(hook.id, { limit: 2, offset: 2 });
+  assert.equal(pageA.limit, 2);
+  assert.equal(pageA.deliveries.length, 2);
+  assert.equal(pageA.has_more, true);
+  assert.equal(pageB.offset, 2);
+  assert.notDeepEqual(
+    pageA.deliveries.map((d) => d.id),
+    pageB.deliveries.map((d) => d.id),
+  );
+
+  const events = await listDeliveryEvents(hook.id);
+  assert.ok(events.includes("classify.completed"));
+  assert.ok(events.includes("test.ping"));
+});

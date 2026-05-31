@@ -149,15 +149,63 @@ async function bumpCounters(
   await writeJson(HOOKS_PATH, all);
 }
 
+export type DeliveryFilter = {
+  status?: "success" | "failed" | "pending";
+  event?: string;
+  offset?: number;
+  limit?: number;
+};
+
+export type DeliveryPage = {
+  deliveries: Delivery[];
+  total: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+};
+
 export async function listDeliveries(
   webhookId?: string,
-  limit = 50,
+  limitOrFilter: number | DeliveryFilter = 50,
 ): Promise<Delivery[]> {
+  const filter: DeliveryFilter =
+    typeof limitOrFilter === "number" ? { limit: limitOrFilter } : limitOrFilter;
+  const page = await listDeliveriesPage(webhookId, filter);
+  return page.deliveries;
+}
+
+export async function listDeliveriesPage(
+  webhookId?: string,
+  filter: DeliveryFilter = {},
+): Promise<DeliveryPage> {
   const all = await readJson<Delivery[]>(DELIVERIES_PATH, []);
-  const filtered = webhookId
-    ? all.filter((d) => d.webhook_id === webhookId)
-    : all;
-  return filtered.slice(0, Math.min(limit, MAX_DELIVERIES));
+  let filtered = webhookId ? all.filter((d) => d.webhook_id === webhookId) : all;
+  if (filter.status) {
+    filtered = filtered.filter((d) => d.status === filter.status);
+  }
+  if (filter.event) {
+    filtered = filtered.filter((d) => d.event === filter.event);
+  }
+  const total = filtered.length;
+  const offset = Math.max(0, Math.floor(filter.offset ?? 0));
+  const rawLimit = Math.floor(filter.limit ?? 50);
+  const limit = Math.max(1, Math.min(rawLimit, MAX_DELIVERIES));
+  const slice = filtered.slice(offset, offset + limit);
+  return {
+    deliveries: slice,
+    total,
+    offset,
+    limit,
+    has_more: offset + slice.length < total,
+  };
+}
+
+export async function listDeliveryEvents(
+  webhookId?: string,
+): Promise<string[]> {
+  const all = await readJson<Delivery[]>(DELIVERIES_PATH, []);
+  const filtered = webhookId ? all.filter((d) => d.webhook_id === webhookId) : all;
+  return Array.from(new Set(filtered.map((d) => d.event))).sort();
 }
 
 export function sign(secret: string, body: string): string {

@@ -4,7 +4,8 @@ import {
   getWebhook,
   setActive,
   testFire,
-  listDeliveries,
+  listDeliveriesPage,
+  listDeliveryEvents,
   redeliver,
 } from "@/lib/webhooks";
 
@@ -12,7 +13,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
@@ -23,10 +24,26 @@ export async function GET(
       { status: 404 },
     );
   }
-  const deliveries = await listDeliveries(id, 50);
+  const sp = req.nextUrl.searchParams;
+  const statusParam = sp.get("status");
+  const eventParam = sp.get("event");
+  const offset = Number.parseInt(sp.get("offset") || "0", 10) || 0;
+  const limit = Number.parseInt(sp.get("limit") || "50", 10) || 50;
+  const status =
+    statusParam === "success" || statusParam === "failed" || statusParam === "pending"
+      ? statusParam
+      : undefined;
+  const event = eventParam && eventParam.length > 0 ? eventParam : undefined;
+  const page = await listDeliveriesPage(id, { status, event, offset, limit });
+  const events = await listDeliveryEvents(id);
   return NextResponse.json({
     webhook: { ...hook, secret: undefined, secret_prefix: hook.secret.slice(0, 12) },
-    deliveries,
+    deliveries: page.deliveries,
+    total: page.total,
+    offset: page.offset,
+    limit: page.limit,
+    has_more: page.has_more,
+    events,
   });
 }
 

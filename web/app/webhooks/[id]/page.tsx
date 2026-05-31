@@ -12,6 +12,8 @@ import {
   PaperPlaneTilt,
   Warning,
   ArrowClockwise,
+  Funnel,
+  X,
 } from "@phosphor-icons/react/dist/ssr";
 
 type Webhook = {
@@ -58,43 +60,76 @@ export default function WebhookDetailPage({
   const { id } = use(params);
   const [hook, setHook] = useState<Webhook | null>(null);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [eventOptions, setEventOptions] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<"" | "success" | "failed" | "pending">("");
+  const [eventFilter, setEventFilter] = useState<string>("");
+  const [pageSize] = useState(25);
+  const [offset, setOffset] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [selected, setSelected] = useState<Delivery | null>(null);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const res = await fetch(`/api/webhooks/${encodeURIComponent(id)}`, {
-        cache: "no-store",
-      });
-      if (res.status === 404) {
-        setHook(null);
-        setDeliveries([]);
-        setError("Webhook not found.");
-        return;
+  const load = useCallback(
+    async (mode: "reset" | "append" = "reset") => {
+      setError(null);
+      const nextOffset = mode === "reset" ? 0 : offset + pageSize;
+      if (mode === "append") setLoadingMore(true);
+      try {
+        const qs = new URLSearchParams();
+        qs.set("offset", String(nextOffset));
+        qs.set("limit", String(pageSize));
+        if (statusFilter) qs.set("status", statusFilter);
+        if (eventFilter) qs.set("event", eventFilter);
+        const res = await fetch(
+          `/api/webhooks/${encodeURIComponent(id)}?${qs.toString()}`,
+          { cache: "no-store" },
+        );
+        if (res.status === 404) {
+          setHook(null);
+          setDeliveries([]);
+          setError("Webhook not found.");
+          return;
+        }
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const body = (await res.json()) as {
+          webhook: Webhook;
+          deliveries: Delivery[];
+          total: number;
+          offset: number;
+          has_more: boolean;
+          events: string[];
+        };
+        setHook(body.webhook);
+        if (mode === "reset") {
+          setDeliveries(body.deliveries || []);
+        } else {
+          setDeliveries((prev) => [...prev, ...(body.deliveries || [])]);
+        }
+        setTotal(body.total ?? (body.deliveries || []).length);
+        setHasMore(!!body.has_more);
+        setOffset(body.offset ?? nextOffset);
+        if (Array.isArray(body.events)) setEventOptions(body.events);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to load webhook.");
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
       }
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const body = (await res.json()) as {
-        webhook: Webhook;
-        deliveries: Delivery[];
-      };
-      setHook(body.webhook);
-      setDeliveries(body.deliveries || []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load webhook.");
-    } finally {
-      setLoading(false);
-    }
-  }, [id]);
+    },
+    [id, statusFilter, eventFilter, pageSize, offset],
+  );
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void load("reset");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, statusFilter, eventFilter]);
 
   const redeliver = useCallback(
     async (deliveryId: string) => {
@@ -289,18 +324,77 @@ export default function WebhookDetailPage({
           </section>
 
           <section>
-            <h2 className="h-display text-base mb-3 flex items-center gap-2">
-              <Lightning size={16} weight="duotone" />
-              Delivery log
-            </h2>
+            <div className="flex items-end justify-between gap-3 flex-wrap mb-3">
+              <h2 className="h-display text-base flex items-center gap-2">
+                <Lightning size={16} weight="duotone" />
+                Delivery log
+                <span className="text-xs opacity-60 font-mono ml-1">
+                  {deliveries.length}/{total}
+                </span>
+              </h2>
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="inline-flex items-center gap-1 text-xs opacity-70">
+                  <Funnel size={12} weight="duotone" />
+                  <span>Filter</span>
+                </div>
+                <label className="sr-only" htmlFor="wh-status">Status</label>
+                <select
+                  id="wh-status"
+                  className="text-xs rounded border px-2 py-1 bg-white"
+                  style={{ borderColor: "var(--color-rule)" }}
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as "" | "success" | "failed" | "pending")}
+                  aria-label="Filter by status"
+                >
+                  <option value="">All status</option>
+                  <option value="success">Success</option>
+                  <option value="failed">Failed</option>
+                  <option value="pending">Pending</option>
+                </select>
+                <label className="sr-only" htmlFor="wh-event">Event</label>
+                <select
+                  id="wh-event"
+                  className="text-xs rounded border px-2 py-1 bg-white"
+                  style={{ borderColor: "var(--color-rule)" }}
+                  value={eventFilter}
+                  onChange={(e) => setEventFilter(e.target.value)}
+                  aria-label="Filter by event"
+                  disabled={eventOptions.length === 0}
+                >
+                  <option value="">All events</option>
+                  {eventOptions.map((ev) => (
+                    <option key={ev} value={ev}>{ev}</option>
+                  ))}
+                </select>
+                {(statusFilter || eventFilter) && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary text-xs px-2 py-1"
+                    onClick={() => {
+                      setStatusFilter("");
+                      setEventFilter("");
+                    }}
+                    aria-label="Clear filters"
+                  >
+                    <X size={12} weight="bold" />
+                    <span className="ml-1">Clear</span>
+                  </button>
+                )}
+              </div>
+            </div>
             {deliveries.length === 0 ? (
               <div
                 className="rounded border p-6 text-sm opacity-70"
                 style={{ borderColor: "var(--color-rule)" }}
               >
-                No deliveries recorded yet. Send a test event above or run a
-                classification with{" "}
-                <code className="font-mono">classify.completed</code> subscribed.
+                {statusFilter || eventFilter
+                  ? `No deliveries match the current filter. Clear it to see everything.`
+                  : `No deliveries recorded yet. Send a test event above or run a classification with `}
+                {!statusFilter && !eventFilter && (
+                  <>
+                    <code className="font-mono">classify.completed</code> subscribed.
+                  </>
+                )}
               </div>
             ) : (
               <div
@@ -392,6 +486,24 @@ export default function WebhookDetailPage({
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+            {hasMore && deliveries.length > 0 && (
+              <div className="mt-3 flex justify-center">
+                <button
+                  type="button"
+                  className="btn btn-secondary text-xs px-3 py-1.5"
+                  onClick={() => void load("append")}
+                  disabled={loadingMore}
+                  aria-label="Load more deliveries"
+                >
+                  {loadingMore ? (
+                    <CircleNotch size={12} weight="duotone" className="animate-spin" />
+                  ) : null}
+                  <span className={loadingMore ? "ml-1" : ""}>
+                    Load more ({total - deliveries.length} remaining)
+                  </span>
+                </button>
               </div>
             )}
           </section>

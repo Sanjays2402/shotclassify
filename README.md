@@ -2,6 +2,28 @@
 
 > Real-time screenshot classifier with confidence scoring, OCR, history, sharing, API keys, webhooks, and a Cmd+K command palette.
 
+## What's new: webhook delivery filters and pagination
+
+The per-webhook delivery log at `/webhooks/<id>` now supports filtering by
+status (success, failed, pending) and by event name, plus a load-more pager
+so receivers with thousands of deliveries are actually browsable. The page
+has an empty-state for filtered-no-match, a counter showing
+`shown / total`, and the filters reset pagination when changed. The API
+route accepts `status`, `event`, `offset`, and `limit` query params and
+returns `{ deliveries, total, offset, limit, has_more, events }`.
+
+Try it:
+
+```sh
+cd web && npm run dev
+open http://localhost:3000/webhooks
+
+# Filtered, paginated delivery log JSON
+curl -s 'http://localhost:3000/api/webhooks/<id>?status=failed&limit=10&offset=0' | jq
+```
+
+Covered by `web/lib/webhooks.test.mts` (`npm test`).
+
 ## What's new: activity digest
 
 A real activity recap lives at `/digest`. Pick a 7, 14, or 30 day window and
