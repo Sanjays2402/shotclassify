@@ -33,6 +33,9 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const conf = `${(rec.confidence * 100).toFixed(1)}%`;
   const title = `${label} · ${conf} · ShotClassify`;
   const desc = `Classified ${rec.filename} as ${label} with ${conf} confidence.`;
+  const site = (process.env.NEXT_PUBLIC_SITE_URL || "").replace(/\/+$/, "");
+  const canonical = site ? `${site}/r/${id}` : `/r/${id}`;
+  const oembedHref = `${site}/api/oembed?url=${encodeURIComponent(canonical)}&format=json`;
   return {
     title,
     description: desc,
@@ -45,6 +48,11 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
       card: "summary_large_image",
       title,
       description: desc,
+    },
+    alternates: {
+      types: {
+        "application/json+oembed": oembedHref,
+      },
     },
   };
 }
