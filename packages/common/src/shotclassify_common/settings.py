@@ -134,7 +134,7 @@ class Settings(BaseSettings):
     rate_limit_per_key_rpm: int = 600
     rate_limit_per_workspace_rpm: int = 2400
     rate_limit_burst: int = 20
-    rate_limit_exempt_paths: str = "/healthz,/readyz,/metrics,/blob"
+    rate_limit_exempt_paths: str = "/healthz,/readyz,/metrics,/blob,/.well-known,/security.txt"
 
     # Outbound webhook egress hardening. Webhook URLs are tenant-controlled,
     # which makes the dispatcher a textbook SSRF sink: a malicious or
@@ -174,6 +174,25 @@ class Settings(BaseSettings):
     sentry_sample_rate: float = 1.0
     sentry_traces_sample_rate: float = 0.0
     sentry_profiles_sample_rate: float = 0.0
+
+    # RFC 9116 security.txt. Served unauthenticated at
+    # /.well-known/security.txt so security researchers, bug-bounty
+    # platforms, and procurement scanners can find the vulnerability
+    # disclosure contact without guessing. Every enterprise security
+    # questionnaire checks for this file; absence is a deal-blocker.
+    #
+    # ``security_contact`` must be a single URL (mailto:, https:, or
+    # tel:). ``security_expires_days`` controls the rolling Expires
+    # field; RFC 9116 requires it and recommends ≤ 1 year. The other
+    # fields are optional but recommended.
+    security_contact: str = ""
+    security_canonical_url: str = ""
+    security_policy_url: str = ""
+    security_acknowledgments_url: str = ""
+    security_encryption_url: str = ""
+    security_hiring_url: str = ""
+    security_preferred_languages: str = "en"
+    security_expires_days: int = 365
 
 
 @lru_cache(maxsize=1)

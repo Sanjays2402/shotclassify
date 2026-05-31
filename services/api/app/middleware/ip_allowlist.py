@@ -47,6 +47,8 @@ DEFAULT_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/docs",
     "/redoc",
     "/openapi.json",
+    "/.well-known/",
+    "/security.txt",
     "/",
 )
 

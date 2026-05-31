@@ -2,7 +2,58 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
-## What's new: webhook signing-secret rotation with overlap
+## What's new: RFC 9116 /.well-known/security.txt
+
+Enterprise procurement and bug-bounty scanners (HackerOne, Intigriti, BugCrowd, OneTrust, Vanta-driven reviews) probe `/.well-known/security.txt` on every target host and flag its absence as a finding. ShotClassify now serves a spec-compliant file directly from the API tier, exempt from auth, the IP allowlist, and the rate limiter, with a rolling `Expires:` value recomputed on every request so operators never ship a build just to refresh the date. Bare-email contacts are widened to `mailto:`, language tags are normalised, and the legacy unprefixed `/security.txt` alias is answered for older scanners. The web tier rewrites the same path through to the API so the file is reachable on whichever host the buyer points their scanner at. A top-level `SECURITY.md` documents the vulnerability disclosure policy, response targets, what is in and out of scope, and signed-commits guidance. `.github/CODEOWNERS` pins owner review on every authentication, authorization, audit, MFA, sessions, API-key, SSO, webhook, and migration surface.
+
+Configure via environment (all optional except `SECURITY_CONTACT`):
+
+```sh
+SECURITY_CONTACT=security@example.com
+SECURITY_CANONICAL_URL=https://example.com/.well-known/security.txt
+SECURITY_POLICY_URL=https://example.com/security
+SECURITY_ACKNOWLEDGMENTS_URL=https://example.com/security/thanks
+SECURITY_ENCRYPTION_URL=https://example.com/pgp.txt
+SECURITY_PREFERRED_LANGUAGES=en, de
+SECURITY_EXPIRES_DAYS=365   # clamped to 1..366 per RFC 9116 guidance
+```
+
+When `SECURITY_CONTACT` is empty the endpoint returns `404 text/plain`, mirroring the behaviour of a host that does not publish a file. Coverage in `tests/test_security_txt.py` (unconfigured 404, unauthenticated 200, header widening, language normalisation, expires clamping, legacy alias).
+
+### Try it
+
+With the API on `http://127.0.0.1:7441`:
+
+```sh
+SECURITY_CONTACT=security@example.com make api
+
+curl -i http://127.0.0.1:7441/.well-known/security.txt
+```
+
+Expect `HTTP/1.1 200 OK`, `Content-Type: text/plain; charset=utf-8`, and a body that starts with `Contact: mailto:security@example.com` and contains `Expires: <UTC ISO 8601>Z`.
+
+## What's new: RFC 9116 security.txt at /.well-known/security.txt
+
+Enterprise procurement scans, bug-bounty crawlers (HackerOne, Intigriti, BugCrowd), and questionnaires like SIG, CAIQ, Whistic, and OneTrust all check `/.well-known/security.txt`. A missing file is logged as a finding and delays SOC 2 readiness audits. The API tier now serves a spec-compliant file, unauthenticated, with a rolling `Expires` so operators do not have to ship a build to refresh it. The legacy `/security.txt` alias is served too. Both routes are exempt from the auth middleware, rate limiter, and IP allowlist, and the web tier proxies the same paths so scanners targeting the dashboard host find it without knowing the API origin. Operator-configurable via `SECURITY_CONTACT`, `SECURITY_CANONICAL_URL`, `SECURITY_POLICY_URL`, `SECURITY_ACKNOWLEDGMENTS_URL`, `SECURITY_ENCRYPTION_URL`, `SECURITY_HIRING_URL`, `SECURITY_PREFERRED_LANGUAGES`, and `SECURITY_EXPIRES_DAYS` (clamped to one year per RFC 9116 guidance). When `SECURITY_CONTACT` is empty the route returns 404 instead of a misleading stub. The full disclosure policy lives in [`SECURITY.md`](./SECURITY.md). Coverage in `tests/test_security_txt.py`.
+
+### Try it
+
+```bash
+make api  # http://localhost:7441
+
+SECURITY_CONTACT=security@example.com \
+SECURITY_POLICY_URL=https://example.com/security \
+SECURITY_PREFERRED_LANGUAGES="en, de" \
+  make api
+
+curl -s http://localhost:7441/.well-known/security.txt
+# Contact: mailto:security@example.com
+# Expires: 2027-05-31T20:00:00Z
+# Preferred-Languages: en, de
+# Policy: https://example.com/security
+```
+
+## Previous: webhook signing-secret rotation with overlap
 
 Workspace admins can rotate a webhook's HMAC signing secret without dropping events. Rotation mints a new plaintext secret (shown exactly once) and keeps the previous one valid for an overlap window: every outbound delivery is signed twice, with the old key in `X-Shotclassify-Signature` and the new key in `X-Shotclassify-Signature-Next`. Receivers verify either header, swap their stored secret, and the admin finalises the rotation to drop the old key.
 

@@ -58,6 +58,8 @@ PUBLIC_PATHS = {
     "/openapi.json",
     "/v1/trust/subprocessors",
     "/v1/trust/incidents",
+    "/.well-known/security.txt",
+    "/security.txt",
 }
 
 

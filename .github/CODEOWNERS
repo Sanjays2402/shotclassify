@@ -1,0 +1,28 @@
+# Default reviewer for everything in the repo. GitHub will request a
+# review from this owner on any pull request unless a more specific
+# rule below matches first. Used for procurement reviews that ask
+# "who owns this code and is it actively maintained".
+* @Sanjays2402
+
+# Security-sensitive surfaces. Touching any of these requires owner
+# review even when the change looks small.
+/SECURITY.md                                          @Sanjays2402
+/docs/security.md                                     @Sanjays2402
+/services/api/app/middleware/                         @Sanjays2402
+/services/api/app/routes/auth.py                      @Sanjays2402
+/services/api/app/routes/sso.py                       @Sanjays2402
+/services/api/app/routes/mfa.py                       @Sanjays2402
+/services/api/app/routes/api_keys.py                  @Sanjays2402
+/services/api/app/routes/sessions.py                  @Sanjays2402
+/services/api/app/routes/support_access.py            @Sanjays2402
+/services/api/app/routes/security_settings.py         @Sanjays2402
+/services/api/app/routes/well_known.py                @Sanjays2402
+/services/api/app/routes/webhooks.py                  @Sanjays2402
+/packages/store/src/shotclassify_store/api_keys.py    @Sanjays2402
+/packages/store/src/shotclassify_store/audit.py       @Sanjays2402
+/packages/store/src/shotclassify_store/mfa.py         @Sanjays2402
+/packages/store/src/shotclassify_store/sessions.py    @Sanjays2402
+/packages/store/src/shotclassify_store/webhook_egress.py @Sanjays2402
+/packages/store/src/shotclassify_store/tenant_settings.py @Sanjays2402
+/packages/store/alembic/                              @Sanjays2402
+/packages/common/src/shotclassify_common/settings.py  @Sanjays2402
