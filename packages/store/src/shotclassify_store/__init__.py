@@ -42,6 +42,9 @@ from .retention import (
 from . import legal_holds as legal_holds_store
 from .legal_holds import LegalHold, LegalHoldActive, tenant_has_active_hold
 from .db import LegalHoldRow
+from . import subprocessors as subprocessors_store
+from .subprocessors import Acknowledgement as SubprocessorAck, Subprocessor
+from .db import SubprocessorAckRow
 from .tenant_settings import (
     AUTO_JOIN_ROLES,
     PII_REDACT_MODES,
@@ -122,4 +125,8 @@ __all__ = [
     "LegalHoldActive",
     "LegalHoldRow",
     "tenant_has_active_hold",
+    "subprocessors_store",
+    "SubprocessorAck",
+    "SubprocessorAckRow",
+    "Subprocessor",
 ]

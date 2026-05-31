@@ -46,6 +46,7 @@ from .routes import admin as admin_routes
 from .routes import webhooks as webhooks_routes
 from .routes import scim as scim_routes
 from .routes import scim_admin as scim_admin_routes
+from .routes import subprocessors as subprocessors_routes
 
 
 @asynccontextmanager
@@ -140,6 +141,7 @@ def create_app() -> FastAPI:
     app.include_router(webhooks_routes.router)
     app.include_router(scim_routes.router)
     app.include_router(scim_admin_routes.router)
+    app.include_router(subprocessors_routes.router)
     storage_root = Path(s.storage_local_dir)
     storage_root.mkdir(parents=True, exist_ok=True)
     app.mount("/blob", StaticFiles(directory=str(storage_root)), name="blob")

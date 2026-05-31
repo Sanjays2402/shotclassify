@@ -417,6 +417,31 @@ class LegalHoldRow(Base):
     lifted_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class SubprocessorAckRow(Base):
+    """Per-tenant acknowledgement of the active sub-processor catalog.
+
+    Enterprise procurement requires the buyer to view and accept the list
+    of third-party data processors. The catalog itself is vendor-owned
+    (seeded from config), but each workspace records which version of
+    that catalog it has acknowledged, plus who accepted and from where.
+    Bumping the catalog version re-arms the unacknowledged banner on the
+    next page load.
+    """
+
+    __tablename__ = "subprocessor_acks"
+
+    tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    acknowledged_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    acknowledged_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    acknowledged_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()
@@ -539,6 +564,8 @@ def init_db() -> None:
                 Base.metadata.tables["webhook_deliveries"].create(bind=conn)
             if not insp.has_table("legal_holds"):
                 Base.metadata.tables["legal_holds"].create(bind=conn)
+            if not insp.has_table("subprocessor_acks"):
+                Base.metadata.tables["subprocessor_acks"].create(bind=conn)
     except Exception:
         # Best-effort. Real schema management lives in alembic.
         pass

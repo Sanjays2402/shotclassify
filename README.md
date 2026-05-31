@@ -2,6 +2,25 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: trust center sub-processor registry
+
+Procurement and security reviewers can now pull the live sub-processor catalog without credentials at `GET /v1/trust/subprocessors` (public web page at `/trust`), and workspace admins can record a binding acknowledgement at `/settings/trust`. The catalog version is a deterministic SHA-256 over the canonicalized list so any change to a processor automatically re-arms the unacknowledged banner for every workspace. Acknowledgements capture the actor, IP, user agent, and version, are tenant-scoped at the query layer, and the mutating POST is picked up by the existing tamper-evident audit chain. Coverage in `tests/test_trust_subprocessors.py`.
+
+### Try it
+
+```bash
+# Public catalog. No auth.
+curl -s http://localhost:7441/v1/trust/subprocessors | jq
+
+# Admin acknowledgement (echo back the current version to bind it).
+VERSION=$(curl -s http://localhost:7441/v1/trust/subprocessors | jq -r .version)
+curl -s -X POST -H "X-API-Key: $ADMIN_KEY" -H "content-type: application/json" \
+  -d "{\"version\":\"$VERSION\"}" \
+  http://localhost:7441/v1/trust/subprocessors/ack
+```
+
+Public page: <http://localhost:3000/trust>. Admin settings: <http://localhost:3000/settings/trust>.
+
 ## What's new: legal hold registry
 
 Workspace admins can place a legal hold from `/admin/legal-holds` or `POST /v1/settings/security/legal-holds` to freeze evidence during litigation, regulator inquiry, or compliance review. While at least one hold is active, every destructive code path in the API refuses with HTTP 423 Locked and the matter names that caused the block: per-shot `DELETE /v1/history/{id}`, bulk `POST /v1/history/bulk` with `action=delete`, `DELETE /v1/me/data`, `DELETE /v1/workspace/data`, and the scheduled retention purge (which returns `held: true` instead of removing rows). Lifting a hold writes `lifted_at` and `lifted_by` instead of deleting the row, so the e-discovery audit trail survives. Holds are tenant-scoped at the query layer; one workspace's hold never blocks another's deletes. Coverage in `tests/test_legal_hold.py`.
