@@ -6,6 +6,7 @@ import { verifyAndTouch, hasScope, workspaceOf } from "@/lib/keystore";
 import { dispatchEvent } from "@/lib/webhooks";
 import { notifyClassifyCompleted } from "@/lib/notifications";
 import { withObservability } from "@/lib/observability";
+import { enforce } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,6 +50,24 @@ async function postHandler(req: NextRequest): Promise<Response> {
       "This API key is read-only. Create a key with the 'write' scope to call /v1/classify.",
     );
   }
+
+  const decision = await enforce(workspaceOf(key), key.id);
+  if (!decision.allowed) {
+    const res = NextResponse.json(
+      {
+        error: {
+          code: "rate_limited",
+          message: `Rate limit exceeded (${decision.bounded_by}). Retry in ${decision.retry_after_seconds}s.`,
+          bounded_by: decision.bounded_by,
+          retry_after_seconds: decision.retry_after_seconds,
+        },
+      },
+      { status: 429 },
+    );
+    for (const [k, v] of Object.entries(decision.headers)) res.headers.set(k, v);
+    return res;
+  }
+  const rateHeaders = decision.headers;
 
   // Validate body: must be multipart/form-data with a 'file' field.
   const ctype = req.headers.get("content-type") || "";
@@ -108,6 +127,7 @@ async function postHandler(req: NextRequest): Promise<Response> {
         upstream.headers.get("content-type") ?? "application/json",
       "x-api-key-id": key.id,
       "x-api-key-usage": String(key.usage_count),
+      ...rateHeaders,
     },
   });
 }

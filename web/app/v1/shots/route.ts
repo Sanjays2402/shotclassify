@@ -45,7 +45,7 @@ async function getHandler(req: NextRequest): Promise<Response> {
   const headers: Record<string, string> = {
     "content-type":
       upstream.headers.get("content-type") ?? "application/json",
-    ...keyHeaders(auth.key),
+    ...keyHeaders(auth.key, auth.rateHeaders),
   };
   for (const h of FORWARD_HEADERS) {
     const v = upstream.headers.get(h);

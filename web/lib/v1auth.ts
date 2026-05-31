@@ -3,6 +3,7 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAndTouch, hasScope, workspaceOf, type StoredKey, type KeyScope } from "@/lib/keystore";
+import { enforce, snapshotFor } from "@/lib/ratelimit";
 
 export const UPSTREAM_API =
   process.env.SHOTCLASSIFY_API_BASE || "http://127.0.0.1:7441";
@@ -28,10 +29,12 @@ export function v1Error(
   );
 }
 
+export type AuthOk = { key: StoredKey; rateHeaders: Record<string, string> };
+
 export async function authenticate(
   req: NextRequest,
   requiredScope: KeyScope = "read",
-): Promise<{ key: StoredKey } | NextResponse> {
+): Promise<AuthOk | NextResponse> {
   const token = extractToken(req);
   if (!token) {
     return v1Error(
@@ -51,16 +54,40 @@ export async function authenticate(
       `This API key is missing the '${requiredScope}' scope.`,
     );
   }
-  return { key };
+  const decision = await enforce(workspaceOf(key), key.id);
+  if (!decision.allowed) {
+    const res = NextResponse.json(
+      {
+        error: {
+          code: "rate_limited",
+          message: `Rate limit exceeded (${decision.bounded_by}). Retry in ${decision.retry_after_seconds}s.`,
+          bounded_by: decision.bounded_by,
+          retry_after_seconds: decision.retry_after_seconds,
+        },
+      },
+      { status: 429 },
+    );
+    for (const [k, v] of Object.entries(decision.headers)) res.headers.set(k, v);
+    return res;
+  }
+  return { key, rateHeaders: decision.headers };
 }
 
-export function keyHeaders(key: StoredKey): Record<string, string> {
+export function keyHeaders(
+  key: StoredKey,
+  rateHeaders?: Record<string, string>,
+): Record<string, string> {
   return {
     "x-api-key-id": key.id,
     "x-api-key-usage": String(key.usage_count),
     "x-api-key-scopes": (key.scopes ?? ["read", "write"]).join(","),
     "x-workspace-id": workspaceOf(key),
+    ...(rateHeaders ?? {}),
   };
+}
+
+export function rateSnapshot(key: StoredKey) {
+  return snapshotFor(workspaceOf(key), key.id);
 }
 
 export async function proxyUpstream(

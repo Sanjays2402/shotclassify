@@ -2,6 +2,24 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: per-workspace request rate limits with standard headers
+
+Every enterprise security questionnaire asks two related questions: how do you stop a noisy customer from exhausting shared capacity, and how do callers know how much budget they have left without polling a separate API. ShotClassify now answers both with a per-workspace, per-API-key rate limiter that gates every `/v1/*` request. The limiter runs four fixed windows in parallel (workspace per-minute, workspace per-day, key per-minute, key per-day), takes the tightest constraint, and either commits the request to every bucket or commits nothing. Decisions are emitted as the de-facto standard `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `X-RateLimit-Policy`, and `X-RateLimit-Scope` headers on `200` responses, and as `HTTP 429 rate_limited` with `Retry-After` plus the same headers when the cap is reached. Plans (`free`, `pro`, `team`) seed sensible defaults; workspace admins can promote to `custom` and dial each window independently from the new `Settings -> Security -> Rate limits` page, which also surfaces live consumption against each ceiling. Configuration is persisted to a per-workspace JSON store at `storage/rate_limits.json` so a deploy restart inherits the active window instead of resetting a tenant's quota to zero. The admin API (`GET`/`PUT /api/ratelimit`) requires an `admin`-scoped `sk_live_*` key and derives the workspace strictly from the bearer key, so cross-tenant reads or writes are impossible at the query layer. The /v1/usage endpoint returns the calling key's live consumption so customers can build their own meters without a second round trip. Coverage in `web/lib/ratelimit-core.test.mts` proves cross-tenant counter isolation (workspace A exhausting its quota does not affect workspace B), per-key bounding when workspace headroom remains, atomic commit-or-skip behaviour, fixed-window rollover, and persistence of plan and limit changes.
+
+Try it locally:
+
+```
+cd web && npm run dev
+# in another shell:
+curl -s -H "Authorization: Bearer sk_live_..." -X PUT \
+  -H 'content-type: application/json' \
+  -d '{"plan":"custom","limits":{"workspace_per_minute":10,"workspace_per_day":5000,"key_per_minute":5,"key_per_day":2000}}' \
+  http://localhost:3000/api/ratelimit
+curl -i -H "Authorization: Bearer sk_live_..." http://localhost:3000/v1/usage
+# response carries X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset.
+# UI: http://localhost:3000/settings/security/rate-limits
+```
+
 ## What's new: per-(tenant, source IP) authentication brute-force lockout
 
 Every rejected credential (bad `X-API-Key`, bad session cookie, bad SCIM bearer, bad OAuth callback state) is now bucketed in `auth_failures` keyed by `(tenant_id, source_ip)`. When a single source IP accumulates the per-tenant threshold inside the sliding window, the auth middleware writes an `auth_lockouts` row and refuses every subsequent request from that IP for that workspace with `HTTP 423 Locked` plus a standard `Retry-After` header until the cooldown elapses. Lockouts are strictly per workspace and per IP, so a credential-spray attacker against tenant `acme` cannot also lock the legitimate operators of tenant `globex` out of the shared deployment. The policy lives at `/v1/settings/security/auth-lockout` (admin role plus MFA step-up on `PUT`). Workspace admins can list and clear active lockouts at `/v1/admin/lockouts` (and the corresponding console page at `/admin/lockouts`). Bounds enforce a sane range: threshold 3-1000, window 1 min to 24 h, cooldown 1 min to 7 d. Half-configured policies are refused at write time and treated as disabled at read time so a UI misclick can never silently disable enforcement. Coverage in `tests/test_auth_lockout.py`, including the cross-tenant isolation test that procurement teams ask for by name.

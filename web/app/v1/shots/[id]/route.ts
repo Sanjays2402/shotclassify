@@ -44,7 +44,7 @@ async function getHandler(
     headers: {
       "content-type":
         upstream.headers.get("content-type") ?? "application/json",
-      ...keyHeaders(auth.key),
+      ...keyHeaders(auth.key, auth.rateHeaders),
     },
   });
 }
