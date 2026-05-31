@@ -15,7 +15,7 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - `POST /v1/classify/{id}/reclassify` rerun the pipeline on a stored image.
 - `POST /v1/classify/{id}/correct` user-supplied ground truth, persisted for calibration.
 - `POST /v1/queue` enqueue via Redis RQ when available, fall back to inline background task.
-- `GET /v1/history` paginated history with category filter and full-text search over OCR + filename.
+- `GET /v1/history` paginated history with category filter, full-text search over OCR + filename, date range (`since`/`until`), confidence range (`min_conf`/`max_conf`), `offset`, and `sort` (`new`, `old`, `conf_desc`, `conf_asc`). Returns `X-Total-Count`, `X-Offset`, and `X-Limit` headers so the UI can render a real pager.
 - `GET /v1/history/stats` total count.
 - `GET /v1/history/aggregate?hours=24` rich rollups for the analytics dashboard: per-class counts and mean confidence, latency p50/p95/p99, hourly ingest tempo, and a 10-bin confidence histogram. Powers the `/stats` page.
 - `GET /v1/history/export?format=csv|json` streaming download of the classification history (honors `category`, `q`, and `limit` filters; up to 5000 rows). The shots page exposes an Export menu that hits the same endpoint.
@@ -30,6 +30,19 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - Usage & free-tier quota at `/usage`: per-principal monthly meter (read from `GET /v1/me/usage`) with progress bar, remaining count, plan comparison, and an upgrade CTA. The header carries a compact live meter on every page. Classify endpoints return `402 quota_exceeded` once the per-principal `SHOTCLASSIFY_FREE_MONTHLY_LIMIT` (default 200) is hit for the calendar month so customers see the wall before they hit it in code.
 
 - First run onboarding at `/welcome`: a three step tour (classify a screenshot, browse history, get an API key) auto-opens once per browser via a dismissable overlay, and can be replayed from the Account page or the `/welcome` deep link.
+
+## Try paginated history
+
+```sh
+# Page 2 of 25 rows, only high-confidence receipts from the last week:
+curl -sS \
+  -H "X-API-Key: $SHOTCLASSIFY_API_KEY" \
+  -D - \
+  "http://127.0.0.1:7441/v1/history?limit=25&offset=25&category=receipt&min_conf=0.8&sort=conf_desc&since=2025-01-01T00:00:00Z" \
+  | head -30
+```
+
+The `/shots` page (http://127.0.0.1:3000/shots) wires the same parameters into a date range picker, a confidence slider, a sort dropdown, and First / Prev / Next / Last controls with `X-Total-Count` driven page counts.
 
 ## Try the onboarding tour
 

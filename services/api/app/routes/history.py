@@ -6,7 +6,7 @@ import io
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from shotclassify_common import Category, ClassificationRecord
@@ -108,12 +108,45 @@ def export_history(
 @router.get("", response_model=list[ClassificationRecord], dependencies=[require_role("viewer")])
 def list_history(
     request: Request,
+    response: Response,
     limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=100_000),
     category: Category | None = Query(None),
     q: str | None = Query(None, description="Full-text query over OCR text and filename"),
+    since: datetime | None = Query(None, description="Include records at or after this UTC timestamp"),
+    until: datetime | None = Query(None, description="Include records at or before this UTC timestamp"),
+    min_conf: float | None = Query(None, ge=0.0, le=1.0),
+    max_conf: float | None = Query(None, ge=0.0, le=1.0),
+    sort: str = Query("new", pattern="^(new|old|conf_asc|conf_desc)$"),
 ) -> list[ClassificationRecord]:
     tenant_id = getattr(request.state, "tenant_id", None)
-    return Repository().list(limit=limit, category=category, query=q, tenant_id=tenant_id)
+    repo = Repository()
+    items = repo.list(
+        limit=limit,
+        offset=offset,
+        category=category,
+        query=q,
+        tenant_id=tenant_id,
+        since=since,
+        until=until,
+        min_conf=min_conf,
+        max_conf=max_conf,
+        sort=sort,
+    )
+    total = repo.count_filtered(
+        category=category,
+        query=q,
+        tenant_id=tenant_id,
+        since=since,
+        until=until,
+        min_conf=min_conf,
+        max_conf=max_conf,
+    )
+    response.headers["x-total-count"] = str(total)
+    response.headers["x-offset"] = str(offset)
+    response.headers["x-limit"] = str(limit)
+    response.headers["access-control-expose-headers"] = "x-total-count, x-offset, x-limit"
+    return items
 
 
 @router.get("/stats", dependencies=[require_role("viewer")])

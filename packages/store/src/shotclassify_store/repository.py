@@ -128,14 +128,27 @@ class Repository:
             s.commit()
         return removed
 
-    def list(
+    def _list_stmt(
         self,
-        limit: int = 50,
         category: Category | None = None,
         query: str | None = None,
         tenant_id: str | None = None,
-    ) -> list[ClassificationRecord]:
-        stmt = select(ClassificationRow).order_by(ClassificationRow.created_at.desc())
+        since: "datetime | None" = None,
+        until: "datetime | None" = None,
+        min_conf: float | None = None,
+        max_conf: float | None = None,
+        sort: str = "new",
+    ):
+        from sqlalchemy import asc, desc
+
+        col_map = {
+            "new": (ClassificationRow.created_at, desc),
+            "old": (ClassificationRow.created_at, asc),
+            "conf_desc": (ClassificationRow.confidence, desc),
+            "conf_asc": (ClassificationRow.confidence, asc),
+        }
+        col, direction = col_map.get(sort, (ClassificationRow.created_at, desc))
+        stmt = select(ClassificationRow).order_by(direction(col), ClassificationRow.id.desc())
         if category is not None:
             stmt = stmt.where(ClassificationRow.primary_category == category.value)
         if query:
@@ -146,11 +159,70 @@ class Repository:
                     ClassificationRow.filename.ilike(like),
                 )
             )
+        if since is not None:
+            stmt = stmt.where(ClassificationRow.created_at >= since)
+        if until is not None:
+            stmt = stmt.where(ClassificationRow.created_at <= until)
+        if min_conf is not None:
+            stmt = stmt.where(ClassificationRow.confidence >= float(min_conf))
+        if max_conf is not None:
+            stmt = stmt.where(ClassificationRow.confidence <= float(max_conf))
         stmt = self._scope_tenant(stmt, tenant_id)
+        return stmt
+
+    def list(
+        self,
+        limit: int = 50,
+        category: Category | None = None,
+        query: str | None = None,
+        tenant_id: str | None = None,
+        offset: int = 0,
+        since: "datetime | None" = None,
+        until: "datetime | None" = None,
+        min_conf: float | None = None,
+        max_conf: float | None = None,
+        sort: str = "new",
+    ) -> list[ClassificationRecord]:
+        stmt = self._list_stmt(
+            category=category,
+            query=query,
+            tenant_id=tenant_id,
+            since=since,
+            until=until,
+            min_conf=min_conf,
+            max_conf=max_conf,
+            sort=sort,
+        )
+        if offset:
+            stmt = stmt.offset(int(offset))
         stmt = stmt.limit(limit)
         with get_session() as s:
             rows = list(s.execute(stmt).scalars())
         return [self._to_record(r) for r in rows]
+
+    def count_filtered(
+        self,
+        category: Category | None = None,
+        query: str | None = None,
+        tenant_id: str | None = None,
+        since: "datetime | None" = None,
+        until: "datetime | None" = None,
+        min_conf: float | None = None,
+        max_conf: float | None = None,
+    ) -> int:
+        from sqlalchemy import func
+
+        stmt = self._list_stmt(
+            category=category,
+            query=query,
+            tenant_id=tenant_id,
+            since=since,
+            until=until,
+            min_conf=min_conf,
+            max_conf=max_conf,
+        ).order_by(None).with_only_columns(func.count(ClassificationRow.id))
+        with get_session() as s:
+            return int(s.execute(stmt).scalar() or 0)
 
     def get(
         self, item_id: str, tenant_id: str | None = None
