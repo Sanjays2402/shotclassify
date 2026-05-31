@@ -25,5 +25,6 @@ export const ENDPOINTS = {
   },
   historyItem: (id: string) => `/api/shots/${encodeURIComponent(id)}`,
   stats: "/api/stats",
+  aggregate: (hours: number = 24) => `/api/aggregate?hours=${hours}`,
   classify: "/api/classify",
 };

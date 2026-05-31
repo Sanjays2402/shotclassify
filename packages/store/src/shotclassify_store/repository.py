@@ -172,6 +172,107 @@ class Repository:
             s.commit()
         return True
 
+    def aggregate(
+        self,
+        tenant_id: str | None = None,
+        hours: int = 24,
+    ) -> dict:
+        """Return rich rollups for the analytics dashboard.
+
+        Computes per-category counts, mean confidence per class,
+        latency percentiles (p50/p95/p99), a 24-bin hourly volume
+        histogram, and a correction count. All numbers are derived
+        from real rows scoped to ``tenant_id``.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        stmt = select(ClassificationRow)
+        stmt = self._scope_tenant(stmt, tenant_id)
+        with get_session() as s:
+            rows = list(s.execute(stmt).scalars())
+
+        total = len(rows)
+        cat_counts: dict[str, int] = {}
+        cat_conf_sum: dict[str, float] = {}
+        latencies: list[int] = []
+        confidences: list[float] = []
+        corrections = 0
+        hourly: dict[str, int] = {}
+        recent_rows = []
+        for r in rows:
+            cat_counts[r.primary_category] = cat_counts.get(r.primary_category, 0) + 1
+            cat_conf_sum[r.primary_category] = (
+                cat_conf_sum.get(r.primary_category, 0.0) + float(r.confidence or 0.0)
+            )
+            confidences.append(float(r.confidence or 0.0))
+            if r.user_corrected_to:
+                corrections += 1
+            created = r.created_at
+            if isinstance(created, str):
+                try:
+                    created = datetime.fromisoformat(created)
+                except ValueError:
+                    created = None
+            if created is not None:
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                if created >= cutoff:
+                    recent_rows.append(r)
+                    bucket = created.replace(minute=0, second=0, microsecond=0)
+                    key = bucket.isoformat()
+                    hourly[key] = hourly.get(key, 0) + 1
+                    if r.elapsed_ms:
+                        latencies.append(int(r.elapsed_ms))
+
+        def _pct(arr: list[int], q: float) -> int:
+            if not arr:
+                return 0
+            s2 = sorted(arr)
+            idx = max(0, min(len(s2) - 1, int(round(q * (len(s2) - 1)))))
+            return s2[idx]
+
+        # Confidence histogram (10 bins, 0..1) across all rows
+        conf_bins = [0] * 10
+        for c in confidences:
+            b = min(9, max(0, int(c * 10)))
+            conf_bins[b] += 1
+
+        per_class = [
+            {
+                "category": cat,
+                "count": cnt,
+                "mean_confidence": round(cat_conf_sum[cat] / cnt, 4) if cnt else 0.0,
+            }
+            for cat, cnt in sorted(cat_counts.items(), key=lambda kv: kv[1], reverse=True)
+        ]
+
+        hourly_series = [
+            {"hour": k, "count": v}
+            for k, v in sorted(hourly.items())
+        ]
+
+        return {
+            "total": total,
+            "window_hours": hours,
+            "window_count": len(recent_rows),
+            "corrections": corrections,
+            "correction_rate": round(corrections / total, 4) if total else 0.0,
+            "mean_confidence": round(sum(confidences) / total, 4) if total else 0.0,
+            "latency_ms": {
+                "p50": _pct(latencies, 0.50),
+                "p95": _pct(latencies, 0.95),
+                "p99": _pct(latencies, 0.99),
+                "count": len(latencies),
+            },
+            "per_class": per_class,
+            "confidence_histogram": [
+                {"bin": i, "lo": round(i / 10, 1), "hi": round((i + 1) / 10, 1), "count": n}
+                for i, n in enumerate(conf_bins)
+            ],
+            "hourly": hourly_series,
+        }
+
     def count(self, tenant_id: str | None = None) -> int:
         with get_session() as s:
             q = s.query(ClassificationRow)

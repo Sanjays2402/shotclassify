@@ -60,6 +60,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/">Live</NavLink>
               <NavLink href="/demo">Demo</NavLink>
               <NavLink href="/shots">Shots</NavLink>
+              <NavLink href="/stats">Stats</NavLink>
               <NavLink href="/calibration">Calibration</NavLink>
               <NavLink href="/upload">Upload</NavLink>
             </nav>

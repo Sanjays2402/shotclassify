@@ -28,6 +28,12 @@ def stats(request: Request):
     return {"count": Repository().count(tenant_id=tenant_id)}
 
 
+@router.get("/aggregate", dependencies=[require_role("viewer")])
+def aggregate(request: Request, hours: int = Query(24, ge=1, le=24 * 30)):
+    tenant_id = getattr(request.state, "tenant_id", None)
+    return Repository().aggregate(tenant_id=tenant_id, hours=hours)
+
+
 @router.get("/{item_id}", response_model=ClassificationRecord, dependencies=[require_role("viewer")])
 def get_one(item_id: str, request: Request) -> ClassificationRecord:
     tenant_id = getattr(request.state, "tenant_id", None)

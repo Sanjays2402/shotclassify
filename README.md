@@ -17,8 +17,9 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - `POST /v1/queue` enqueue via Redis RQ when available, fall back to inline background task.
 - `GET /v1/history` paginated history with category filter and full-text search over OCR + filename.
 - `GET /v1/history/stats` total count.
+- `GET /v1/history/aggregate?hours=24` rich rollups for the analytics dashboard: per-class counts and mean confidence, latency p50/p95/p99, hourly ingest tempo, and a 10-bin confidence histogram. Powers the `/stats` page.
 - `GET /v1/history/{id}` full record with OCR transcript and confidence distribution.
-- Web UI: upload page, shots list, per-shot detail with OCR transcript, calibration page with reliability diagram and ECE/Brier/Log loss.
+- Web UI: upload page, shots list, per-shot detail with OCR transcript, `/stats` analytics dashboard with class mix, calibration histogram, ingest tempo, and latency percentiles, plus a calibration page with reliability diagram and ECE/Brier/Log loss.
 - API key + GitHub OAuth session auth, request-id middleware, OpenTelemetry FastAPI instrumentation.
 
 ## Stack
@@ -55,12 +56,21 @@ With the API and web both running, open <http://127.0.0.1:3000/demo>. Click any 
 
 For your own frames, open <http://127.0.0.1:3000/upload> and drop one or more images. Each file gets its own result card with a thumbnail, the primary call and its confidence, round-trip latency, full per-class confidence bars, the model's rationale, and the OCR transcript. Cards stream in parallel, errors stay scoped to the failing file, and any card opens the full replay at `/shots/{id}`.
 
+For a live operational view of the classifier, open <http://127.0.0.1:3000/stats>. The page reads `/v1/history/aggregate` and renders the class mix, mean confidence per class, a 24-bin ingest tempo chart, the confidence calibration histogram, and p50/p95/p99 latency, all from real rows in the store. Switch the window between 24h, 7d, and 30d. With an empty database the page shows a clearly labelled seeded preview so the layout is never blank.
+
 One-shot curl against the same endpoint the demo page calls:
 
 ```bash
 curl -s -X POST http://127.0.0.1:7441/v1/classify \
   -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
   -F "file=@samples/fake-receipt.png" | jq '.classification.primary, .classification.confidences[0]'
+```
+
+And the analytics rollup that powers `/stats`:
+
+```bash
+curl -s "http://127.0.0.1:7441/v1/history/aggregate?hours=24" \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" | jq '.total, .latency_ms, .per_class[0]'
 ```
 
 ## Quick start
