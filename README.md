@@ -2,6 +2,31 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: Trust Center for Terms of Service, DPA, and Acceptable Use
+
+Enterprise procurement and security reviews want to see that the vendor publishes the current commercial terms in a stable place, that the customer can prove who accepted which version, and that there is a way to hard-gate writes until Legal signs off. ShotClassify now ships a vendor-owned legal catalog (TOS, Data Processing Addendum, Acceptable Use Policy) at `GET /v1/trust/legal`, an append-only per-tenant acceptance ledger at `GET /v1/trust/legal/ledger`, an `accept` endpoint that records actor, IP, user agent, and request id, and a workspace-wide enforcement gate. Each agreement body is hashed to derive its version, so editing the body in code automatically re-arms the acceptance prompt for every workspace; no operator can silently bump a version string by hand. When an admin flips enforcement on, every mutating `/v1` request from that workspace is rejected with `HTTP 451 Unavailable For Legal Reasons` until all required agreements have been accepted at their current version. The gate fails closed on stale acceptances but refuses to arm itself while required agreements are unaccepted, so a workspace can never lock itself out by accident. Reads and writes are admin only and acceptances require MFA step-up. The admin console lives at `/admin/legal`. Cross-tenant isolation, stale-version rejection, and the 451 gate are covered in `tests/test_trust_legal_agreements.py`.
+
+Try it locally:
+
+```bash
+make dev   # API on http://127.0.0.1:7441, dashboard on http://127.0.0.1:3000
+
+# Public catalog (no auth needed; procurement can read before they have credentials).
+curl http://127.0.0.1:7441/v1/trust/legal | jq '.agreements[] | {id, title, version, required}'
+
+# Accept the current Terms of Service for this workspace (admin key).
+VERSION=$(curl -s http://127.0.0.1:7441/v1/trust/legal | jq -r '.agreements[] | select(.id=="tos") | .version')
+curl -X POST http://127.0.0.1:7441/v1/trust/legal/accept \
+  -H "X-API-Key: $SHOTCLASSIFY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d "{\"agreement_id\":\"tos\",\"version\":\"$VERSION\"}"
+
+# View the workspace status (which agreements still need acceptance).
+curl http://127.0.0.1:7441/v1/trust/legal/status -H "X-API-Key: $SHOTCLASSIFY_API_KEY" | jq
+```
+
+The dashboard view is at <http://127.0.0.1:3000/admin/legal>.
+
 ## What's new: per-tenant cap on active API keys
 
 Unbounded service-credential sprawl is a procurement red flag. SOC 2 CC6.1 and NIST AC-2 both expect a documented, enforced cap on how many active credentials a single workspace can hold. ShotClassify now lets workspace admins set a per-tenant `api_key_max_active` cap from `Settings -> Security -> API key active cap` (or `PUT /v1/settings/security/api-key-max-active`). When the cap is set, `POST /v1/api-keys` (mint) is rejected with `HTTP 422 api_key_max_active_reached` once the workspace already holds that many non-revoked keys, and the rejection is recorded in the audit log alongside the actor and request id. Tightening the cap below the current active count never retroactively revokes existing keys; it only blocks the next mint until an admin frees a slot by revoking a stale one. The cap is tenant-scoped: one workspace's policy never affects another's, and the list response (`GET /v1/api-keys`) surfaces both the cap and the current in-use count so the admin UI can show `N of M`. Enforcement lives in `packages/store/src/shotclassify_store/api_keys.py::create_key`, so adding a new mint path cannot bypass it. Reads and writes are admin only, writes require MFA step-up. Coverage in `tests/test_api_key_max_active_policy.py`.

@@ -562,6 +562,43 @@ class SubprocessorAckRow(Base):
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
 
+class LegalAgreementAcceptanceRow(Base):
+    """Per-tenant acceptance of a vendor-owned legal agreement version.
+
+    Append-only ledger; the 'current' view is derived by selecting the
+    latest row per (tenant_id, agreement_id). Strictly tenant-scoped.
+    """
+
+    __tablename__ = "legal_agreement_acceptances"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    agreement_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    accepted_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    accepted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    accepted_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class LegalEnforcementRow(Base):
+    """Per-tenant toggle: block mutating /v1 routes until acceptances are current."""
+
+    __tablename__ = "legal_enforcement"
+
+    tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    enforce: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class IncidentSubscriptionRow(Base):
     """Per-tenant security incident notification subscription.
 

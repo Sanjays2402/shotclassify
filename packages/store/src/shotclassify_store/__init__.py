@@ -46,6 +46,13 @@ from .db import LegalHoldRow
 from . import subprocessors as subprocessors_store
 from .subprocessors import Acknowledgement as SubprocessorAck, Subprocessor
 from .db import SubprocessorAckRow
+from . import legal_agreements as legal_agreements_store
+from .legal_agreements import (
+    Acceptance as LegalAcceptance,
+    Agreement as LegalAgreement,
+    EnforcementPolicy as LegalEnforcementPolicy,
+)
+from .db import LegalAgreementAcceptanceRow, LegalEnforcementRow
 from . import incidents as incidents_store
 from .incidents import (
     Incident,
@@ -208,4 +215,10 @@ __all__ = [
     "IncidentSubscriptionError",
     "IncidentSubscriptionRow",
     "Subprocessor",
+    "legal_agreements_store",
+    "LegalAcceptance",
+    "LegalAgreement",
+    "LegalEnforcementPolicy",
+    "LegalAgreementAcceptanceRow",
+    "LegalEnforcementRow",
 ]

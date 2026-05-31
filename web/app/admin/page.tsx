@@ -20,6 +20,7 @@ import {
   ArrowSquareOut,
   WebhooksLogo,
   Gavel,
+  Scales,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -263,6 +264,13 @@ export default function AdminConsolePage() {
           value="Manage"
           href="/admin/legal-holds"
           sub="freeze deletes"
+        />
+        <StatCard
+          icon={<Scales size={18} weight="duotone" />}
+          label="Legal agreements"
+          value="Review"
+          href="/admin/legal"
+          sub="TOS, DPA, AUP"
         />
         <StatCard
           icon={<Pulse size={18} weight="duotone" />}

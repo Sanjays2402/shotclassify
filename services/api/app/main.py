@@ -21,6 +21,7 @@ from .middleware.audit import AuditLogMiddleware
 from .middleware.auth import APIKeyAndSessionAuth
 from .middleware.csrf import CSRFMiddleware
 from .middleware.ip_allowlist import IPAllowlistMiddleware
+from .middleware.legal_acceptance import LegalAcceptanceGateMiddleware
 from .middleware.metrics import PrometheusMiddleware
 from .middleware.origin_allowlist import OriginAllowlistMiddleware
 from .middleware.rate_limit import RateLimitMiddleware
@@ -50,6 +51,7 @@ from .routes import scim as scim_routes
 from .routes import scim_admin as scim_admin_routes
 from .routes import subprocessors as subprocessors_routes
 from .routes import incidents as incidents_routes
+from .routes import legal as legal_routes
 from .routes import support_access as support_access_routes
 from .routes import well_known as well_known_routes
 
@@ -116,6 +118,10 @@ def create_app() -> FastAPI:
     # resolution on the inbound path -> add it BEFORE
     # TenantResolutionMiddleware so it ends up more inner.
     app.add_middleware(OriginAllowlistMiddleware)
+    # Legal-acceptance gate runs AFTER auth AND tenant resolution on the
+    # inbound path; with last-added=outermost, add it BEFORE Tenant so it
+    # ends up more inner and runs after both Auth and Tenant inbound.
+    app.add_middleware(LegalAcceptanceGateMiddleware)
     # Tenant resolution must run AFTER auth on the inbound path so it sees
     # request.state.principal/role. Starlette runs LAST-added middleware
     # OUTERMOST, so add Tenant before Auth (Tenant is inner -> runs after
@@ -158,6 +164,7 @@ def create_app() -> FastAPI:
     app.include_router(scim_admin_routes.router)
     app.include_router(subprocessors_routes.router)
     app.include_router(incidents_routes.router)
+    app.include_router(legal_routes.router)
     app.include_router(support_access_routes.router)
     app.include_router(support_access_routes.admin_router)
     app.include_router(well_known_routes.router)
