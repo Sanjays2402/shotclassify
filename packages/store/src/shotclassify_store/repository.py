@@ -128,6 +128,54 @@ class Repository:
             s.commit()
         return removed
 
+    def list_by_tenant(self, tenant_id: str) -> list[ClassificationRecord]:
+        """Return every classification row that belongs to ``tenant_id``.
+
+        Rows with a NULL ``tenant_id`` (pre-multi-tenancy) are also returned
+        when the caller's tenant matches the deployment's default scope; we
+        rely on ``_scope_tenant`` for that behavior to stay consistent with
+        every read path.
+        """
+        if not tenant_id:
+            raise ValueError("tenant_id is required for tenant-wide export.")
+        stmt = select(ClassificationRow).order_by(ClassificationRow.created_at.desc())
+        stmt = self._scope_tenant(stmt, tenant_id)
+        with get_session() as s:
+            rows = list(s.execute(stmt).scalars())
+        return [self._to_record(r) for r in rows]
+
+    def delete_by_tenant(self, tenant_id: str) -> int:
+        """Hard-delete every classification row owned by ``tenant_id``.
+
+        Mirrors :meth:`delete_by_principal` but at workspace scope: used by
+        the workspace-wide GDPR erasure endpoint. Also unlinks blob files
+        inside the configured local storage root. Returns the row count.
+        """
+        from pathlib import Path
+
+        from shotclassify_common import get_settings
+
+        if not tenant_id:
+            raise ValueError("tenant_id is required for tenant-wide deletion.")
+        storage_root = Path(get_settings().storage_local_dir).resolve()
+        with get_session() as s:
+            stmt = select(ClassificationRow)
+            stmt = self._scope_tenant(stmt, tenant_id)
+            rows = list(s.execute(stmt).scalars())
+            removed = 0
+            for row in rows:
+                if row.image_path:
+                    try:
+                        p = Path(row.image_path).resolve()
+                        if str(p).startswith(str(storage_root)) and p.exists():
+                            p.unlink()
+                    except OSError:
+                        pass
+                s.delete(row)
+                removed += 1
+            s.commit()
+        return removed
+
     def _list_stmt(
         self,
         category: Category | None = None,

@@ -108,6 +108,40 @@ class AuditRepository:
     ) -> list[dict[str, Any]]:
         return self.list(limit=limit, principal=principal, tenant_id=tenant_id)
 
+    def list_for_tenant(
+        self, tenant_id: str, limit: int = 1_000_000
+    ) -> list[dict[str, Any]]:
+        """Return every audit row scoped to ``tenant_id`` (workspace export).
+
+        Includes legacy rows with ``tenant_id IS NULL`` for parity with how
+        every other read path resolves the deployment's default scope.
+        """
+        if not tenant_id:
+            raise ValueError("tenant_id is required for workspace audit export.")
+        return self.list(limit=limit, tenant_id=tenant_id)
+
+    def delete_for_tenant(self, tenant_id: str) -> int:
+        """Hard-delete every audit row owned by ``tenant_id``.
+
+        Used by the workspace-wide GDPR erasure endpoint. Mirrors
+        :meth:`delete_for_principal` at workspace scope.
+        """
+        from sqlalchemy import delete as sa_delete
+        from sqlalchemy import or_
+
+        if not tenant_id:
+            raise ValueError("tenant_id is required for workspace audit erasure.")
+        with get_session() as s:
+            stmt = sa_delete(AuditLogRow).where(
+                or_(
+                    AuditLogRow.tenant_id == tenant_id,
+                    AuditLogRow.tenant_id.is_(None),
+                )
+            )
+            result = s.execute(stmt)
+            s.commit()
+            return int(result.rowcount or 0)
+
     def delete_for_principal(
         self, principal: str, tenant_id: str | None = None
     ) -> int:

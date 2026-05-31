@@ -194,3 +194,44 @@ class SavedViewRepository:
             s.delete(row)
             s.commit()
             return True
+
+    def delete_by_tenant(self, tenant_id: str) -> int:
+        """Hard-delete every saved view scoped to ``tenant_id``.
+
+        Workspace-wide erasure helper. Returns the number of rows removed.
+        """
+        from sqlalchemy import delete as sa_delete
+
+        if not tenant_id:
+            raise ValueError("tenant_id is required.")
+        with get_session() as s:
+            stmt = sa_delete(SavedViewRow).where(
+                or_(
+                    SavedViewRow.tenant_id == tenant_id,
+                    SavedViewRow.tenant_id.is_(None),
+                )
+            )
+            result = s.execute(stmt)
+            s.commit()
+            return int(result.rowcount or 0)
+
+    def list_by_tenant(self, tenant_id: str) -> list[dict[str, Any]]:
+        """Return every saved view in ``tenant_id`` for workspace-wide export."""
+        if not tenant_id:
+            raise ValueError("tenant_id is required.")
+        stmt = (
+            select(SavedViewRow)
+            .where(
+                or_(
+                    SavedViewRow.tenant_id == tenant_id,
+                    SavedViewRow.tenant_id.is_(None),
+                )
+            )
+            .order_by(desc(SavedViewRow.updated_at))
+        )
+        with get_session() as s:
+            rows = s.execute(stmt).scalars().all()
+        return [
+            {**_row_to_dict(r), "principal": r.principal, "tenant_id": r.tenant_id}
+            for r in rows
+        ]

@@ -2,7 +2,54 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, and an admin dashboard.
 
-## What's new: workspace members + email invitations with one-shot tokens
+## What's new: workspace-wide GDPR export and erasure
+
+Workspace owners can now export everything stored for their workspace
+as a single ZIP bundle, and permanently erase it. The endpoint is
+admin only, requires TOTP step-up MFA, and is scoped strictly to the
+caller's tenant: an admin in `tenant-a` cannot read or delete anything
+in `tenant-b`, even with the legacy `X-Tenant` override.
+
+The ZIP contains `manifest.json`, `classifications.json`,
+`audit_log.json`, `saved_views.json`, `members.json`,
+`invitations.json`, `api_keys.json` (metadata only, no token material),
+and `settings.json` (IP allowlist, retention policy, SSO config without
+the client secret).
+
+Erasure removes every classification, audit row, saved view, and
+stored blob in the workspace. Memberships, API keys, SSO, and the IP
+allowlist are preserved so the admin can still sign in to confirm.
+
+### Try it
+
+Open the dashboard at `http://127.0.0.1:3000/settings/data`, or hit
+the API directly:
+
+```bash
+# Export the workspace as a ZIP (admin role + MFA step-up required)
+curl -sS -X GET \
+  -H "x-api-key: $SHOTCLASSIFY_ADMIN_KEY" \
+  -H "x-tenant: acme" \
+  -H "x-mfa-otp: 123456" \
+  -o workspace-acme.zip \
+  http://127.0.0.1:7441/v1/workspace/data
+
+# Preview what an erase would remove, without mutating
+curl -sS -X DELETE \
+  -H "x-api-key: $SHOTCLASSIFY_ADMIN_KEY" \
+  -H "x-tenant: acme" \
+  -H "x-mfa-otp: 123456" \
+  "http://127.0.0.1:7441/v1/workspace/data?dry_run=true"
+
+# Hard-delete (irreversible)
+curl -sS -X DELETE \
+  -H "x-api-key: $SHOTCLASSIFY_ADMIN_KEY" \
+  -H "x-tenant: acme" \
+  -H "x-mfa-otp: 123456" \
+  "http://127.0.0.1:7441/v1/workspace/data?confirm=erase"
+```
+
+## Previous: workspace members + email invitations with one-shot tokens
 
 Workspace admins can now manage who has access to a tenant from the
 product, not from a YAML file. Roles assigned to a member in the
