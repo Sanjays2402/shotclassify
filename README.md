@@ -2,6 +2,33 @@
 
 Screenshot classifier with vision LLM, OCR, structured extraction, and action routing.
 
+## What's new: saved views on your history
+
+The `/shots` page now ships **saved views**: name any combination of
+filters (class, search, date range, min confidence, tag, sort) and snap
+back to it in one click on your next visit. Views are scoped per user
+via the same auth used everywhere else (session login or API key), so a
+teammate's saved "low-confidence yesterday" never leaks into your bar.
+
+### Try it
+
+```bash
+# Open the web UI
+open http://localhost:3000/shots
+
+# Or drive it from the API:
+curl -sS -X POST http://localhost:7441/v1/saved-views \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"name":"Low conf receipts","filters":{"category":"receipt","min_conf":0.4,"sort":"conf_asc"}}'
+
+curl -sS http://localhost:7441/v1/saved-views -H "x-api-key: $SHOTCLASSIFY_API_KEY"
+```
+
+Filter payloads are whitelist-coerced server-side, capped at 50 views
+per user, and migrated in by `alembic upgrade head` (or auto-created on
+first SQLite boot).
+
 ## What's new: rotate API keys without downtime
 
 The `/keys` page now ships a one-click **Rotate** action next to every

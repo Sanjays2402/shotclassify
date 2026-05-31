@@ -84,6 +84,28 @@ class AuditLogRow(Base):
     extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class SavedViewRow(Base):
+    """Named filter combination for the history page, scoped per user.
+
+    Lets a returning user jump straight to "low-confidence yesterday" or
+    "errors tagged review" without re-entering the filter set every time.
+    """
+
+    __tablename__ = "saved_views"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    principal: Mapped[str] = mapped_column(String(128), index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    filters: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()
@@ -119,6 +141,9 @@ def init_db() -> None:
                 conn.execute(text("ALTER TABLE classifications ADD COLUMN label VARCHAR(256)"))
             if "tags" not in cols:
                 conn.execute(text("ALTER TABLE classifications ADD COLUMN tags JSON"))
+            # Dev SQLite bootstrap for the saved_views table (alembic 0006).
+            if not insp.has_table("saved_views"):
+                Base.metadata.tables["saved_views"].create(bind=conn)
     except Exception:
         # Best-effort. Real schema management lives in alembic.
         pass

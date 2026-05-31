@@ -80,4 +80,6 @@ export const ENDPOINTS = {
     if (params?.q) sp.set("q", params.q);
     return `/api/history/export?${sp.toString()}`;
   },
+  savedViews: "/api/saved-views",
+  savedView: (id: string) => `/api/saved-views/${encodeURIComponent(id)}`,
 };

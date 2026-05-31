@@ -10,6 +10,7 @@ import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
 import { SampleBadge } from "@/components/SampleBadge";
 import { ExportMenu } from "@/components/ExportMenu";
+import { SavedViewsBar, type SavedViewFilters } from "@/components/SavedViewsBar";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import {
   CATEGORIES,
@@ -377,6 +378,34 @@ export default function ShotsPage() {
           />
         </div>
       </div>
+
+      <SavedViewsBar
+        current={{
+          category: cat || undefined,
+          q: qDebounced || undefined,
+          since: since || undefined,
+          until: until || undefined,
+          min_conf: minConfPct > 0 ? minConfPct / 100 : undefined,
+          sort,
+          tag: tagDebounced || undefined,
+          limit,
+        }}
+        onApply={(f: SavedViewFilters) => {
+          setCat(((f.category as any) || "") as any);
+          setQ(f.q || "");
+          setSince(f.since || "");
+          setUntil(f.until || "");
+          setMinConfPct(
+            typeof f.min_conf === "number"
+              ? Math.round(f.min_conf * 100)
+              : 0,
+          );
+          setSort((f.sort as any) || "new");
+          setTag(f.tag || "");
+          if (typeof f.limit === "number") setLimit(f.limit);
+          setPage(0);
+        }}
+      />
 
       {bulk.size > 0 && (
         <div
