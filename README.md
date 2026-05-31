@@ -2,6 +2,28 @@
 
 Screenshot classifier with vision LLM, OCR, structured extraction, and action routing.
 
+## What's new: rotate API keys without downtime
+
+The `/keys` page now ships a one-click **Rotate** action next to every
+key. Rotating issues a fresh `sk_live_...` secret, invalidates the prior
+one immediately, and keeps the key's name, created date, and lifetime
+usage count so dashboards and audit trails stay coherent. The new secret
+is shown exactly once in the same reveal banner used at creation, so the
+copy flow is muscle memory.
+
+### Try it
+
+```bash
+# Open the web UI
+open http://localhost:3000/keys
+
+# Or rotate from the API: returns the new plaintext exactly once.
+curl -sS -X POST http://localhost:3000/api/keys/$KEY_ID/rotate
+```
+
+Response shape: `{key: {id, name, prefix, created_at, last_used_at, usage_count, rotated_at}, plaintext}`.
+Run `npm test` inside `web/` to exercise the rotation unit tests.
+
 ## What's new: bulk actions on your history
 
 ShotClassify classifies a screenshot into a typed record with confidence, OCR text, and extracted fields.

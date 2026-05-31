@@ -10,6 +10,7 @@ import {
   Warning,
   Terminal,
   Lock,
+  ArrowsClockwise,
 } from "@phosphor-icons/react/dist/ssr";
 
 type KeyRow = {
@@ -19,6 +20,7 @@ type KeyRow = {
   created_at: string;
   last_used_at: string | null;
   usage_count: number;
+  rotated_at?: string | null;
 };
 
 function fmtDate(iso: string | null): string {
@@ -39,9 +41,14 @@ export default function KeysPage() {
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
-  const [revealed, setRevealed] = useState<{ name: string; plaintext: string } | null>(null);
+  const [revealed, setRevealed] = useState<{
+    name: string;
+    plaintext: string;
+    rotated?: boolean;
+  } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [rotating, setRotating] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -82,6 +89,42 @@ export default function KeysPage() {
       setCreating(false);
     }
   }, [newName, load]);
+
+  const onRotate = useCallback(
+    async (id: string, name: string) => {
+      if (
+        !confirm(
+          `Rotate "${name}"? The current secret stops working immediately and a new one is generated. You will see it once.`,
+        )
+      ) {
+        return;
+      }
+      setRotating(id);
+      setErr(null);
+      try {
+        const r = await fetch(
+          `/api/keys/${encodeURIComponent(id)}/rotate`,
+          { method: "POST" },
+        );
+        if (!r.ok) {
+          const t = await r.text().catch(() => "");
+          throw new Error(t || `${r.status} ${r.statusText}`);
+        }
+        const j = await r.json();
+        setRevealed({
+          name: j.key.name,
+          plaintext: j.plaintext,
+          rotated: true,
+        });
+        await load();
+      } catch (e: any) {
+        setErr(e?.message || "Rotate failed.");
+      } finally {
+        setRotating(null);
+      }
+    },
+    [load],
+  );
 
   const onRevoke = useCallback(
     async (id: string) => {
@@ -189,7 +232,9 @@ export default function KeysPage() {
         >
           <div className="flex items-center gap-2">
             <Lock size={16} weight="duotone" />
-            <h2 className="h-display text-[15px]">Copy your key now</h2>
+            <h2 className="h-display text-[15px]">
+              {revealed.rotated ? "Copy your rotated key now" : "Copy your key now"}
+            </h2>
           </div>
           <p className="text-[12px]" style={{ color: "var(--color-ink-mute)" }}>
             This is the only time the full key will be shown. Store it somewhere safe.
@@ -320,17 +365,35 @@ export default function KeysPage() {
                       {k.usage_count}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <button
-                        type="button"
-                        onClick={() => onRevoke(k.id)}
-                        disabled={revoking === k.id}
-                        className="inline-flex items-center gap-1 text-[12px] px-2 py-1 rounded-md border bg-white hover:bg-[color:var(--color-chalk)] disabled:opacity-50"
-                        style={{ borderColor: "var(--color-rule)" }}
-                        aria-label={`Revoke ${k.name}`}
-                      >
-                        <Trash size={12} weight="duotone" />
-                        {revoking === k.id ? "Revoking" : "Revoke"}
-                      </button>
+                      <div className="inline-flex items-center gap-1.5 justify-end">
+                        <button
+                          type="button"
+                          onClick={() => onRotate(k.id, k.name)}
+                          disabled={rotating === k.id || revoking === k.id}
+                          className="inline-flex items-center gap-1 text-[12px] px-2 py-1 rounded-md border bg-white hover:bg-[color:var(--color-chalk)] disabled:opacity-50"
+                          style={{ borderColor: "var(--color-rule)" }}
+                          aria-label={`Rotate ${k.name}`}
+                          title={
+                            k.rotated_at
+                              ? `Last rotated ${fmtDate(k.rotated_at)}`
+                              : "Issue a new secret for this key"
+                          }
+                        >
+                          <ArrowsClockwise size={12} weight="duotone" />
+                          {rotating === k.id ? "Rotating" : "Rotate"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onRevoke(k.id)}
+                          disabled={revoking === k.id || rotating === k.id}
+                          className="inline-flex items-center gap-1 text-[12px] px-2 py-1 rounded-md border bg-white hover:bg-[color:var(--color-chalk)] disabled:opacity-50"
+                          style={{ borderColor: "var(--color-rule)" }}
+                          aria-label={`Revoke ${k.name}`}
+                        >
+                          <Trash size={12} weight="duotone" />
+                          {revoking === k.id ? "Revoking" : "Revoke"}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
