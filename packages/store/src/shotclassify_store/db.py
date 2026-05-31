@@ -145,6 +145,18 @@ class TenantSettingsRow(Base):
     # default we recommend; ``admin`` is rejected at the API layer to prevent
     # a self-service privilege escalation path through DNS-controlled email.
     sso_auto_join_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # PII redaction: list of modes (email, phone, ssn, credit_card, ip, iban)
+    # applied to OCR text and extracted text fields before persistence and
+    # before any outbound webhook delivery. Empty/NULL means no redaction
+    # (existing behavior). Set via /v1/settings/security/privacy by admins
+    # with a fresh MFA step-up; change is recorded in the audit log.
+    pii_redact_modes: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Data residency hint: a free-form region label (e.g. "us", "eu",
+    # "ap-south-1") that the admin console surfaces to operators and that
+    # this tenant's responses echo back in the X-Data-Residency header so
+    # buyers can prove which storage region is in effect during a security
+    # review. Storage backend selection itself is a deploy-time concern.
+    data_residency: Mapped[str | None] = mapped_column(String(32), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -338,6 +350,14 @@ def init_db() -> None:
                 if "sso_auto_join_role" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN sso_auto_join_role VARCHAR(16)"
+                    ))
+                if "pii_redact_modes" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN pii_redact_modes JSON"
+                    ))
+                if "data_residency" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN data_residency VARCHAR(32)"
                     ))
             if insp.has_table("sessions"):
                 scols = {c["name"] for c in insp.get_columns("sessions")}

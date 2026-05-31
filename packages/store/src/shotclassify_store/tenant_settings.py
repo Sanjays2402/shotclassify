@@ -258,3 +258,135 @@ def ip_matches_allowlist(ip: str, cidrs: list[str]) -> bool:
         except ValueError:
             continue
     return False
+
+
+# --- Privacy: PII redaction modes and data residency hint -----------------
+
+
+# Supported redaction modes. Keep this tuple in lockstep with the regex
+# table in ``shotclassify_common.redact``: any value persisted that is not
+# in this allow-list is silently dropped so a future code rollback cannot
+# accidentally re-enable a removed mode.
+PII_REDACT_MODES: tuple[str, ...] = (
+    "email",
+    "phone",
+    "ssn",
+    "credit_card",
+    "ip",
+    "iban",
+)
+
+
+@dataclass(frozen=True)
+class PrivacySettings:
+    tenant_id: str
+    redact_modes: list[str]
+    data_residency: str | None
+
+    def to_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "redact_modes": list(self.redact_modes),
+            "data_residency": self.data_residency,
+            "available_modes": list(PII_REDACT_MODES),
+        }
+
+
+def _normalize_modes(raw) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("redact_modes must be a list of strings")
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str):
+            raise ValueError(f"redact_modes entry must be a string: {item!r}")
+        s = item.strip().lower()
+        if not s:
+            continue
+        if s not in PII_REDACT_MODES:
+            raise ValueError(
+                f"unsupported redact mode {s!r}: must be one of {PII_REDACT_MODES}"
+            )
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _normalize_residency(raw) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValueError("data_residency must be a string or null")
+    s = raw.strip().lower()
+    if not s:
+        return None
+    if len(s) > 32 or any(c.isspace() for c in s):
+        raise ValueError("data_residency must be <=32 chars with no whitespace")
+    # Allow letters, digits, dash, underscore. Defensive: anything else
+    # could leak into headers and break HTTP parsers downstream.
+    for c in s:
+        if not (c.isalnum() or c in "-_"):
+            raise ValueError(f"invalid character in data_residency: {c!r}")
+    return s
+
+
+def get_privacy_settings(tenant_id: str) -> PrivacySettings:
+    """Return the privacy settings for ``tenant_id`` (defaults when unset)."""
+    if not tenant_id:
+        return PrivacySettings(tenant_id="", redact_modes=[], data_residency=None)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return PrivacySettings(tenant_id=tenant_id, redact_modes=[], data_residency=None)
+        modes_raw = getattr(row, "pii_redact_modes", None) or []
+        # Filter against current allow-list defensively so a stale value
+        # from before this revision can never re-enable a removed mode.
+        modes = [m for m in modes_raw if m in PII_REDACT_MODES]
+        return PrivacySettings(
+            tenant_id=tenant_id,
+            redact_modes=modes,
+            data_residency=getattr(row, "data_residency", None),
+        )
+
+
+def set_privacy_settings(
+    tenant_id: str,
+    *,
+    redact_modes,
+    data_residency,
+    updated_by: str | None,
+) -> PrivacySettings:
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    modes = _normalize_modes(redact_modes)
+    residency = _normalize_residency(data_residency)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                pii_redact_modes=modes,
+                data_residency=residency,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.pii_redact_modes = modes
+            row.data_residency = residency
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return PrivacySettings(
+        tenant_id=tenant_id, redact_modes=modes, data_residency=residency
+    )

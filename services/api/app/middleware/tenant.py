@@ -71,7 +71,16 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
         # X-Tenant, so a leaked key can never read across tenants.
         if api_key_tenant:
             request.state.tenant_id = api_key_tenant
-            return await call_next(request)
+            response = await call_next(request)
+            try:
+                from shotclassify_store import get_privacy_settings
+
+                residency = get_privacy_settings(api_key_tenant).data_residency
+                if residency:
+                    response.headers["X-Data-Residency"] = residency
+            except Exception:
+                pass
+            return response
         override = request.headers.get("x-tenant")
         if override and role == "admin":
             if override == "*":
@@ -79,4 +88,21 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
             else:
                 resolved = override.strip()[:64] or resolved
         request.state.tenant_id = resolved
-        return await call_next(request)
+        response = await call_next(request)
+        # Echo the per-tenant data residency hint so procurement reviewers
+        # can curl any endpoint and prove which region label is in effect
+        # for their workspace. Empty / lookup failure means no header,
+        # which is the same as today's behavior.
+        if resolved:
+            try:
+                from shotclassify_store import get_privacy_settings
+
+                residency = get_privacy_settings(resolved).data_residency
+                if residency and "x-data-residency" not in {
+                    k.decode().lower() if isinstance(k, bytes) else k.lower()
+                    for k, _ in response.raw_headers
+                }:
+                    response.headers["X-Data-Residency"] = residency
+            except Exception:
+                pass
+        return response

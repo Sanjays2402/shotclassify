@@ -2,7 +2,42 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, and an admin dashboard.
 
-## What's new: audit log UI for workspace admins
+## What's new: PII redaction and data residency per workspace
+
+Workspace admins can now opt into automatic PII redaction on OCR text
+and extracted fields, and pin a data residency label that every API
+response echoes back. Redaction runs in the pipeline before persistence
+and before any outbound webhook delivery, so neither the audit trail
+nor downstream integrations see raw emails, phones, SSNs, credit cards,
+IPs, or IBANs. Classification accuracy is untouched because the model
+still sees the original image and OCR; only stored and shipped text is
+sanitized. Credit cards are checked against Luhn so unrelated 16 digit
+runs are not eaten by the redactor.
+
+The data residency label (e.g. `us`, `eu`) ships in an
+`X-Data-Residency` response header on every tenant scoped route, which
+is what a procurement reviewer wants to curl and screenshot.
+
+### Try it
+
+```bash
+# Admin reads current privacy config for their workspace.
+curl -s http://localhost:7441/v1/settings/security/privacy \
+  -H "x-api-key: $ACME_ADMIN_KEY"
+
+# Admin enables redaction and pins residency. MFA step-up enforced.
+curl -s -X PUT http://localhost:7441/v1/settings/security/privacy \
+  -H "x-api-key: $ACME_ADMIN_KEY" -H "content-type: application/json" \
+  -d '{"redact_modes":["email","phone","ssn","credit_card"],"data_residency":"eu"}'
+
+# Subsequent responses now carry the residency header.
+curl -si http://localhost:7441/v1/settings/security/privacy \
+  -H "x-api-key: $ACME_ADMIN_KEY" | grep -i x-data-residency
+```
+
+UI lives at `/settings/security/privacy` in the web app.
+
+## Previous: audit log UI for workspace admins
 
 The audit trail that the FastAPI middleware has been writing on every
 authenticated mutation now has a first-class admin surface at

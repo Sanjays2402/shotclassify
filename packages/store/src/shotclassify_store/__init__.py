@@ -36,11 +36,15 @@ from .retention import (
 )
 from .tenant_settings import (
     AUTO_JOIN_ROLES,
+    PII_REDACT_MODES,
+    PrivacySettings,
     SsoConfig,
     get_ip_allowlist,
+    get_privacy_settings,
     get_sso_config,
     ip_matches_allowlist,
     set_ip_allowlist,
+    set_privacy_settings,
     set_sso_config,
     tenant_for_sso_domain,
 )
@@ -76,6 +80,10 @@ __all__ = [
     "AUTO_JOIN_ROLES",
     "get_sso_config",
     "set_sso_config",
+    "PII_REDACT_MODES",
+    "PrivacySettings",
+    "get_privacy_settings",
+    "set_privacy_settings",
     "tenant_for_sso_domain",
     "MfaCredentialRow",
     "MfaStatus",

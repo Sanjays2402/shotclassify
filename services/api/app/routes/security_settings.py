@@ -11,10 +11,12 @@ from fastapi import APIRouter, Body, HTTPException, Request
 
 from shotclassify_store import (
     get_ip_allowlist,
+    get_privacy_settings,
     get_retention_days,
     get_sso_config,
     purge_expired_for_tenant,
     set_ip_allowlist,
+    set_privacy_settings,
     set_retention_days,
     set_sso_config,
 )
@@ -147,6 +149,50 @@ def put_sso_route(request: Request, payload: dict = Body(...)) -> dict:
             domain=domain or None,
             provider=provider or None,
             auto_join_role=auto_join_role or None,
+            updated_by=actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return cfg.to_dict()
+
+
+@router.get("/privacy", dependencies=[require_role("admin")])
+def get_privacy_route(request: Request) -> dict:
+    """Return the tenant's PII redaction modes and data residency hint.
+
+    Admin-only because the available_modes list and the active modes
+    are themselves a compliance disclosure: a non-admin member should
+    not be able to enumerate which fields the workspace is sanitizing
+    before persistence.
+    """
+    tenant_id = _tenant(request)
+    return get_privacy_settings(tenant_id).to_dict()
+
+
+@router.put(
+    "/privacy",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_privacy_route(request: Request, payload: dict = Body(...)) -> dict:
+    """Update the tenant's PII redaction modes and data residency hint.
+
+    Body: ``{"redact_modes": [str], "data_residency": str|null}``.
+    Both fields are required so a half-supplied PUT does not silently
+    keep stale state from a previous version of the UI.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "Body must be a JSON object.")
+    if "redact_modes" not in payload:
+        raise HTTPException(422, "Field 'redact_modes' is required (list of strings).")
+    if "data_residency" not in payload:
+        raise HTTPException(422, "Field 'data_residency' is required (string or null).")
+    actor = getattr(request.state, "principal", None)
+    try:
+        cfg = set_privacy_settings(
+            tenant_id,
+            redact_modes=payload["redact_modes"],
+            data_residency=payload["data_residency"],
             updated_by=actor,
         )
     except ValueError as exc:
