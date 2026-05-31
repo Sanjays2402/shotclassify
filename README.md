@@ -27,6 +27,21 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - Outbound webhooks at `/webhooks`: register HTTPS endpoints that receive a signed JSON POST every time a classification completes. Each subscription gets a one-time `whsec_...` secret; deliveries are signed with `X-Shotclassify-Signature: sha256=<hmac>` over the raw body. Failed deliveries retry up to 4 times with backoff and every attempt is recorded in a live delivery log. Pause, resume, or send a test event from the dashboard.
 - Bulk classify at `/batch`: drop a `.zip` (or a folder of stills) and the page extracts in the browser, fans the images out to the live classifier with bounded concurrency, tracks per-row status, surfaces shot IDs (each one persists to history and fires webhooks), and offers a one-click CSV export with id, filename, class, confidence, latency, and any error per row.
 - Account & GDPR controls at `/account`: shows the signed-in principal (GitHub OAuth session or API key), counts of stored classifications and audit rows, one-click JSON export of everything under your principal, and a type-to-confirm "erase everything" button wired to `DELETE /v1/me/data?confirm=erase`. Sign in/out lives in the same panel.
+- Usage & free-tier quota at `/usage`: per-principal monthly meter (read from `GET /v1/me/usage`) with progress bar, remaining count, plan comparison, and an upgrade CTA. The header carries a compact live meter on every page. Classify endpoints return `402 quota_exceeded` once the per-principal `SHOTCLASSIFY_FREE_MONTHLY_LIMIT` (default 200) is hit for the calendar month so customers see the wall before they hit it in code.
+
+## Try the usage meter
+
+```bash
+make api  # starts FastAPI on :7441
+make web  # starts Next.js on :3000
+
+# Hit the meter directly:
+curl -s -H "X-API-Key: $AUTH_API_KEY" http://127.0.0.1:7441/v1/me/usage | jq
+
+# Or open it in the browser:
+open http://localhost:3000/usage
+```
+
 
 ## Try the account page
 

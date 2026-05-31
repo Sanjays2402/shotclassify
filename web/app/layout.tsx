@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Inter, Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import Ticker from "@/components/Ticker";
 import HotKeys from "@/components/HotKeys";
+import { QuotaMeter } from "@/components/QuotaMeter";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -67,9 +68,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/batch">Batch</NavLink>
               <NavLink href="/keys">API keys</NavLink>
               <NavLink href="/webhooks">Webhooks</NavLink>
+              <NavLink href="/usage">Usage</NavLink>
               <NavLink href="/account">Account</NavLink>
             </nav>
             <div className="ml-auto flex items-center gap-3">
+              <QuotaMeter compact />
               <span className="eyebrow hidden sm:inline">Press</span>
               <span className="kbd">U</span>
               <span className="eyebrow hidden sm:inline">to ingest</span>

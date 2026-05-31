@@ -10,7 +10,7 @@ from shotclassify_common import (
     ProcessResult,
     RouteDecision,
 )
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 
 from .db import ClassificationRow, get_session, init_db
 
@@ -61,6 +61,24 @@ class Repository:
                 ClassificationRow.tenant_id.is_(None),
             )
         )
+
+    def count_by_principal_since(
+        self,
+        principal: str,
+        since: datetime,
+        tenant_id: str | None = None,
+    ) -> int:
+        """Count classifications owned by ``principal`` created at or after ``since``.
+
+        Used by the usage/quota endpoint to compute current-period usage.
+        """
+        stmt = select(func.count(ClassificationRow.id)).where(
+            ClassificationRow.principal == principal,
+            ClassificationRow.created_at >= since,
+        )
+        stmt = self._scope_tenant(stmt, tenant_id)
+        with get_session() as s:
+            return int(s.execute(stmt).scalar() or 0)
 
     def list_by_principal(
         self, principal: str, tenant_id: str | None = None

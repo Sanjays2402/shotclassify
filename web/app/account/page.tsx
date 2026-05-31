@@ -13,6 +13,7 @@ import {
   Warning,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
+import { QuotaMeter } from "@/components/QuotaMeter";
 
 type Me = {
   principal: string;
@@ -82,6 +83,9 @@ export default function AccountPage() {
           delete it.
         </p>
       </header>
+
+      {/* Quota meter */}
+      <QuotaMeter />
 
       {/* Identity panel */}
       <section className="panel p-5 flex flex-col gap-4">

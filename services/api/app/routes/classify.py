@@ -11,6 +11,7 @@ from shotclassify_common.utils import ensure_dir, new_id
 from shotclassify_store import Repository
 
 from ..middleware.rbac import require_role
+from .usage import enforce_quota
 
 router = APIRouter(prefix="/v1", tags=["classify"], dependencies=[require_role("operator")])
 
@@ -34,9 +35,10 @@ async def classify(
 ) -> ProcessResult:
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(415, "Upload must be an image.")
-    rid, path = _save_upload(file)
     principal = getattr(request.state, "principal", None)
     tenant_id = getattr(request.state, "tenant_id", None)
+    enforce_quota(principal, tenant_id=tenant_id)
+    rid, path = _save_upload(file)
     return await asyncio.to_thread(process_image, path, note, True, rid, principal, tenant_id)
 
 
@@ -48,9 +50,10 @@ async def classify_batch(
 ) -> list[ProcessResult]:
     if not files:
         raise HTTPException(400, "No files.")
-    saved = [_save_upload(f) for f in files]
     principal = getattr(request.state, "principal", None)
     tenant_id = getattr(request.state, "tenant_id", None)
+    enforce_quota(principal, tenant_id=tenant_id)
+    saved = [_save_upload(f) for f in files]
     tasks = [
         asyncio.to_thread(process_image, p, note, True, rid, principal, tenant_id)
         for rid, p in saved
