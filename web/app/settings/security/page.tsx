@@ -951,10 +951,13 @@ function SsoSection() {
 type SessionPolicyResponse = {
   tenant_id: string;
   session_ttl_minutes: number | null;
+  session_idle_minutes?: number | null;
   default_minutes: number;
   effective_minutes: number;
   min_minutes: number;
   max_minutes: number;
+  idle_min_minutes?: number;
+  idle_max_minutes?: number;
   clipped?: number;
 };
 
@@ -1180,9 +1183,187 @@ function SessionPolicySection() {
               {flash.msg}
             </p>
           ) : null}
+          <SessionIdleControls data={data} mutate={mutate} />
         </>
       )}
     </section>
+  );
+}
+
+function SessionIdleControls({
+  data,
+  mutate,
+}: {
+  data: SessionPolicyResponse;
+  mutate: (
+    next?: SessionPolicyResponse,
+    opts?: { revalidate?: boolean },
+  ) => Promise<unknown>;
+}) {
+  const idleMin = data.idle_min_minutes ?? 5;
+  const idleMax = data.idle_max_minutes ?? 43200;
+  const [idleOn, setIdleOn] = useState<boolean>(data.session_idle_minutes != null);
+  const [idleValue, setIdleValue] = useState<string>(
+    String(data.session_idle_minutes ?? 30),
+  );
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    setIdleOn(data.session_idle_minutes != null);
+    setIdleValue(String(data.session_idle_minutes ?? 30));
+  }, [data.session_idle_minutes]);
+
+  const presets = [
+    { label: "15 min", minutes: 15 },
+    { label: "30 min", minutes: 30 },
+    { label: "1 hour", minutes: 60 },
+    { label: "4 hours", minutes: 240 },
+  ];
+
+  const dirty = useMemo(() => {
+    if (!idleOn) return data.session_idle_minutes != null;
+    const parsed = Math.trunc(Number(idleValue));
+    if (!Number.isFinite(parsed)) return false;
+    return parsed !== data.session_idle_minutes;
+  }, [data.session_idle_minutes, idleOn, idleValue]);
+
+  async function saveIdle() {
+    setBusy(true);
+    setFlash(null);
+    try {
+      let body: { session_idle_minutes: number | null };
+      if (!idleOn) {
+        body = { session_idle_minutes: null };
+      } else {
+        const parsed = Math.trunc(Number(idleValue));
+        if (!Number.isFinite(parsed)) {
+          setFlash({ kind: "err", msg: "Enter a whole number of minutes." });
+          setBusy(false);
+          return;
+        }
+        if (parsed < idleMin || parsed > idleMax) {
+          setFlash({
+            kind: "err",
+            msg: `Idle minutes must be between ${idleMin} and ${idleMax}.`,
+          });
+          setBusy(false);
+          return;
+        }
+        body = { session_idle_minutes: parsed };
+      }
+      const res = await fetch("/api/settings/security/sessions/idle", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setFlash({ kind: "err", msg: text || `Save failed (${res.status})` });
+        setBusy(false);
+        return;
+      }
+      const next: SessionPolicyResponse = await res.json();
+      setFlash({ kind: "ok", msg: "Saved." });
+      await mutate(next, { revalidate: false });
+    } catch (e) {
+      setFlash({ kind: "err", msg: (e as Error).message || "Save failed" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-6 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      <div className="mb-1 flex items-center gap-2">
+        <Clock size={16} weight="duotone" className="text-violet-600" />
+        <h3 className="text-sm font-semibold">Idle (inactivity) timeout</h3>
+      </div>
+      <p className="mb-3 text-sm text-zinc-500">
+        Revoke a signed-in browser session if it has been inactive for longer
+        than this many minutes. Required by SOC2 CC6.1 and the standard
+        enterprise security questionnaire. Leave off to keep the legacy
+        behaviour of bounding sessions only by absolute lifetime.
+      </p>
+      <label className="mb-3 flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-1"
+          checked={idleOn}
+          onChange={(e) => setIdleOn(e.target.checked)}
+          aria-label="Enable idle timeout for this workspace"
+        />
+        <span>Enable idle timeout for this workspace.</span>
+      </label>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          type="number"
+          inputMode="numeric"
+          min={idleMin}
+          max={idleMax}
+          step={1}
+          disabled={!idleOn}
+          value={idleValue}
+          onChange={(e) => setIdleValue(e.target.value)}
+          aria-label="Idle timeout in minutes"
+          className="w-40 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-mono shadow-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 disabled:cursor-not-allowed disabled:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:disabled:bg-zinc-900"
+        />
+        <span className="text-xs text-zinc-500">
+          minutes ({idleMin} to {idleMax})
+        </span>
+      </div>
+      <div className="mb-3 flex flex-wrap gap-2">
+        {presets.map((p) => (
+          <button
+            key={p.minutes}
+            type="button"
+            disabled={!idleOn}
+            onClick={() => setIdleValue(String(p.minutes))}
+            className="rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={saveIdle}
+          disabled={!dirty || busy}
+          className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-zinc-300 dark:disabled:bg-zinc-700"
+        >
+          <FloppyDisk size={16} weight="duotone" />
+          {busy ? "Saving" : "Save idle policy"}
+        </button>
+        <span className="text-xs text-zinc-500">
+          Current:{" "}
+          <span className="font-mono">
+            {data.session_idle_minutes == null
+              ? "off"
+              : `${data.session_idle_minutes} min`}
+          </span>
+        </span>
+      </div>
+      {flash ? (
+        <p
+          className={`mt-3 inline-flex items-center gap-1 text-sm ${
+            flash.kind === "ok"
+              ? "text-emerald-700 dark:text-emerald-400"
+              : "text-red-700 dark:text-red-400"
+          }`}
+          role="status"
+        >
+          {flash.kind === "ok" ? (
+            <CheckCircle size={14} weight="duotone" />
+          ) : (
+            <Warning size={14} weight="duotone" />
+          )}
+          {flash.msg}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

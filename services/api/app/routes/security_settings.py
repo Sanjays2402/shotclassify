@@ -14,6 +14,8 @@ from shotclassify_store import (
     API_KEY_MIN_TTL_DAYS,
     SESSION_TTL_MAX_MINUTES,
     SESSION_TTL_MIN_MINUTES,
+    SESSION_IDLE_MAX_MINUTES,
+    SESSION_IDLE_MIN_MINUTES,
     get_api_key_ttl_policy,
     get_ip_allowlist,
     get_mfa_policy,
@@ -29,6 +31,7 @@ from shotclassify_store import (
     set_privacy_settings,
     set_retention_days,
     set_session_policy,
+    set_session_idle_policy,
     set_sso_config,
     set_tenant_oidc,
 )
@@ -517,3 +520,46 @@ def put_mfa_policy_route(request: Request, payload: dict = Body(...)) -> dict:
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return policy.to_dict()
+
+
+@router.put(
+    "/sessions/idle",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_session_idle_policy_route(
+    request: Request, payload: dict = Body(...)
+) -> dict:
+    """Set or clear the per-tenant session idle (inactivity) timeout.
+
+    Body: ``{"session_idle_minutes": int|null}``. ``null`` removes the
+    idle requirement entirely so sessions are only bounded by the
+    absolute TTL. A non-null value is enforced on every authenticated
+    request: any session whose ``last_seen_at`` is older than the
+    configured number of minutes is revoked in place and the caller
+    falls back to the login flow. SOC2 CC6.1 and most enterprise
+    security questionnaires treat an idle timeout as a hard requirement;
+    defaulting to NULL preserves the pre-existing behaviour for tenants
+    that have not opted in.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "Body must be a JSON object.")
+    if "session_idle_minutes" not in payload:
+        raise HTTPException(
+            422, "Field 'session_idle_minutes' is required (integer or null)."
+        )
+    raw = payload["session_idle_minutes"]
+    actor = getattr(request.state, "principal", None)
+    try:
+        policy = set_session_idle_policy(
+            tenant_id, session_idle_minutes=raw, updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    default_minutes = int(SESSION_TTL.total_seconds() // 60)
+    effective = policy.session_ttl_minutes or default_minutes
+    return {
+        **policy.to_dict(),
+        "default_minutes": default_minutes,
+        "effective_minutes": effective,
+    }

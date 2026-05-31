@@ -85,6 +85,25 @@ def _resolve_session_ttl(tenant_id: str | None) -> timedelta:
         return SESSION_TTL
 
 
+def _resolve_session_idle(tenant_id: str | None) -> timedelta | None:
+    """Return the per-tenant session idle (inactivity) timeout.
+
+    Returns ``None`` when no policy is configured so callers leave the
+    historical "no idle timeout" behaviour alone. A corrupt settings row
+    is treated as "no policy" rather than failing closed so a misconfig
+    cannot lock an entire tenant out.
+    """
+    try:
+        if not tenant_id:
+            return None
+        policy = get_session_policy(tenant_id)
+        if policy.session_idle_minutes is None:
+            return None
+        return timedelta(minutes=int(policy.session_idle_minutes))
+    except Exception:
+        return None
+
+
 def issue_session(
     login: str,
     *,
@@ -228,7 +247,11 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
         cookie = request.cookies.get("sc_session")
         sid = _decode_sid(cookie)
         if sid:
-            info = session_store.touch(sid)
+            # Peek the row (no last_seen_at bump) to learn the tenant so we
+            # can apply that tenant's idle-timeout policy on this touch.
+            peek = session_store.get(sid)
+            idle = _resolve_session_idle(peek.tenant_id) if peek else None
+            info = session_store.touch(sid, idle_timeout=idle)
             if info and (
                 not s.auth_allowed_github_login
                 or info.principal == s.auth_allowed_github_login

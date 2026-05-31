@@ -301,7 +301,28 @@ curl -s -X PUT http://localhost:7441/v1/settings/security/retention \
 make worker
 ```
 
-## What's new: per-tenant cookie session lifetime
+## What's new: per-tenant session idle (inactivity) timeout
+
+Workspace admins can now enforce a session idle timeout from `/settings/security` (UI) or `PUT /v1/settings/security/sessions/idle` (API). When set, the auth middleware revokes any cookie session whose `last_seen_at` is older than the configured number of minutes on the next request, dropping the user back to the login flow. NULL keeps the legacy behaviour (sessions bounded only by absolute TTL). Idle policy is per tenant, so one workspace's tightening cannot kick another workspace's users. Bounds are 5 minutes to 30 days; values outside that range return 422 with a precise message. SOC2 CC6.1 and the standard enterprise security questionnaire treat this as a hard requirement. Coverage in `tests/test_session_idle_timeout.py`.
+
+### Try it
+
+```bash
+# Read the policy (admin role required); session_idle_minutes=null means off.
+curl -s -H 'X-API-Key: $ADMIN_KEY' http://localhost:7441/v1/settings/security/sessions
+
+# Enforce a 30-minute idle timeout for the tenant.
+curl -s -X PUT -H 'X-API-Key: $ADMIN_KEY' -H 'content-type: application/json' \
+  -d '{"session_idle_minutes":30}' http://localhost:7441/v1/settings/security/sessions/idle
+
+# Clear it (return to no idle timeout).
+curl -s -X PUT -H 'X-API-Key: $ADMIN_KEY' -H 'content-type: application/json' \
+  -d '{"session_idle_minutes":null}' http://localhost:7441/v1/settings/security/sessions/idle
+```
+
+Manage from the dashboard at <http://localhost:3000/settings/security> under Session lifetime.
+
+## Previous: per-tenant cookie session lifetime
 
 Workspace admins can now set the cookie session TTL per tenant from `/settings/security` (UI) or `PUT /v1/settings/security/sessions` (API). Lowering the policy clips every active session for the tenant whose remaining lifetime exceeds the new ceiling, so a long-lived cookie minted before the change cannot outlive the new rule. Clearing the override (sending `null`) returns the tenant to the global default in `sessions.SESSION_TTL`. Bounds are 5 minutes to 365 days; values outside that range return 422 with a precise message. Coverage in `tests/test_session_policy.py`.
 

@@ -103,12 +103,17 @@ def create(
         return _to_info(row)
 
 
-def touch(sid: str) -> SessionInfo | None:
+def touch(sid: str, *, idle_timeout: timedelta | None = None) -> SessionInfo | None:
     """Return the active session for ``sid`` or ``None`` if it is invalid.
 
     Bumps ``last_seen_at`` as a side effect so the admin console can show
     which devices are currently in use. Expired or revoked sessions are
     treated as invalid and never touched.
+
+    If ``idle_timeout`` is set and the row's previous ``last_seen_at`` is
+    older than ``now - idle_timeout``, the session is revoked in place
+    and ``None`` is returned. This implements the per-tenant inactivity
+    timeout that enterprise security questionnaires (SOC2 CC6.1) require.
     """
     if not sid:
         return None
@@ -125,6 +130,14 @@ def touch(sid: str) -> SessionInfo | None:
             exp = exp.replace(tzinfo=UTC)
         if exp <= now:
             return None
+        if idle_timeout is not None and idle_timeout > timedelta(0):
+            last = row.last_seen_at
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=UTC)
+            if now - last > idle_timeout:
+                row.revoked_at = now
+                s.commit()
+                return None
         row.last_seen_at = now
         s.commit()
         s.refresh(row)

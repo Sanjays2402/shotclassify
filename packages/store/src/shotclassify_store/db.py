@@ -204,6 +204,15 @@ class TenantSettingsRow(Base):
     # ``issue_session`` and clipped on existing rows when the policy is
     # lowered so a sleeping browser tab cannot outlive the new rule.
     session_ttl_minutes: Mapped[int | None] = mapped_column(nullable=True)
+    # Per-tenant session inactivity (idle) timeout, in minutes. NULL means
+    # "no idle timeout" -- session lifetime is bounded only by
+    # ``session_ttl_minutes`` / the global default. When set, the auth
+    # middleware revokes any session whose ``last_seen_at`` is older than
+    # this many minutes on the next request, regardless of the absolute
+    # TTL. This is what SOC2 CC6.1 and most enterprise security
+    # questionnaires call "idle session timeout" and is a hard
+    # procurement gate. Bounds enforced in :mod:`tenant_settings`.
+    session_idle_minutes: Mapped[int | None] = mapped_column(nullable=True)
     # SCIM 2.0 provisioning token. When ``scim_enabled`` is True an external
     # identity provider (Okta, Azure AD, Google Workspace) can call
     # ``/scim/v2/*`` with ``Authorization: Bearer <token>`` to provision and
@@ -716,6 +725,10 @@ def init_db() -> None:
                 if "session_ttl_minutes" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN session_ttl_minutes INTEGER"
+                    ))
+                if "session_idle_minutes" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN session_idle_minutes INTEGER"
                     ))
                 if "seat_limit" not in tcols:
                     conn.execute(text(

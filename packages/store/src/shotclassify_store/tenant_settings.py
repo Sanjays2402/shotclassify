@@ -403,18 +403,29 @@ def set_privacy_settings(
 SESSION_TTL_MIN_MINUTES = 5
 SESSION_TTL_MAX_MINUTES = 60 * 24 * 365
 
+# Bounds on the configurable per-tenant session *idle* timeout. The lower
+# bound matches the absolute-TTL floor so an admin cannot lock the entire
+# tenant out with a 0-minute setting. The upper bound is 30 days; anything
+# longer is meaningless because the absolute TTL caps at 365 days.
+SESSION_IDLE_MIN_MINUTES = 5
+SESSION_IDLE_MAX_MINUTES = 60 * 24 * 30
+
 
 @dataclass(frozen=True)
 class SessionPolicy:
     tenant_id: str
     session_ttl_minutes: int | None  # None = use global default
+    session_idle_minutes: int | None = None  # None = no idle timeout
 
     def to_dict(self) -> dict:
         return {
             "tenant_id": self.tenant_id,
             "session_ttl_minutes": self.session_ttl_minutes,
+            "session_idle_minutes": self.session_idle_minutes,
             "min_minutes": SESSION_TTL_MIN_MINUTES,
             "max_minutes": SESSION_TTL_MAX_MINUTES,
+            "idle_min_minutes": SESSION_IDLE_MIN_MINUTES,
+            "idle_max_minutes": SESSION_IDLE_MAX_MINUTES,
         }
 
 
@@ -426,17 +437,18 @@ def get_session_policy(tenant_id: str | None) -> SessionPolicy:
     branching on whether the tenant has ever opened settings.
     """
     if not tenant_id:
-        return SessionPolicy(tenant_id="", session_ttl_minutes=None)
+        return SessionPolicy(tenant_id="", session_ttl_minutes=None, session_idle_minutes=None)
     init_db()
     with get_session() as s:
         row = s.execute(
             select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
         ).scalar_one_or_none()
         if row is None:
-            return SessionPolicy(tenant_id=tenant_id, session_ttl_minutes=None)
+            return SessionPolicy(tenant_id=tenant_id, session_ttl_minutes=None, session_idle_minutes=None)
         return SessionPolicy(
             tenant_id=tenant_id,
             session_ttl_minutes=getattr(row, "session_ttl_minutes", None),
+            session_idle_minutes=getattr(row, "session_idle_minutes", None),
         )
 
 
@@ -489,8 +501,68 @@ def set_session_policy(
             row.session_ttl_minutes = norm
             row.updated_at = datetime.now(UTC)
             row.updated_by = updated_by
+        idle = getattr(row, "session_idle_minutes", None)
         s.commit()
-    return SessionPolicy(tenant_id=tenant_id, session_ttl_minutes=norm)
+    return SessionPolicy(
+        tenant_id=tenant_id, session_ttl_minutes=norm, session_idle_minutes=idle
+    )
+
+
+def set_session_idle_policy(
+    tenant_id: str,
+    *,
+    session_idle_minutes: int | None,
+    updated_by: str | None,
+) -> SessionPolicy:
+    """Persist a per-tenant session idle timeout (in minutes) or clear it.
+
+    ``None`` removes the idle requirement entirely; sessions are then
+    only bounded by their absolute TTL. Raises ``ValueError`` for
+    out-of-range or non-integer values so the API layer can surface a
+    structured 422.
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    norm: int | None
+    if session_idle_minutes is None:
+        norm = None
+    else:
+        if isinstance(session_idle_minutes, bool) or not isinstance(
+            session_idle_minutes, int
+        ):
+            raise ValueError("session_idle_minutes must be an integer or null")
+        if (
+            session_idle_minutes < SESSION_IDLE_MIN_MINUTES
+            or session_idle_minutes > SESSION_IDLE_MAX_MINUTES
+        ):
+            raise ValueError(
+                f"session_idle_minutes must be between "
+                f"{SESSION_IDLE_MIN_MINUTES} and {SESSION_IDLE_MAX_MINUTES} minutes"
+            )
+        norm = session_idle_minutes
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                session_idle_minutes=norm,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.session_idle_minutes = norm
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+        ttl = getattr(row, "session_ttl_minutes", None)
+    return SessionPolicy(
+        tenant_id=tenant_id, session_ttl_minutes=ttl, session_idle_minutes=norm
+    )
 
 
 # ---------------------------------------------------------------------------
