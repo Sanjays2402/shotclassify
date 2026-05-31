@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     rate_limit_burst: int = 20
     rate_limit_exempt_paths: str = "/healthz,/readyz,/metrics,/blob"
 
+    # Per-tenant IP allowlist. Enforced by IPAllowlistMiddleware when
+    # enabled. The actual CIDR list is stored per-tenant in the database
+    # so workspace owners can manage it from the dashboard without a redeploy.
+    ip_allowlist_enabled: bool = True
+
     # Telemetry
     otel_enabled: bool = False
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"

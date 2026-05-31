@@ -105,6 +105,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/usage">Usage</NavLink>
               <NavLink href="/pricing">Pricing</NavLink>
               <NavLink href="/account">Account</NavLink>
+              <NavLink href="/settings/security">Security</NavLink>
               <NavLink href="/signin">Sign in</NavLink>
               <NavLink href="/welcome">Welcome</NavLink>
             </nav>

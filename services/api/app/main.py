@@ -19,6 +19,7 @@ from shotclassify_store import init_db
 
 from .middleware.audit import AuditLogMiddleware
 from .middleware.auth import APIKeyAndSessionAuth
+from .middleware.ip_allowlist import IPAllowlistMiddleware
 from .middleware.metrics import PrometheusMiddleware
 from .middleware.rate_limit import RateLimitMiddleware
 from .middleware.request_id import RequestIdMiddleware
@@ -33,6 +34,7 @@ from .routes import me as me_routes
 from .routes import usage as usage_routes
 from .routes import metrics as metrics_routes
 from .routes import saved_views as saved_views_routes
+from .routes import security_settings as security_settings_routes
 from .routes import settings as settings_routes
 
 
@@ -89,6 +91,10 @@ def create_app() -> FastAPI:
     # then Auth, then RequestId innermost so the request_id contextvar is set
     # before audit/auth log handlers fire.
     app.add_middleware(RequestIdMiddleware)
+    # IP allowlist runs AFTER tenant resolution on the inbound path; with
+    # Starlette's outer-to-inner add semantics that means add it BEFORE
+    # TenantResolutionMiddleware so it ends up more inner.
+    app.add_middleware(IPAllowlistMiddleware)
     # Tenant resolution must run AFTER auth on the inbound path so it sees
     # request.state.principal/role. Starlette runs LAST-added middleware
     # OUTERMOST, so add Tenant before Auth (Tenant is inner -> runs after
@@ -113,6 +119,7 @@ def create_app() -> FastAPI:
     app.include_router(me_routes.router)
     app.include_router(usage_routes.router)
     app.include_router(saved_views_routes.router)
+    app.include_router(security_settings_routes.router)
     storage_root = Path(s.storage_local_dir)
     storage_root.mkdir(parents=True, exist_ok=True)
     app.mount("/blob", StaticFiles(directory=str(storage_root)), name="blob")

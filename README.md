@@ -2,6 +2,26 @@
 
 ShotClassify is a real-time screenshot classifier with confidence scores, OCR, history, share links, and a programmatic /v1 API.
 
+## What's new: per-tenant IP allowlist
+
+Workspace admins can now restrict API and dashboard access to a set of CIDR ranges. The check runs as middleware before any route handler, is enforced per tenant (one tenant's allowlist cannot leak across to another), and skips healthcheck and metrics endpoints so kubelet probes never trip. Changes are written through the audit log.
+
+Manage it in the dashboard at `/settings/security`, or via the admin API:
+
+```sh
+# Read the current allowlist for your tenant
+curl -s http://localhost:7441/v1/settings/security/ip-allowlist \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" | jq
+
+# Replace it with a fixed corporate range plus one bastion IP
+curl -s -X PUT http://localhost:7441/v1/settings/security/ip-allowlist \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"cidrs":["10.0.0.0/24","203.0.113.42"]}' | jq
+```
+
+An empty list disables the allowlist for that tenant, so existing deployments keep working until an admin opts in. Covered by `tests/test_ip_allowlist.py`.
+
 ## What's new: pinned shots
 
 Every row on `/shots` now has a star. Click it to pin the shot, click again to unpin. The history toolbar has a "Pinned only" toggle, the detail page has a Pin button, and the bulk action bar gained Pin and Unpin so you can star a whole filtered set in one click. Pinned state is real database state, scoped to your tenant, and surfaces through `/v1/history`.
