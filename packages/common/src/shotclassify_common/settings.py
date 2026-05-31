@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     queue_name: str = "shotclassify"
 
+    # Data retention scheduler (worker)
+    # When enabled, the worker periodically runs the per-tenant retention
+    # purge so that GDPR/contractual retention windows are actually
+    # enforced and not just declarative. Interval is in seconds and is
+    # clamped to a sane floor inside the scheduler.
+    retention_scheduler_enabled: bool = True
+    retention_scheduler_interval_s: int = 3600
+
     # LLM
     llm_base_url: str = "http://127.0.0.1:4141/v1"
     llm_api_key: str = "copilot"

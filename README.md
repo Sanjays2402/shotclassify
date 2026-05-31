@@ -2,6 +2,22 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: automatic retention enforcement
+
+Per-tenant retention windows are now enforced by the worker on a schedule instead of waiting for someone to remember to hit the manual purge route. The worker spawns a small daemon thread on startup that, every `RETENTION_SCHEDULER_INTERVAL_S` seconds (default 3600, floor 60), iterates every tenant with a positive `retention_days` policy and hard-deletes expired classifications and their blobs. Tenants without a policy are skipped. Each non-empty purge writes one audit row scoped to the owning tenant with the `scheduler` trigger, so workspace owners see automatic deletions in the same audit log as manual ones. Cross-tenant isolation is preserved end to end. Set `RETENTION_SCHEDULER_ENABLED=false` to opt out (for example when running an external cron). Coverage in `tests/test_retention_scheduler.py`.
+
+### Try it
+
+```bash
+# Set a 30-day retention window for the workspace
+curl -s -X PUT http://localhost:7441/v1/settings/security/retention \
+  -H "X-API-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"retention_days":30}' | jq
+
+# Start the worker; the scheduler runs automatically in the background
+make worker
+```
+
 ## What's new: per-tenant cookie session lifetime
 
 Workspace admins can now set the cookie session TTL per tenant from `/settings/security` (UI) or `PUT /v1/settings/security/sessions` (API). Lowering the policy clips every active session for the tenant whose remaining lifetime exceeds the new ceiling, so a long-lived cookie minted before the change cannot outlive the new rule. Clearing the override (sending `null`) returns the tenant to the global default in `sessions.SESSION_TTL`. Bounds are 5 minutes to 365 days; values outside that range return 422 with a precise message. Coverage in `tests/test_session_policy.py`.

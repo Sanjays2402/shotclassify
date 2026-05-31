@@ -12,6 +12,8 @@ from shotclassify_common import (
 )
 from shotclassify_store import init_db
 
+from .retention_scheduler import start_in_background as start_retention_scheduler
+
 log = get_logger(__name__)
 
 
@@ -22,6 +24,9 @@ def main() -> None:
     validate_for_production(s)
     init_sentry(service_name="shotclassify-worker")
     init_db()
+    # Enforce per-tenant data retention windows automatically. Without this
+    # the policy is purely declarative and any GDPR auditor will reject it.
+    start_retention_scheduler()
     redis = Redis.from_url(s.redis_url)
     log.info("worker_starting", queue=s.queue_name, redis=s.redis_url)
     with Connection(redis):
