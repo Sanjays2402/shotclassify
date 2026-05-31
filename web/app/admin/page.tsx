@@ -17,6 +17,7 @@ import {
   ChartLineUp,
   Lock,
   ArrowSquareOut,
+  WebhooksLogo,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -246,6 +247,13 @@ export default function AdminConsolePage() {
           value={data.audit.recent.length}
           href="/settings/audit"
           sub="recent"
+        />
+        <StatCard
+          icon={<WebhooksLogo size={18} weight="duotone" />}
+          label="Webhooks"
+          value="Manage"
+          href="/admin/api-webhooks"
+          sub="signed deliveries"
         />
       </div>
 
