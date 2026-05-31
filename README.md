@@ -49,6 +49,18 @@ upload ---->  |  FastAPI   | -----> | pipeline thread |
                   (Slack, dry-run)                          (SWR, Recharts)
 ```
 
+## Try it
+
+With the API and web both running, open <http://127.0.0.1:3000/demo>. Click any of the four sample screenshots (receipt, code snippet, stack trace, chat) and the page runs the real OCR plus vision pipeline, then renders the class probability bars, latency, model rationale, and OCR transcript. No upload, no signup.
+
+One-shot curl against the same endpoint the demo page calls:
+
+```bash
+curl -s -X POST http://127.0.0.1:7441/v1/classify \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -F "file=@samples/fake-receipt.png" | jq '.classification.primary, .classification.confidences[0]'
+```
+
 ## Quick start
 
 Requires Python 3.11+, Node 20+, Tesseract, and Redis (optional, only for `/v1/queue`).
