@@ -1,5 +1,33 @@
 # shotclassify
 
+ShotClassify is a real-time screenshot classifier with confidence scores, OCR, history, share links, and a programmatic /v1 API.
+
+## What's new: programmatic webhook management via /v1/webhooks
+
+The `/v1/webhooks` endpoint lets API users register, list, fetch, and delete webhook subscriptions without opening the dashboard. Same `Authorization: Bearer sk_...` header the rest of /v1 uses. The signing secret is returned exactly once at creation time.
+
+Try it locally (after `cd web && pnpm dev`, then create a key at http://localhost:3000/keys):
+
+```bash
+export SHOTCLASSIFY_KEY=sk_live_...
+
+# Register a subscription
+curl -X POST http://localhost:3000/v1/webhooks \
+  -H "Authorization: Bearer $SHOTCLASSIFY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/incoming","events":["classify.completed"]}'
+
+# List them
+curl http://localhost:3000/v1/webhooks \
+  -H "Authorization: Bearer $SHOTCLASSIFY_KEY"
+
+# Delete one
+curl -X DELETE http://localhost:3000/v1/webhooks/<id> \
+  -H "Authorization: Bearer $SHOTCLASSIFY_KEY"
+```
+
+Full reference is rendered at http://localhost:3000/api-docs.
+
 > Real-time screenshot classifier with confidence scoring, OCR, history, sharing, API keys, webhooks, and a Cmd+K command palette.
 
 ## What's new: per-key usage detail page

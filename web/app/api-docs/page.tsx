@@ -82,6 +82,57 @@ function buildEndpoints(origin: string): Endpoint[] {
 }`,
     },
     {
+      id: "webhooks-list",
+      method: "GET",
+      path: "/v1/webhooks",
+      title: "List webhook subscriptions",
+      description:
+        "Returns every webhook subscription registered on this workspace. Secrets are redacted to a short prefix; the full signing secret is only returned at creation time.",
+      curl: (o) =>
+        `curl ${o}/v1/webhooks \\\n  -H "Authorization: Bearer $SHOTCLASSIFY_KEY"`,
+      response: `{
+  "webhooks": [
+    {
+      "id": "...",
+      "url": "https://example.com/incoming",
+      "events": ["classify.completed"],
+      "active": true,
+      "secret_prefix": "whsec_AbCd"
+    }
+  ]
+}`,
+    },
+    {
+      id: "webhooks-create",
+      method: "POST",
+      path: "/v1/webhooks",
+      title: "Register a webhook",
+      description:
+        "Subscribe a URL to classify.completed events. The response includes the signing secret exactly once. Store it; we never return it again. Requires the 'write' scope.",
+      curl: (o) =>
+        `curl -X POST ${o}/v1/webhooks \\\n  -H "Authorization: Bearer $SHOTCLASSIFY_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"url":"https://example.com/incoming","events":["classify.completed"]}'`,
+      response: `{
+  "webhook": {
+    "id": "...",
+    "url": "https://example.com/incoming",
+    "events": ["classify.completed"],
+    "active": true
+  },
+  "secret": "whsec_..."
+}`,
+    },
+    {
+      id: "webhooks-delete",
+      method: "GET",
+      path: "/v1/webhooks/{id}",
+      title: "Fetch or delete a webhook",
+      description:
+        "GET returns a single subscription. DELETE removes it; future events stop firing immediately. Requires the 'write' scope to delete.",
+      curl: (o) =>
+        `curl -X DELETE ${o}/v1/webhooks/wh_01HXYZ \\\n  -H "Authorization: Bearer $SHOTCLASSIFY_KEY"`,
+      response: `{ "deleted": "wh_01HXYZ" }`,
+    },
+    {
       id: "usage",
       method: "GET",
       path: "/v1/usage",
