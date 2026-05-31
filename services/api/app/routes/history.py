@@ -173,6 +173,93 @@ def get_one(item_id: str, request: Request) -> ClassificationRecord:
     return rec
 
 
+@router.post("/bulk", dependencies=[require_role("operator")])
+def bulk(request: Request, payload: dict = Body(...)) -> dict:
+    """Apply an action to many saved shots at once.
+
+    Body fields:
+      * ``ids`` (list[string], required, 1..500): record ids to act on.
+      * ``action`` (string, required): one of ``delete``, ``tag_add``,
+        ``tag_remove``.
+      * ``tags`` (list[string], required for tag actions): tags to add or
+        remove. Each tag is trimmed, lowercased, and capped at 32 chars.
+
+    Returns ``{ok, action, requested, affected, missing}`` where ``affected``
+    counts rows that actually changed (or were deleted), and ``missing`` lists
+    ids that were not found or belong to another tenant.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Body must be a JSON object.")
+    ids_in = payload.get("ids")
+    if not isinstance(ids_in, list) or not ids_in:
+        raise HTTPException(400, "`ids` must be a non-empty list of strings.")
+    if len(ids_in) > 500:
+        raise HTTPException(400, "Too many ids (max 500 per request).")
+    ids: list[str] = []
+    for i in ids_in:
+        if not isinstance(i, str) or not i.strip():
+            raise HTTPException(400, "`ids` must contain non-empty strings.")
+        ids.append(i.strip())
+    action = payload.get("action")
+    if action not in {"delete", "tag_add", "tag_remove"}:
+        raise HTTPException(
+            400, "`action` must be one of: delete, tag_add, tag_remove."
+        )
+    tags_in: list[str] = []
+    if action in {"tag_add", "tag_remove"}:
+        raw_tags = payload.get("tags")
+        if not isinstance(raw_tags, list) or not raw_tags:
+            raise HTTPException(400, "`tags` must be a non-empty list for tag actions.")
+        for t in raw_tags:
+            if not isinstance(t, str):
+                raise HTTPException(400, "`tags` entries must be strings.")
+            norm = t.strip().lower()[:32]
+            if norm and norm not in tags_in:
+                tags_in.append(norm)
+        if not tags_in:
+            raise HTTPException(400, "`tags` had no usable entries after normalizing.")
+
+    tenant_id = getattr(request.state, "tenant_id", None)
+    repo = Repository()
+    affected = 0
+    missing: list[str] = []
+    for rid in ids:
+        if action == "delete":
+            if repo.delete(rid, tenant_id=tenant_id):
+                affected += 1
+            else:
+                missing.append(rid)
+            continue
+        rec = repo.get(rid, tenant_id=tenant_id)
+        if not rec:
+            missing.append(rid)
+            continue
+        current = list(rec.tags or [])
+        if action == "tag_add":
+            new_tags = list(current)
+            for t in tags_in:
+                if t not in new_tags:
+                    new_tags.append(t)
+        else:
+            remove_set = set(tags_in)
+            new_tags = [t for t in current if t not in remove_set]
+        if new_tags == current:
+            continue
+        updated = repo.update_meta(rid, tags=new_tags, tenant_id=tenant_id)
+        if updated:
+            affected += 1
+        else:
+            missing.append(rid)
+    return {
+        "ok": True,
+        "action": action,
+        "requested": len(ids),
+        "affected": affected,
+        "missing": missing,
+        "tags": tags_in if action != "delete" else [],
+    }
+
+
 @router.delete("/{item_id}", dependencies=[require_role("operator")])
 def delete(item_id: str, request: Request):
     tenant_id = getattr(request.state, "tenant_id", None)

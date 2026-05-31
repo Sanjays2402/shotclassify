@@ -2,6 +2,30 @@
 
 Screenshot classifier with vision LLM, OCR, structured extraction, and action routing.
 
+## What's new: bulk actions on your history
+
+ShotClassify classifies a screenshot into a typed record with confidence, OCR text, and extracted fields.
+
+The `/shots` page now ships real bulk actions over your saved history. Tick the new left-most checkbox on any row (or the page-header checkbox to grab the whole page), then add tags, remove tags, or delete the lot in one call. Scoped to your tenant, hard-capped at 500 ids per request, validated server-side.
+
+### Try it
+
+```bash
+# Add two tags to a batch of shots
+curl -sS -X POST http://localhost:7441/v1/history/bulk \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"ids":["abc123","def456"],"action":"tag_add","tags":["finance","reviewed"]}'
+
+# Bulk delete
+curl -sS -X POST http://localhost:7441/v1/history/bulk \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"ids":["abc123","def456"],"action":"delete"}'
+```
+
+Response shape: `{ok, action, requested, affected, missing, tags}`. The web UI lives at `http://localhost:3000/shots`.
+
 ## What's new: rename and tag your shots
 
 Every saved classification can now be renamed and tagged from the shot

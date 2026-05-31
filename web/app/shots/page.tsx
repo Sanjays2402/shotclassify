@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Scales, CaretLeft, CaretRight } from "@phosphor-icons/react/dist/ssr";
+import { Scales, CaretLeft, CaretRight, Trash, Tag, CheckSquare, Square } from "@phosphor-icons/react/dist/ssr";
+import { useSWRConfig } from "swr";
 import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
 import { SampleBadge } from "@/components/SampleBadge";
@@ -58,6 +59,14 @@ export default function ShotsPage() {
   const [tag, setTag] = useState("");
   const [tagDebounced, setTagDebounced] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
+  const [bulk, setBulk] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkFlash, setBulkFlash] = useState<
+    | { kind: "ok" | "err"; msg: string }
+    | null
+  >(null);
+  const [tagInput, setTagInput] = useState("");
+  const { mutate: globalMutate } = useSWRConfig();
 
   useEffect(() => {
     const t = setTimeout(() => setQDebounced(q.trim()), 250);
@@ -77,6 +86,14 @@ export default function ShotsPage() {
     setPage(0);
   }, [cat, qDebounced, limit, since, until, minConfPct, sort, tagDebounced]);
 
+  const toggleBulk = (id: string) => {
+    setBulk((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   const togglePick = (id: string) => {
     setPicked((prev) => {
       if (prev.includes(id)) return prev.filter((x) => x !== id);
@@ -118,6 +135,68 @@ export default function ShotsPage() {
   }>(ENDPOINTS.history(params), fetcherWithMeta, { refreshInterval: 15_000, keepPreviousData: true });
 
   const data = payload?.data;
+  const reloadHistory = () =>
+    globalMutate(
+      (key) => typeof key === "string" && key.startsWith("/api/history"),
+      undefined,
+      { revalidate: true },
+    );
+  const onBulkSelectAll = (ids: string[], select: boolean) => {
+    setBulk((prev) => {
+      const next = new Set(prev);
+      if (select) ids.forEach((i) => next.add(i));
+      else ids.forEach((i) => next.delete(i));
+      return next;
+    });
+  };
+  async function runBulk(
+    action: "delete" | "tag_add" | "tag_remove",
+    tagsArg?: string[],
+  ) {
+    if (bulkBusy || bulk.size === 0) return;
+    setBulkBusy(true);
+    setBulkFlash(null);
+    try {
+      const body: Record<string, unknown> = {
+        ids: Array.from(bulk),
+        action,
+      };
+      if (action !== "delete") body.tags = tagsArg ?? [];
+      const res = await fetch("/api/history/bulk", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const txt = await res.text();
+      if (!res.ok) throw new Error(txt || `${res.status}`);
+      const json = JSON.parse(txt) as {
+        affected: number;
+        missing: string[];
+      };
+      const verb =
+        action === "delete"
+          ? "deleted"
+          : action === "tag_add"
+          ? "tagged"
+          : "untagged";
+      setBulkFlash({
+        kind: "ok",
+        msg: `${verb} ${json.affected} shot${json.affected === 1 ? "" : "s"}${
+          json.missing?.length ? `, ${json.missing.length} skipped` : ""
+        }.`,
+      });
+      if (action === "delete") setBulk(new Set());
+      setTagInput("");
+      await reloadHistory();
+    } catch (e) {
+      setBulkFlash({
+        kind: "err",
+        msg: (e as Error).message || "Bulk action failed.",
+      });
+    } finally {
+      setBulkBusy(false);
+    }
+  }
   const total = payload?.total ?? 0;
 
   const isSample = !!error || !Array.isArray(data) || data.length === 0;
@@ -299,6 +378,111 @@ export default function ShotsPage() {
         </div>
       </div>
 
+      {bulk.size > 0 && (
+        <div
+          className="panel p-3 flex flex-wrap items-center gap-3"
+          role="region"
+          aria-label="Bulk actions"
+        >
+          <span className="eyebrow">
+            {bulk.size} selected
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost text-[12px]"
+            onClick={() => setBulk(new Set())}
+            disabled={bulkBusy}
+          >
+            Clear
+          </button>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="text"
+              className="num text-[12px] px-2 py-1.5 rounded-sm border bg-white w-[160px]"
+              style={{ borderColor: "var(--color-rule)" }}
+              placeholder="tag1, tag2"
+              value={tagInput}
+              maxLength={96}
+              onChange={(e) => setTagInput(e.target.value)}
+              aria-label="Tags to add or remove"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && tagInput.trim()) {
+                  e.preventDefault();
+                  const tags = tagInput
+                    .split(",")
+                    .map((t) => t.trim())
+                    .filter(Boolean);
+                  if (tags.length) void runBulk("tag_add", tags);
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-ghost text-[12px]"
+              disabled={bulkBusy || !tagInput.trim()}
+              onClick={() => {
+                const tags = tagInput
+                  .split(",")
+                  .map((t) => t.trim())
+                  .filter(Boolean);
+                if (tags.length) void runBulk("tag_add", tags);
+              }}
+              title="Add these tags to every selected shot"
+            >
+              <Tag size={14} weight="duotone" /> Add tag
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost text-[12px]"
+              disabled={bulkBusy || !tagInput.trim()}
+              onClick={() => {
+                const tags = tagInput
+                  .split(",")
+                  .map((t) => t.trim())
+                  .filter(Boolean);
+                if (tags.length) void runBulk("tag_remove", tags);
+              }}
+              title="Remove these tags from every selected shot"
+            >
+              Remove tag
+            </button>
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost text-[12px]"
+            disabled={bulkBusy}
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Delete ${bulk.size} shot${bulk.size === 1 ? "" : "s"}? This cannot be undone.`,
+                )
+              ) {
+                void runBulk("delete");
+              }
+            }}
+            style={{ color: "#b91c1c" }}
+          >
+            <Trash size={14} weight="duotone" /> Delete
+          </button>
+          {bulkBusy && (
+            <span className="text-[11px] opacity-70" role="status">
+              Working...
+            </span>
+          )}
+          {bulkFlash && (
+            <span
+              role="status"
+              className="text-[11px]"
+              style={{
+                color: bulkFlash.kind === "ok" ? "#15803d" : "#b91c1c",
+              }}
+            >
+              {bulkFlash.msg}
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="panel overflow-hidden">
         {isLoading && !rows.length ? (
           <div className="p-3 flex flex-col gap-2" aria-label="Loading shots">
@@ -336,6 +520,35 @@ export default function ShotsPage() {
             <table className="tbl">
               <thead>
                 <tr>
+                  <th className="w-[28px]" aria-label="Bulk select">
+                    {(() => {
+                      const ids = rows.map((r) => r.id);
+                      const allSelected =
+                        ids.length > 0 && ids.every((i) => bulk.has(i));
+                      return (
+                        <button
+                          type="button"
+                          aria-label={
+                            allSelected
+                              ? "Clear page selection"
+                              : "Select all rows on this page"
+                          }
+                          onClick={() => onBulkSelectAll(ids, !allSelected)}
+                          className="inline-flex items-center justify-center w-5 h-5"
+                          disabled={isSample}
+                          title={
+                            allSelected ? "Clear page" : "Select page"
+                          }
+                        >
+                          {allSelected ? (
+                            <CheckSquare size={16} weight="duotone" />
+                          ) : (
+                            <Square size={16} weight="duotone" />
+                          )}
+                        </button>
+                      );
+                    })()}
+                  </th>
                   <th className="w-[28px]" aria-label="Select for compare" />
                   <th>ID</th>
                   <th>Class</th>
@@ -349,6 +562,15 @@ export default function ShotsPage() {
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} data-picked={picked.includes(r.id)}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={bulk.has(r.id)}
+                        onChange={() => toggleBulk(r.id)}
+                        disabled={isSample}
+                        aria-label={`Select ${shortId(r.id)} for bulk actions`}
+                      />
+                    </td>
                     <td>
                       <input
                         type="checkbox"
