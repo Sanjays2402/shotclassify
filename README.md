@@ -1,8 +1,46 @@
 # shotclassify
 
-Screenshot classifier with vision LLM, OCR, structured extraction, and action routing.
+Screenshot classifier with vision LLM, OCR, structured extraction, and action routing. Drop in an image, get back a category with confidence and a saved record you can browse, share, or pull back via API.
 
-## What's new: in-app notifications inbox
+## What's new: public /v1 REST API + docs page
+
+The programmatic surface now goes beyond `POST /v1/classify`. Customers
+with a `sk_live_` API key can also list and fetch their saved shots, and
+inspect their key's usage counters, without scraping the internal
+`/api/*` routes. A new `/api-docs` page renders copy-paste curl for every
+endpoint against the visitor's current origin, so the snippets run
+as-is. The header navigation links straight to it.
+
+New endpoints, all authenticated with `Authorization: Bearer sk_live_...`:
+
+- `GET /v1/shots` — list shots (filters: `limit`, `offset`, `category`, `since`, `until`, `min_confidence`, `q`, `tag`, `sort`; limit capped at 200)
+- `GET /v1/shots/{id}` — fetch one shot
+- `GET /v1/usage` — return the calling key's identity and usage count
+
+Query filtering, limit caps, and id validation live in pure helpers in
+`web/lib/v1-core.ts` and are covered by `web/lib/v1-core.test.mts`.
+
+### Try it
+
+```bash
+# Boot both services
+make dev   # or: pnpm --dir web dev  +  uvicorn services.api.main:app --port 7441
+
+# Create an API key in the UI
+open http://localhost:3000/keys
+open http://localhost:3000/api-docs
+
+# Then drive the API from the shell
+export SHOTCLASSIFY_KEY=sk_live_...
+
+curl -sS http://localhost:3000/v1/shots?limit=5 \
+  -H "Authorization: Bearer $SHOTCLASSIFY_KEY" | jq
+
+curl -sS http://localhost:3000/v1/usage \
+  -H "Authorization: Bearer $SHOTCLASSIFY_KEY" | jq
+```
+
+## Previously shipped: in-app notifications inbox
 
 A bell in the header lights up every time a classification finishes or a
 webhook delivery exhausts its retries. Click through to `/notifications`
