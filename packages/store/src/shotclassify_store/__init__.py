@@ -14,6 +14,14 @@ from .db import (
 )
 from .repository import Repository
 from .saved_views import SavedViewRepository
+from .retention import (
+    PurgeResult,
+    get_retention_days,
+    list_tenants_with_retention,
+    purge_expired_all_tenants,
+    purge_expired_for_tenant,
+    set_retention_days,
+)
 from .tenant_settings import (
     get_ip_allowlist,
     ip_matches_allowlist,
@@ -38,4 +46,10 @@ __all__ = [
     "get_ip_allowlist",
     "set_ip_allowlist",
     "ip_matches_allowlist",
+    "PurgeResult",
+    "get_retention_days",
+    "set_retention_days",
+    "purge_expired_for_tenant",
+    "purge_expired_all_tenants",
+    "list_tenants_with_retention",
 ]

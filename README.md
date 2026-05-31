@@ -2,6 +2,30 @@
 
 ShotClassify is a real-time screenshot classifier with confidence scores, OCR, history, share links, and a programmatic /v1 API.
 
+## What's new: per-tenant data retention policy
+
+Admins can now set a per-tenant retention window in days. Classifications older than the window are hard-deleted by the retention job. The audit log is preserved for compliance, blob files are unlinked, and the policy is enforced strictly per tenant so one workspace's policy can never touch another workspace's data. Set it to 0 or leave it empty to keep data forever, which matches the prior behavior so existing deployments are unaffected.
+
+Manage it in the dashboard at `/settings/security`, or via the admin API:
+
+```sh
+# Inspect the current policy for your tenant
+curl -s http://localhost:7441/v1/settings/security/retention \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" | jq
+
+# Set a 30-day retention window
+curl -s -X PUT http://localhost:7441/v1/settings/security/retention \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"retention_days":30}' | jq
+
+# Trigger an immediate purge for your tenant
+curl -s -X POST http://localhost:7441/v1/settings/security/retention/run \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" | jq
+```
+
+For scheduled enforcement, wire `shotclassify retention-purge` into cron or a systemd timer to sweep every tenant with a policy. Covered by `tests/test_retention_policy.py`.
+
 ## What's new: per-tenant IP allowlist
 
 Workspace admins can now restrict API and dashboard access to a set of CIDR ranges. The check runs as middleware before any route handler, is enforced per tenant (one tenant's allowlist cannot leak across to another), and skips healthcheck and metrics endpoints so kubelet probes never trip. Changes are written through the audit log.

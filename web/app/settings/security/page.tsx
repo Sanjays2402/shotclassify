@@ -11,6 +11,8 @@ import {
   Lock,
   Globe,
   CheckCircle,
+  Clock,
+  Broom,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -278,6 +280,225 @@ export default function SecuritySettingsPage() {
           and a server-side admin API key.
         </p>
       </section>
+
+      <RetentionSection />
     </div>
+  );
+}
+
+type RetentionResponse = {
+  tenant_id: string;
+  retention_days: number | null;
+  enabled: boolean;
+};
+
+function RetentionSection() {
+  const { data, error, isLoading, mutate } = useSWR<RetentionResponse>(
+    "/api/settings/security/retention",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+  const [draft, setDraft] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [purging, setPurging] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (data) setDraft(data.retention_days ? String(data.retention_days) : "");
+  }, [data?.retention_days]);
+
+  const current = data?.retention_days ?? null;
+  const parsed = draft.trim() === "" ? 0 : Number(draft);
+  const validNum = Number.isInteger(parsed) && parsed >= 0 && parsed <= 3650;
+  const dirty =
+    validNum && (parsed || 0) !== (current ?? 0);
+  const unauth = error && (error as ApiError).status === 401;
+  const forbidden = error && (error as ApiError).status === 403;
+
+  async function save() {
+    if (!dirty) return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      const r = await fetch("/api/settings/security/retention", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          retention_days: parsed === 0 ? null : parsed,
+        }),
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body?.detail || r.statusText);
+      setFlash({
+        kind: "ok",
+        msg: body.enabled
+          ? `Saved. Data older than ${body.retention_days} days will be purged.`
+          : "Saved. Retention disabled, data kept indefinitely.",
+      });
+      mutate();
+    } catch (e) {
+      setFlash({
+        kind: "err",
+        msg: e instanceof Error ? e.message : "Save failed.",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runNow() {
+    setPurging(true);
+    setFlash(null);
+    try {
+      const r = await fetch("/api/settings/security/retention/run", {
+        method: "POST",
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body?.detail || r.statusText);
+      setFlash({
+        kind: "ok",
+        msg: `Purge complete. Removed ${body.removed} classifications older than ${body.retention_days} days.`,
+      });
+    } catch (e) {
+      setFlash({
+        kind: "err",
+        msg: e instanceof Error ? e.message : "Purge failed.",
+      });
+    } finally {
+      setPurging(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-center gap-2">
+        <Clock size={20} weight="duotone" className="text-emerald-600" />
+        <h2 className="text-base font-semibold">Data retention policy</h2>
+      </div>
+      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+        Auto-purge classifications older than this many days. Audit log
+        entries are kept for compliance. Leave empty or set to 0 to keep
+        everything indefinitely.
+      </p>
+
+      {isLoading ? (
+        <div
+          className="mt-4 h-9 w-48 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900"
+          aria-label="Loading retention policy"
+        />
+      ) : unauth ? (
+        <p className="mt-4 text-sm text-amber-700 dark:text-amber-300">
+          Sign in to view the retention policy.
+        </p>
+      ) : forbidden ? (
+        <p className="mt-4 text-sm text-rose-700 dark:text-rose-300">
+          Admin role required.
+        </p>
+      ) : error ? (
+        <p className="mt-4 text-sm text-rose-700 dark:text-rose-300">
+          Could not load: {String((error as Error).message)}
+        </p>
+      ) : (
+        <>
+          <div className="mt-4 flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+              Retention window (days)
+              <input
+                type="number"
+                min={0}
+                max={3650}
+                step={1}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="0 = disabled"
+                className="w-40 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-zinc-700 dark:bg-zinc-950"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={save}
+              disabled={!dirty || !validNum || busy}
+              className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy ? (
+                <>
+                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  Saving
+                </>
+              ) : (
+                <>
+                  <FloppyDisk size={16} weight="duotone" /> Save policy
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={runNow}
+              disabled={!current || purging}
+              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:hover:bg-zinc-900"
+              title={current ? "Run a purge immediately" : "Set a policy first"}
+            >
+              {purging ? (
+                <>
+                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" />
+                  Purging
+                </>
+              ) : (
+                <>
+                  <Broom size={16} weight="duotone" /> Run purge now
+                </>
+              )}
+            </button>
+          </div>
+
+          {!validNum && draft !== "" && (
+            <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">
+              Enter a whole number between 0 and 3650.
+            </p>
+          )}
+
+          <div className="mt-3 text-xs text-zinc-500 dark:text-zinc-500">
+            Status:{" "}
+            {current ? (
+              <span className="font-medium text-emerald-700 dark:text-emerald-300">
+                Active, {current} days
+              </span>
+            ) : (
+              <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                Disabled, keep forever
+              </span>
+            )}
+            {data?.tenant_id ? (
+              <>
+                {" "}
+                ·{" "}
+                <span className="font-mono">tenant {data.tenant_id}</span>
+              </>
+            ) : null}
+          </div>
+
+          {flash ? (
+            <p
+              role="status"
+              className={
+                "mt-3 inline-flex items-center gap-1 text-xs " +
+                (flash.kind === "ok"
+                  ? "text-emerald-700 dark:text-emerald-300"
+                  : "text-rose-700 dark:text-rose-300")
+              }
+            >
+              {flash.kind === "ok" ? (
+                <CheckCircle size={14} weight="duotone" />
+              ) : (
+                <Warning size={14} weight="duotone" />
+              )}
+              {flash.msg}
+            </p>
+          ) : null}
+        </>
+      )}
+    </section>
   );
 }

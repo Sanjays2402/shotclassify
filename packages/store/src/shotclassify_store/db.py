@@ -116,6 +116,11 @@ class TenantSettingsRow(Base):
 
     tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     ip_allowlist: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Data retention policy: classifications older than ``retention_days``
+    # are purged by the retention job. NULL or <= 0 means keep forever.
+    # Enforced per tenant so different customers can pick their own
+    # compliance window without code changes.
+    retention_days: Mapped[int | None] = mapped_column(nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

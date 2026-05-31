@@ -96,6 +96,39 @@ def correct(item_id: str, category: str) -> None:
     console.print(f"[green]ok[/green] {item_id} -> {cat.value}")
 
 
+@app.command(name="retention-purge")
+def retention_purge(
+    tenant: str = typer.Option(
+        "",
+        "--tenant",
+        help="Tenant id to purge. Empty means every tenant with a policy.",
+    ),
+) -> None:
+    """Purge classifications that exceed each tenant's retention window.
+
+    Intended to be wired into cron / a systemd timer for daily runs.
+    Per-tenant scoping is enforced in the store layer; this command
+    cannot leak data between tenants.
+    """
+    from shotclassify_store import (
+        purge_expired_all_tenants,
+        purge_expired_for_tenant,
+    )
+
+    if tenant:
+        results = [purge_expired_for_tenant(tenant)]
+    else:
+        results = purge_expired_all_tenants()
+    if not results:
+        console.print("[yellow]no tenants with a retention policy[/yellow]")
+        return
+    for r in results:
+        console.print(
+            f"[green]tenant[/green] {r.tenant_id} "
+            f"days={r.retention_days} removed={r.removed}"
+        )
+
+
 @app.command()
 def serve() -> None:
     """Run the API server (uvicorn)."""
