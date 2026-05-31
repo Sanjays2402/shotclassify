@@ -2,6 +2,39 @@
 
 > Real-time screenshot classifier with confidence scoring, OCR, history, sharing, API keys, webhooks, and a Cmd+K command palette.
 
+## What's new: activity digest
+
+A real activity recap lives at `/digest`. Pick a 7, 14, or 30 day window and
+you get total shots, average confidence, a daily sparkline, a breakdown by
+category, and your top-confidence results. "Send to inbox" writes a real
+RFC 5322 multipart message to `storage/digest_outbox/` that you can pipe to
+an SMTP relay or inspect directly. Set `DIGEST_TO` and `DIGEST_FROM` in the
+environment to control headers; wire `sendmail` against the outbox file to
+actually deliver.
+
+Try it:
+
+```sh
+cd web && npm run dev
+# UI
+open http://localhost:3000/digest
+
+# JSON preview (includes rendered text + html)
+curl -s 'http://localhost:3000/api/me/digest?days=7' | jq '.summary | {total_shots, avg_confidence, by_category}'
+
+# Plaintext or HTML rendering
+curl -s 'http://localhost:3000/api/me/digest?days=7&format=text'
+curl -s 'http://localhost:3000/api/me/digest?days=7&format=html'
+
+# Generate an .eml in storage/digest_outbox
+curl -s -XPOST http://localhost:3000/api/me/digest \
+  -H 'content-type: application/json' \
+  -d '{"days":7,"to":"you@example.com"}' | jq
+```
+
+Pure aggregation lives in `web/lib/digest.ts` and is covered by
+`web/lib/digest.test.mts` (`npm test`).
+
 ## What's new: global command palette (Cmd/Ctrl+K)
 
 Hit `⌘K` (or `Ctrl+K`, or `/` outside an input) from any page to open the
