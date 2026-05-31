@@ -16,6 +16,7 @@ from shotclassify_store import (
     SESSION_TTL_MIN_MINUTES,
     get_api_key_ttl_policy,
     get_ip_allowlist,
+    get_mfa_policy,
     get_privacy_settings,
     get_retention_days,
     get_session_policy,
@@ -24,6 +25,7 @@ from shotclassify_store import (
     purge_expired_for_tenant,
     set_api_key_ttl_policy,
     set_ip_allowlist,
+    set_mfa_policy,
     set_privacy_settings,
     set_retention_days,
     set_session_policy,
@@ -454,3 +456,64 @@ def put_api_key_ttl_route(
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return cfg.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Workspace-wide MFA enrolment policy
+# ---------------------------------------------------------------------------
+
+
+@router.get("/mfa-policy", dependencies=[require_role("admin")])
+def get_mfa_policy_route(request: Request) -> dict:
+    """Return the workspace-wide MFA enrolment policy.
+
+    When ``required`` is True, every member must have a confirmed TOTP
+    credential before they can use any /v1 cookie-authenticated endpoint
+    other than the enrolment surface (``/v1/mfa/*``, ``/v1/me``,
+    ``/v1/sessions``, logout). API-key callers are not affected.
+    """
+    tenant_id = _tenant(request)
+    return get_mfa_policy(tenant_id).to_dict()
+
+
+@router.put(
+    "/mfa-policy",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_mfa_policy_route(request: Request, payload: dict = Body(...)) -> dict:
+    """Set or clear the workspace-wide member MFA enrolment requirement.
+
+    Body: ``{"required": true|false}``. Turning the policy on requires
+    the calling admin to already have a confirmed TOTP credential and a
+    fresh MFA step-up so an admin cannot lock themselves out by enabling
+    enforcement from a non-MFA session. Lowering to ``false`` clears the
+    policy and members go back to the per-action step-up only model.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict) or "required" not in payload:
+        raise HTTPException(422, "Body must be {\"required\": bool}.")
+    raw = payload["required"]
+    if not isinstance(raw, bool):
+        raise HTTPException(422, "Field 'required' must be a boolean.")
+    actor = getattr(request.state, "principal", None)
+    # Defensive: refuse to enable the policy if the actor enabling it
+    # does not have a confirmed credential themselves. They would
+    # otherwise be locked out of every non-allowlisted route on the
+    # next request. ``require_mfa_step_up`` above already proves that
+    # they have a confirmed credential, but we re-check explicitly so
+    # the failure surface is a 422 with a clear message rather than a
+    # later 403 they have to debug.
+    if raw:
+        from shotclassify_store import mfa_store
+
+        if not mfa_store.is_confirmed(actor or ""):
+            raise HTTPException(
+                422,
+                "Enrol TOTP under Settings -> Security before enabling "
+                "workspace-wide MFA.",
+            )
+    try:
+        policy = set_mfa_policy(tenant_id, required=raw, updated_by=actor)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return policy.to_dict()

@@ -289,6 +289,7 @@ export default function SecuritySettingsPage() {
       <TenantOidcSection />
       <SessionPolicySection />
       <ApiKeyTtlPolicySection />
+      <MfaPolicySection />
       <SessionsSection />
     </div>
   );
@@ -1657,6 +1658,216 @@ function ApiKeyTtlPolicySection() {
               {flash.msg}
             </p>
           ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+type MfaPolicyResponse = {
+  tenant_id: string;
+  required: boolean;
+};
+
+function MfaPolicySection() {
+  const { data, error, isLoading, mutate } = useSWR<MfaPolicyResponse>(
+    "/api/settings/security/mfa-policy",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+
+  const status = error as ApiError | undefined;
+  const unauth = status?.status === 401;
+  const forbidden = status?.status === 403;
+
+  const [required, setRequired] = useState<boolean>(false);
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(
+    null,
+  );
+  const [mfaToken, setMfaToken] = useState("");
+
+  useEffect(() => {
+    if (data) setRequired(Boolean(data.required));
+  }, [data?.required]);
+
+  const dirty = useMemo(() => {
+    if (!data) return false;
+    return Boolean(required) !== Boolean(data.required);
+  }, [data, required]);
+
+  async function save() {
+    if (!data) return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+      };
+      if (mfaToken.trim()) headers["x-mfa-token"] = mfaToken.trim();
+      const res = await fetch("/api/settings/security/mfa-policy", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ required }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        let detail = text;
+        try {
+          const j = JSON.parse(text);
+          if (j?.detail) {
+            detail =
+              typeof j.detail === "string"
+                ? j.detail
+                : j.detail.detail || JSON.stringify(j.detail);
+          }
+        } catch {
+          /* not JSON */
+        }
+        if (res.status === 401) {
+          setFlash({
+            kind: "err",
+            msg: "Re-enter your authenticator code in the MFA box and retry.",
+          });
+        } else {
+          setFlash({
+            kind: "err",
+            msg: detail || `Save failed (${res.status})`,
+          });
+        }
+        setBusy(false);
+        return;
+      }
+      const next: MfaPolicyResponse = await res.json();
+      setFlash({
+        kind: "ok",
+        msg: next.required
+          ? "Workspace-wide MFA enrolment is now required."
+          : "Workspace-wide MFA requirement cleared.",
+      });
+      setMfaToken("");
+      await mutate(next, { revalidate: false });
+    } catch (e) {
+      setFlash({ kind: "err", msg: (e as Error).message || "Save failed" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-center gap-2 mb-2">
+        <Lock size={20} weight="duotone" className="text-violet-600" />
+        <h2 className="text-base font-semibold">Multi-factor authentication</h2>
+        {data?.tenant_id ? (
+          <span className="ml-auto rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+            tenant: {data.tenant_id}
+          </span>
+        ) : null}
+      </div>
+      <p className="text-sm text-zinc-500 mb-4">
+        Require every member of this workspace to enrol a TOTP authenticator
+        before they can use the API or dashboard. Members without a confirmed
+        credential get a 403 on every route except the enrolment surface
+        (Settings, sessions, sign out). Machine integrations using scoped API
+        keys are not affected.
+      </p>
+
+      {isLoading ? (
+        <div className="space-y-2" aria-busy="true">
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+        </div>
+      ) : unauth ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Sign in to manage the MFA policy.
+        </div>
+      ) : forbidden ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Admin role required to change the MFA policy.
+        </div>
+      ) : !data ? (
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+          Could not load the MFA policy.
+        </div>
+      ) : (
+        <>
+          <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-zinc-500">Current:</span>
+            <span
+              className={
+                "rounded-md px-2 py-1 font-mono text-xs " +
+                (data.required
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                  : "bg-zinc-100 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-400")
+              }
+            >
+              {data.required ? "REQUIRED" : "OPTIONAL"}
+            </span>
+          </div>
+
+          <label className="mb-3 flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={required}
+              onChange={(e) => setRequired(e.target.checked)}
+              aria-label="Require every member to enrol TOTP MFA"
+            />
+            <span>
+              Require every workspace member to enrol TOTP before they can use
+              the API or dashboard.
+            </span>
+          </label>
+
+          <div className="mb-4 flex flex-col gap-1">
+            <label
+              htmlFor="mfa-policy-token"
+              className="text-xs font-medium text-zinc-600 dark:text-zinc-400"
+            >
+              Your authenticator code (step-up confirmation)
+            </label>
+            <input
+              id="mfa-policy-token"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={10}
+              value={mfaToken}
+              onChange={(e) => setMfaToken(e.target.value)}
+              placeholder="123456"
+              className="w-40 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-mono shadow-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-zinc-700 dark:bg-zinc-950"
+            />
+            <span className="text-xs text-zinc-500">
+              Required by the API to confirm this change. Enrol your own TOTP
+              under Settings first if you have not already.
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={save}
+              disabled={!dirty || busy}
+              className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-zinc-300 dark:disabled:bg-zinc-700"
+            >
+              <FloppyDisk size={16} weight="duotone" />
+              {busy ? "Saving" : "Save"}
+            </button>
+            {flash ? (
+              <span
+                className={
+                  "text-xs " +
+                  (flash.kind === "ok"
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-red-600 dark:text-red-400")
+                }
+                role="status"
+              >
+                {flash.msg}
+              </span>
+            ) : null}
+          </div>
         </>
       )}
     </section>

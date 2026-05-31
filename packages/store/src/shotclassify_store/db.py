@@ -226,6 +226,19 @@ class TenantSettingsRow(Base):
     # clamps the successor's expiry on ``rotate``. Recorded changes go
     # through the audit log via the security_settings route.
     api_key_max_ttl_days: Mapped[int | None] = mapped_column(nullable=True)
+    # Workspace-wide MFA enrollment policy. When True, every cookie-
+    # authenticated request from a member of this tenant must have a
+    # confirmed TOTP credential or the auth middleware rejects the call
+    # with 403 ``mfa_enrollment_required``. A small allowlist of paths
+    # (the MFA enrolment endpoints, the calling-principal endpoint, the
+    # active-sessions list, logout, and healthchecks) is exempt so a
+    # member without a second factor can still complete enrolment
+    # without being locked out of the UI flow that lets them enrol.
+    # NULL/False means no policy and existing behaviour (per-action MFA
+    # step-up only on admin mutations).
+    mfa_required_for_members: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -633,6 +646,11 @@ def init_db() -> None:
                 if "api_key_max_ttl_days" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN api_key_max_ttl_days INTEGER"
+                    ))
+                # 0024 workspace-wide MFA enrolment policy.
+                if "mfa_required_for_members" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN mfa_required_for_members BOOLEAN NOT NULL DEFAULT 0"
                     ))
             if insp.has_table("sessions"):
                 scols = {c["name"] for c in insp.get_columns("sessions")}

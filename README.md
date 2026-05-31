@@ -2,7 +2,31 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
-## What's new: security incident registry and per-tenant notification contacts
+## What's new: workspace-wide MFA enrolment policy
+
+Per-action MFA step-up already gated destructive admin mutations, but it never forced a viewer or operator who only reads data to enrol a second factor. That fails SOC 2 CC6.6, ISO 27001 A.9.4.2, and HIPAA 164.308(a)(5)(ii)(D), which all expect "every human user authenticates with multiple factors". An admin can now flip `mfa_required_for_members` on the workspace and every cookie-authenticated request from a member without a confirmed TOTP credential gets `HTTP 403 mfa_enrollment_required` until they enrol. A small allowlist (`/v1/mfa/*`, `/v1/me/*`, `/v1/sessions`, `/auth/logout`, healthchecks) stays open so members can complete enrolment without being locked out of the very pages that let them comply. API keys are exempt because they cover machine-to-machine integrations.
+
+The enable path itself is guarded: the API refuses to turn the policy on if the calling admin does not already have a confirmed credential and a fresh step-up, so an admin cannot accidentally lock themselves out from a non-MFA session.
+
+### Try it
+
+With the API running on `http://127.0.0.1:7441` and an admin cookie session that has a confirmed TOTP credential and a recent MFA step-up:
+
+```sh
+# Inspect the current policy.
+curl -s -b "sc_session=$SC_SESSION" \
+  http://127.0.0.1:7441/v1/settings/security/mfa-policy
+
+# Enable the policy for the resolved workspace.
+curl -s -b "sc_session=$SC_SESSION" -X PUT \
+  -H 'content-type: application/json' \
+  -d '{"required": true}' \
+  http://127.0.0.1:7441/v1/settings/security/mfa-policy
+```
+
+In the UI: Settings -> Security -> Multi-factor authentication. The toggle lives next to Session lifetime and API key TTL.
+
+## Previous: security incident registry and per-tenant notification contacts
 
 Enterprise procurement and DPA reviews always ask the same question: how will you notify us of a security incident, and where can we see your history? Both halves now ship in-product.
 

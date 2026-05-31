@@ -804,3 +804,76 @@ def set_api_key_ttl_policy(
             row.updated_by = updated_by
         s.commit()
     return ApiKeyTtlPolicy(tenant_id=tenant_id, max_ttl_days=norm)
+
+
+# --- Workspace-wide MFA enrolment policy ---------------------------------
+
+
+@dataclass(frozen=True)
+class MfaPolicy:
+    """Per-tenant policy: must every member have a confirmed TOTP credential?
+
+    When ``required`` is True the API auth middleware refuses cookie
+    sessions whose principal does not have a confirmed MFA credential,
+    except on a small allowlist of paths needed to complete enrolment
+    (the ``/v1/mfa/*`` endpoints, ``/v1/me``, ``/v1/sessions``, logout,
+    and the unauth healthchecks). API-key callers are exempt because
+    machine integrations cover the m2m surface with scoped keys.
+    """
+
+    tenant_id: str
+    required: bool
+
+    def to_dict(self) -> dict:
+        return {"tenant_id": self.tenant_id, "required": self.required}
+
+
+def get_mfa_policy(tenant_id: str | None) -> MfaPolicy:
+    """Return the MFA enrolment policy for ``tenant_id``.
+
+    Missing tenant or missing row return ``required=False`` so existing
+    deployments keep working unchanged until an admin opts in.
+    """
+    if not tenant_id:
+        return MfaPolicy(tenant_id="", required=False)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return MfaPolicy(tenant_id=tenant_id, required=False)
+        return MfaPolicy(
+            tenant_id=tenant_id,
+            required=bool(getattr(row, "mfa_required_for_members", False)),
+        )
+
+
+def set_mfa_policy(
+    tenant_id: str, *, required: bool, updated_by: str | None
+) -> MfaPolicy:
+    """Persist the per-tenant member MFA enrolment requirement."""
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    if not isinstance(required, bool):
+        raise ValueError("required must be a boolean")
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                mfa_required_for_members=required,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.mfa_required_for_members = required
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return MfaPolicy(tenant_id=tenant_id, required=required)

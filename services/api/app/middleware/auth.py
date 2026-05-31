@@ -20,6 +20,27 @@ from starlette.responses import JSONResponse
 
 from .rbac import role_for_api_key, role_for_login
 
+# Paths exempt from the workspace-wide MFA enrolment policy. A member
+# who has not yet enrolled MFA can still hit these so they can complete
+# enrolment, see who they are signed in as, list/revoke their sessions,
+# and sign out. Everything else returns 403 mfa_enrollment_required
+# until the credential is confirmed. Healthchecks live in PUBLIC_PATHS
+# and never reach this check.
+MFA_ENROLLMENT_EXEMPT_PREFIXES: tuple[str, ...] = (
+    "/v1/mfa",
+    "/v1/me",
+    "/v1/sessions",
+    "/auth/logout",
+)
+
+
+def _mfa_path_exempt(path: str) -> bool:
+    """True when ``path`` is allowed under the MFA enrolment policy."""
+    for prefix in MFA_ENROLLMENT_EXEMPT_PREFIXES:
+        if path == prefix or path.startswith(prefix + "/"):
+            return True
+    return False
+
 PUBLIC_PATHS = {
     "/",
     "/healthz",
@@ -216,6 +237,32 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
                     info.tenant_id, info.principal
                 )
                 request.state.role = member_role or role_for_login(info.principal)
+                # Workspace-wide MFA enrolment policy. When the tenant has
+                # opted in, every cookie session must be backed by a
+                # confirmed TOTP credential. A small allowlist of paths
+                # is exempt so a member without a second factor can still
+                # navigate to the enrolment UI and complete it without
+                # being locked out of the very pages that let them comply.
+                if info.tenant_id:
+                    from shotclassify_store import mfa_store
+                    from shotclassify_store.tenant_settings import get_mfa_policy
+
+                    mp = get_mfa_policy(info.tenant_id)
+                    if mp.required and not _mfa_path_exempt(request.url.path):
+                        if not mfa_store.is_confirmed(info.principal):
+                            return JSONResponse(
+                                {
+                                    "error": "mfa_enrollment_required",
+                                    "detail": (
+                                        "This workspace requires every member "
+                                        "to enrol a second factor. Visit "
+                                        "Settings -> Security -> Multi-factor "
+                                        "authentication to enrol before "
+                                        "continuing."
+                                    ),
+                                },
+                                status_code=403,
+                            )
                 return await call_next(request)
         return JSONResponse(
             {"error": "unauthorized", "detail": "Provide X-API-Key or login via /auth/login."},
