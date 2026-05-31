@@ -290,6 +290,7 @@ export default function SecuritySettingsPage() {
       <SessionPolicySection />
       <ApiKeyTtlPolicySection />
       <MfaPolicySection />
+      <CorsOriginsSection />
       <SessionsSection />
     </div>
   );
@@ -2049,6 +2050,209 @@ function MfaPolicySection() {
               </span>
             ) : null}
           </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+type CorsOriginsResponse = {
+  tenant_id: string;
+  origins: string[];
+};
+
+function looksLikeOrigin(s: string): boolean {
+  const v = s.trim();
+  if (!v) return false;
+  return /^(https?):\/\/[^\s/?#]+(:\d+)?\/?$/i.test(v);
+}
+
+function CorsOriginsSection() {
+  const { data, error, isLoading, mutate } = useSWR<CorsOriginsResponse>(
+    "/api/settings/security/cors-origins",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+
+  const [draft, setDraft] = useState<string[]>([]);
+  const [newEntry, setNewEntry] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (data?.origins) setDraft(data.origins);
+  }, [data?.origins]);
+
+  const status = error as ApiError | undefined;
+  const forbidden = status?.status === 403;
+  const unauth = status?.status === 401;
+
+  const dirty = useMemo(() => {
+    const a = (data?.origins ?? []).slice().sort().join("|");
+    const b = draft.slice().sort().join("|");
+    return a !== b;
+  }, [data?.origins, draft]);
+
+  function addEntry() {
+    const v = newEntry.trim();
+    if (!v) return;
+    if (!looksLikeOrigin(v)) {
+      setFlash({ kind: "err", msg: "Use scheme://host[:port], for example https://app.acme.com." });
+      return;
+    }
+    if (draft.includes(v)) {
+      setFlash({ kind: "err", msg: "That origin is already in the list." });
+      return;
+    }
+    setDraft([...draft, v]);
+    setNewEntry("");
+    setFlash(null);
+  }
+
+  function removeEntry(idx: number) {
+    setDraft(draft.filter((_, i) => i !== idx));
+  }
+
+  async function save() {
+    setBusy(true);
+    setFlash(null);
+    try {
+      const res = await fetch("/api/settings/security/cors-origins", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ origins: draft }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setFlash({
+          kind: "err",
+          msg: typeof body?.detail === "string" ? body.detail : `Save failed (${res.status}).`,
+        });
+        return;
+      }
+      setFlash({
+        kind: "ok",
+        msg: body.origins.length
+          ? `Saved. ${body.origins.length} origin${body.origins.length === 1 ? "" : "s"} allowed.`
+          : "Saved. Browser-origin enforcement disabled.",
+      });
+      await mutate(body, { revalidate: false });
+    } catch (e) {
+      setFlash({ kind: "err", msg: e instanceof Error ? e.message : "Save failed." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <header className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-base font-semibold">
+            <Globe size={18} weight="duotone" /> Browser origin allowlist
+          </h2>
+          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+            Restrict which web origins can call this workspace from a browser.
+            Server to server callers that omit the Origin header are not
+            affected. Leave empty to disable.
+          </p>
+        </div>
+      </header>
+
+      {unauth ? (
+        <p className="text-sm text-zinc-500">Sign in to manage this setting.</p>
+      ) : forbidden ? (
+        <p className="text-sm text-zinc-500">Workspace admin role required.</p>
+      ) : isLoading ? (
+        <div className="space-y-2" aria-busy>
+          <div className="h-8 animate-pulse rounded bg-zinc-100 dark:bg-zinc-900" />
+          <div className="h-8 animate-pulse rounded bg-zinc-100 dark:bg-zinc-900" />
+        </div>
+      ) : error ? (
+        <p className="text-sm text-red-600 dark:text-red-400">
+          Could not load origin allowlist.
+        </p>
+      ) : (
+        <>
+          <ul className="mb-3 divide-y divide-zinc-100 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+            {draft.length === 0 ? (
+              <li className="px-3 py-4 text-sm text-zinc-500">
+                No origins configured. Browser-origin enforcement is off for
+                this workspace.
+              </li>
+            ) : (
+              draft.map((origin, i) => (
+                <li
+                  key={`${origin}-${i}`}
+                  className="flex items-center justify-between gap-3 px-3 py-2"
+                >
+                  <code className="break-all text-sm">{origin}</code>
+                  <button
+                    type="button"
+                    onClick={() => removeEntry(i)}
+                    className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                    aria-label={`Remove ${origin}`}
+                  >
+                    <Trash size={14} weight="duotone" /> Remove
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              value={newEntry}
+              onChange={(e) => setNewEntry(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addEntry();
+                }
+              }}
+              placeholder="https://app.acme.com"
+              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              aria-label="Add browser origin"
+            />
+            <button
+              type="button"
+              onClick={addEntry}
+              className="inline-flex items-center justify-center gap-1 rounded-md border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+            >
+              <Plus size={14} weight="duotone" /> Add
+            </button>
+          </div>
+
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy || !dirty}
+              className="inline-flex items-center gap-1 rounded-md bg-zinc-900 px-3 py-2 text-sm text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+            >
+              <FloppyDisk size={16} weight="duotone" />{" "}
+              {busy ? "Saving" : "Save changes"}
+            </button>
+            {flash ? (
+              <span
+                className={
+                  "text-xs " +
+                  (flash.kind === "ok"
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-red-600 dark:text-red-400")
+                }
+                role="status"
+              >
+                {flash.msg}
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-3 text-xs text-zinc-500">
+            Changes take effect on the next request. Saving requires a recent
+            MFA verification.
+          </p>
         </>
       )}
     </section>

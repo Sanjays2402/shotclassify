@@ -949,3 +949,135 @@ def set_mfa_policy(
             row.updated_by = updated_by
         s.commit()
     return MfaPolicy(tenant_id=tenant_id, required=required)
+
+
+# --- Browser-origin (CORS) allowlist --------------------------------------
+
+# Schemes accepted in a per-tenant browser-origin allowlist. ``file://`` and
+# arbitrary custom schemes are rejected so we never allow a packaged
+# Electron build or local HTML file to call the API of an enforced tenant
+# unless an admin explicitly opts in via a future scheme allowlist.
+_ORIGIN_SCHEMES: tuple[str, ...] = ("https", "http")
+
+
+def _normalize_origin(raw: str) -> str:
+    """Validate and canonicalize a single browser ``Origin`` value.
+
+    Accepts ``scheme://host[:port]``. Strips trailing slashes, lowercases
+    scheme and host, drops the default port for the scheme. Raises
+    ``ValueError`` on anything that is not a valid web origin so the API
+    layer can 422 with a useful message.
+    """
+    if not isinstance(raw, str):
+        raise ValueError(f"origin must be a string: {raw!r}")
+    s = raw.strip()
+    if not s:
+        raise ValueError("origin must not be empty")
+    if "://" not in s:
+        raise ValueError(f"origin must be scheme://host[:port], got {raw!r}")
+    scheme, rest = s.split("://", 1)
+    scheme = scheme.lower()
+    if scheme not in _ORIGIN_SCHEMES:
+        raise ValueError(
+            f"origin scheme must be one of {_ORIGIN_SCHEMES}, got {scheme!r}"
+        )
+    # Strip path / query / fragment. Browsers never send them in Origin
+    # but admins paste full URLs all the time.
+    host_port = rest.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    if not host_port:
+        raise ValueError(f"origin must include a host: {raw!r}")
+    if ":" in host_port:
+        host, port_str = host_port.rsplit(":", 1)
+        if not port_str.isdigit():
+            raise ValueError(f"origin port must be numeric: {raw!r}")
+        port = int(port_str)
+        if not (1 <= port <= 65535):
+            raise ValueError(f"origin port out of range: {raw!r}")
+        default = 443 if scheme == "https" else 80
+        if port == default:
+            host_port = host
+    host = host_port.split(":", 1)[0].lower()
+    if not host:
+        raise ValueError(f"origin must include a host: {raw!r}")
+    # No wildcards. Tenants who want "*" should not configure a policy at
+    # all. We explicitly refuse "*" so an admin cannot accidentally
+    # disable the control while believing they enabled it.
+    if "*" in host:
+        raise ValueError("wildcard hosts are not permitted in the origin allowlist")
+    if ":" in host_port:
+        return f"{scheme}://{host_port.lower()}"
+    return f"{scheme}://{host}"
+
+
+def _normalize_origins(raw: list[str] | None) -> list[str]:
+    if not raw:
+        return []
+    if len(raw) > 64:
+        raise ValueError("at most 64 origins are allowed per tenant")
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        norm = _normalize_origin(item)
+        if norm not in seen:
+            seen.add(norm)
+            out.append(norm)
+    return out
+
+
+def get_cors_origins(tenant_id: str) -> list[str]:
+    """Return the browser-origin allowlist for ``tenant_id``.
+
+    Empty list means no policy: every browser origin is accepted (the
+    deployment-level CORS middleware still applies). Server-side callers
+    that omit the ``Origin`` header are never affected.
+    """
+    if not tenant_id:
+        return []
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None or not row.cors_origins:
+            return []
+        return list(row.cors_origins)
+
+
+def set_cors_origins(
+    tenant_id: str, origins: list[str], updated_by: str | None
+) -> list[str]:
+    """Persist a normalized browser-origin allowlist for ``tenant_id``."""
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    normalized = _normalize_origins(origins)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                cors_origins=normalized,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.cors_origins = normalized
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return normalized
+
+
+def origin_matches_allowlist(origin: str, allowlist: list[str]) -> bool:
+    """Return True when ``origin`` matches any normalized allowlist entry."""
+    if not origin or not allowlist:
+        return False
+    try:
+        normalized = _normalize_origin(origin)
+    except ValueError:
+        return False
+    return normalized in set(allowlist)

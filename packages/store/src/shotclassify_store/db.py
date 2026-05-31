@@ -254,6 +254,17 @@ class TenantSettingsRow(Base):
     mfa_required_for_members: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    # Per-tenant browser-origin allowlist for the dashboard. When set, every
+    # cookie-authenticated request that arrives with an ``Origin`` header
+    # (i.e. a browser cross-origin call to the API) must come from one of
+    # the listed origins or it is rejected with HTTP 403
+    # ``origin_not_allowed`` before the route handler runs. Server-to-server
+    # traffic (no ``Origin`` header, or ``X-API-Key`` callers) is unaffected
+    # so SDK / CI integrations keep working. NULL or empty list means no
+    # policy and existing behaviour. Complements the IP allowlist (which
+    # covers server-side callers) with a browser-side control that
+    # procurement teams ask for under SOC 2 CC6.6.
+    cors_origins: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -755,6 +766,11 @@ def init_db() -> None:
                 if "mfa_required_for_members" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN mfa_required_for_members BOOLEAN NOT NULL DEFAULT 0"
+                    ))
+                # 0025 per-tenant browser-origin (CORS) allowlist.
+                if "cors_origins" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN cors_origins JSON"
                     ))
             if insp.has_table("sessions"):
                 scols = {c["name"] for c in insp.get_columns("sessions")}

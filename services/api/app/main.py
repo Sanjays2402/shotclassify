@@ -21,6 +21,7 @@ from .middleware.audit import AuditLogMiddleware
 from .middleware.auth import APIKeyAndSessionAuth
 from .middleware.ip_allowlist import IPAllowlistMiddleware
 from .middleware.metrics import PrometheusMiddleware
+from .middleware.origin_allowlist import OriginAllowlistMiddleware
 from .middleware.rate_limit import RateLimitMiddleware
 from .middleware.request_id import RequestIdMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
@@ -109,6 +110,11 @@ def create_app() -> FastAPI:
     # Starlette's outer-to-inner add semantics that means add it BEFORE
     # TenantResolutionMiddleware so it ends up more inner.
     app.add_middleware(IPAllowlistMiddleware)
+    # Per-tenant browser-origin allowlist. Like the IP allowlist, this
+    # depends on ``request.state.tenant_id`` so it must run after tenant
+    # resolution on the inbound path -> add it BEFORE
+    # TenantResolutionMiddleware so it ends up more inner.
+    app.add_middleware(OriginAllowlistMiddleware)
     # Tenant resolution must run AFTER auth on the inbound path so it sees
     # request.state.principal/role. Starlette runs LAST-added middleware
     # OUTERMOST, so add Tenant before Auth (Tenant is inner -> runs after

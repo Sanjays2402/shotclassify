@@ -2,6 +2,27 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: per-tenant browser-origin allowlist
+
+The workspace IP allowlist already gates server-to-server callers, but two tenants behind the same corporate egress IP cannot use it to keep each other's web apps off their data. Enterprise procurement (SOC 2 CC6.6, most security questionnaires) now expects a per-workspace browser-origin allowlist as a separate control. ShotClassify adds one: workspace admins can list the exact `scheme://host[:port]` values that are allowed to call the API from a browser, and `OriginAllowlistMiddleware` rejects any request that carries a non-matching `Origin` header with HTTP 403 `origin_not_allowed` before the route handler runs. Server-to-server callers (SDKs, curl, CI) never send an `Origin` so they are unaffected, which is the same backward-compatible default the IP allowlist uses. Manage at `Settings -> Security -> Browser origin allowlist` or via `GET/PUT /v1/settings/security/cors-origins`. Admin only, MFA step-up on writes, audit-logged by the existing tamper-evident chain. Origins are normalised (lowercased scheme and host, default ports stripped, wildcards rejected) so an admin cannot accidentally weaken the policy with a typo. Coverage in `tests/test_origin_allowlist.py`.
+
+Try it locally:
+
+```sh
+make api   # http://localhost:7441
+# Configure the allowlist for the caller's tenant
+curl -s -X PUT http://localhost:7441/v1/settings/security/cors-origins \
+  -H 'content-type: application/json' \
+  -H 'X-API-Key: <admin-key>' \
+  -d '{"origins":["https://app.acme.example"]}'
+# A browser-style request from a non-listed origin is rejected
+curl -i http://localhost:7441/v1/history \
+  -H 'X-API-Key: <admin-key>' \
+  -H 'Origin: https://evil.example'
+```
+
+In the UI: `http://localhost:3000/settings/security` (after `make web`).
+
 ## What's new: RFC 9116 /.well-known/security.txt
 
 Enterprise procurement and bug-bounty scanners (HackerOne, Intigriti, BugCrowd, OneTrust, Vanta-driven reviews) probe `/.well-known/security.txt` on every target host and flag its absence as a finding. ShotClassify now serves a spec-compliant file directly from the API tier, exempt from auth, the IP allowlist, and the rate limiter, with a rolling `Expires:` value recomputed on every request so operators never ship a build just to refresh the date. Bare-email contacts are widened to `mailto:`, language tags are normalised, and the legacy unprefixed `/security.txt` alias is answered for older scanners. The web tier rewrites the same path through to the API so the file is reachable on whichever host the buyer points their scanner at. A top-level `SECURITY.md` documents the vulnerability disclosure policy, response targets, what is in and out of scope, and signed-commits guidance. `.github/CODEOWNERS` pins owner review on every authentication, authorization, audit, MFA, sessions, API-key, SSO, webhook, and migration surface.

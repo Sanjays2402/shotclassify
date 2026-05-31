@@ -17,6 +17,7 @@ from shotclassify_store import (
     SESSION_IDLE_MAX_MINUTES,
     SESSION_IDLE_MIN_MINUTES,
     get_api_key_ttl_policy,
+    get_cors_origins,
     get_ip_allowlist,
     get_mfa_policy,
     get_privacy_settings,
@@ -26,6 +27,7 @@ from shotclassify_store import (
     get_tenant_oidc,
     purge_expired_for_tenant,
     set_api_key_ttl_policy,
+    set_cors_origins,
     set_ip_allowlist,
     set_mfa_policy,
     set_privacy_settings,
@@ -81,6 +83,43 @@ def put_ip_allowlist_route(
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return {"tenant_id": tenant_id, "cidrs": normalized}
+
+
+@router.get("/cors-origins", dependencies=[require_role("admin")])
+def get_cors_origins_route(request: Request) -> dict:
+    """Return the browser-origin allowlist for the caller's tenant."""
+    tenant_id = _tenant(request)
+    return {
+        "tenant_id": tenant_id,
+        "origins": get_cors_origins(tenant_id),
+    }
+
+
+@router.put(
+    "/cors-origins",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_cors_origins_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Replace the browser-origin allowlist for the caller's tenant.
+
+    Empty list disables the policy (no browser-origin enforcement; the
+    deployment-level CORS allowlist still applies).
+    """
+    tenant_id = _tenant(request)
+    raw = payload.get("origins")
+    if not isinstance(raw, list):
+        raise HTTPException(422, "Field 'origins' must be a list of origin strings.")
+    if len(raw) > 64:
+        raise HTTPException(422, "At most 64 origins are supported per tenant.")
+    actor = getattr(request.state, "principal", None)
+    try:
+        normalized = set_cors_origins(tenant_id, raw, updated_by=actor)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"tenant_id": tenant_id, "origins": normalized}
 
 
 @router.get("/retention", dependencies=[require_role("admin")])
