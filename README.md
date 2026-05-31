@@ -25,6 +25,22 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - User-generated API keys at `/keys`: generate, copy once, list with prefix/created/last-used/call-count, revoke. Keys are hashed at rest. A new `POST /v1/classify` Next.js route accepts `Authorization: Bearer sk_live_...` and forwards to the FastAPI classifier, returning the same JSON the in-app uploader sees. Per-key usage counters tick on every call.
 - Public share links at `/r/<shot-id>`: server-rendered, no-auth result pages with confidence distribution, OCR transcript, and a dynamic 1200x630 OpenGraph image for link previews on Slack, Twitter, iMessage, and LinkedIn. Each shot detail page has a one-click Copy share link button.
 - Outbound webhooks at `/webhooks`: register HTTPS endpoints that receive a signed JSON POST every time a classification completes. Each subscription gets a one-time `whsec_...` secret; deliveries are signed with `X-Shotclassify-Signature: sha256=<hmac>` over the raw body. Failed deliveries retry up to 4 times with backoff and every attempt is recorded in a live delivery log. Pause, resume, or send a test event from the dashboard.
+- Bulk classify at `/batch`: drop a `.zip` (or a folder of stills) and the page extracts in the browser, fans the images out to the live classifier with bounded concurrency, tracks per-row status, surfaces shot IDs (each one persists to history and fires webhooks), and offers a one-click CSV export with id, filename, class, confidence, latency, and any error per row.
+
+## Try batch
+
+1. `cd web && pnpm dev` (or `npm run dev`), open http://localhost:3000/batch.
+2. Drag a `.zip` of screenshots onto the drop zone. Hidden files and `__MACOSX/` entries are ignored.
+3. Click `Run N` to classify. Concurrency is capped at 3 to keep your local model service happy.
+4. When the run finishes, click `Download CSV` to grab the consolidated result file. Each row also links into `/shots/<id>` for full inspection.
+
+Or drive the same path from the CLI with the existing batch endpoint:
+
+```
+curl -X POST http://127.0.0.1:7441/v1/classify/batch \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -F "files=@shot1.png" -F "files=@shot2.png" -F "files=@shot3.png"
+```
 
 ## Try webhooks
 

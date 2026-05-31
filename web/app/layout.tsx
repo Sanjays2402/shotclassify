@@ -64,6 +64,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/compare">Compare</NavLink>
               <NavLink href="/calibration">Calibration</NavLink>
               <NavLink href="/upload">Upload</NavLink>
+              <NavLink href="/batch">Batch</NavLink>
               <NavLink href="/keys">API keys</NavLink>
               <NavLink href="/webhooks">Webhooks</NavLink>
             </nav>
