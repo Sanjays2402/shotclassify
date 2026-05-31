@@ -2,7 +2,34 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, and an admin dashboard.
 
-## What's new: unified admin console at /admin
+## What's new: API-side webhooks with HMAC and replay
+
+The FastAPI service now ships its own outbound webhook subsystem so server-to-server integrations no longer have to go through the Next.js dashboard proxy. Subscriptions live in `webhook_subscriptions`, every attempt is recorded in `webhook_deliveries`, and the dispatcher signs each payload with HMAC-SHA256 over the raw JSON body. Failures back off (1s, 4s, 16s, 64s) up to 4 attempts and land in the delivery log either way, so admins can search and replay them.
+
+Everything is tenant-scoped: every store call requires an explicit `tenant_id` and filters on it, so an admin in tenant A cannot list, fetch, revoke, or replay tenant B's webhooks. Create/revoke/replay are admin-only, MFA-gated, and honor `?dry_run=true`. `/v1/classify`, `/v1/classify/batch`, and `/v1/classify/{id}/reclassify` now fan `classify.completed` out to every matching active subscription on a background task.
+
+The signing secret is returned exactly once at create time; only its SHA-256 hash is stored, and that hash is what the dispatcher uses as the HMAC key. Receivers re-derive the same key by hashing the plaintext secret they were shown.
+
+### Try it
+
+```bash
+# Register a subscription (admin role + tenant header).
+curl -sS -X POST http://localhost:7441/v1/webhooks \
+  -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme" \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://example.com/hook","events":["classify.completed"],"description":"prod"}'
+# Response includes the signing secret exactly once.
+
+# List, list deliveries, replay.
+curl -s http://localhost:7441/v1/webhooks -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme"
+curl -s http://localhost:7441/v1/webhooks/deliveries/recent -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme"
+curl -sS -X POST http://localhost:7441/v1/webhooks/deliveries/{id}/replay \
+  -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme"
+```
+
+Test coverage (`tests/test_webhooks_api.py`): RBAC denial for non-admins, secret returned exactly once, cross-tenant isolation across list/get/delete, dry-run revoke is a no-op, URL/event validation, live HMAC signature verification against a captured POST, and failed-delivery accounting after the full retry budget.
+
+## Previous: unified admin console at /admin
 
 Workspace admins now have a single landing page that aggregates the
 state procurement teams ask about before signing: member count by

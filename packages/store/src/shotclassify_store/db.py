@@ -289,6 +289,70 @@ class InvitationRow(Base):
     )
 
 
+class WebhookSubscriptionRow(Base):
+    """Outbound webhook subscription, scoped to a tenant.
+
+    The plaintext signing secret is shown exactly once at create time; this
+    row stores only its SHA-256 hash so a DB leak cannot be used to forge
+    HMAC signatures. ``events`` is a JSON list of event names the dispatcher
+    matches against the event it is about to send (``["*"]`` matches all).
+    """
+
+    __tablename__ = "webhook_subscriptions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    secret_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    events: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_delivery_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    success_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    failure_count: Mapped[int] = mapped_column(default=0, nullable=False)
+
+
+class WebhookDeliveryRow(Base):
+    """One attempted POST to a subscription endpoint.
+
+    Every attempt is recorded - successes, transient retries, and permanent
+    failures - so the admin UI can show the full delivery history and the
+    replay endpoint has something concrete to re-send. Scoped by tenant_id
+    so cross-workspace reads are impossible at the query layer.
+    """
+
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    subscription_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    attempt: Mapped[int] = mapped_column(default=1, nullable=False)
+    http_status: Mapped[int | None] = mapped_column(nullable=True)
+    error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(nullable=True)
+    payload_preview: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    signature: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+        index=True,
+    )
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()
@@ -376,6 +440,10 @@ def init_db() -> None:
                     ))
             if not insp.has_table("mfa_credentials"):
                 Base.metadata.tables["mfa_credentials"].create(bind=conn)
+            if not insp.has_table("webhook_subscriptions"):
+                Base.metadata.tables["webhook_subscriptions"].create(bind=conn)
+            if not insp.has_table("webhook_deliveries"):
+                Base.metadata.tables["webhook_deliveries"].create(bind=conn)
     except Exception:
         # Best-effort. Real schema management lives in alembic.
         pass

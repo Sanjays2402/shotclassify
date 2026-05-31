@@ -14,6 +14,8 @@ from .db import (
     SavedViewRow,
     SessionRow,
     TenantSettingsRow,
+    WebhookDeliveryRow,
+    WebhookSubscriptionRow,
     get_engine,
     get_session,
     init_db,
@@ -22,6 +24,7 @@ from . import api_keys as api_keys_store
 from .api_keys import ApiKeyRecord
 from . import memberships as memberships_store
 from .memberships import InvitationRecord, MembershipRecord
+from . import webhooks as webhooks_store
 from .repository import Repository
 from .saved_views import SavedViewRepository
 from . import sessions as session_store
@@ -95,4 +98,7 @@ __all__ = [
     "MembershipRow",
     "InvitationRecord",
     "InvitationRow",
+    "webhooks_store",
+    "WebhookSubscriptionRow",
+    "WebhookDeliveryRow",
 ]

@@ -8,7 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Reque
 from shotclassify_common import Category, ProcessResult, get_settings
 from shotclassify_common.pipeline import process_image
 from shotclassify_common.utils import ensure_dir, new_id
-from shotclassify_store import Repository
+from shotclassify_store import Repository, webhooks_store
 
 from ..middleware.rbac import require_role, require_scope
 from .usage import enforce_quota
@@ -18,6 +18,47 @@ router = APIRouter(
     tags=["classify"],
     dependencies=[require_role("operator"), require_scope("write:classifications")],
 )
+
+
+def _dispatch_classify_event(
+    result: ProcessResult,
+    *,
+    tenant_id: str | None,
+    principal: str | None,
+    request_id: str | None,
+) -> None:
+    """Background-task entry point: ship the classify.completed event.
+
+    No-ops cleanly when there is no tenant context or no matching active
+    subscription, so unauthenticated dev runs and legacy single-tenant
+    deployments pay zero cost. Each delivery records its own row in
+    ``webhook_deliveries``; failures are swallowed here because the
+    request handler has already returned a success to the caller.
+    """
+    if not tenant_id:
+        return
+    try:
+        webhooks_store.dispatch_event(
+            tenant_id=tenant_id,
+            event="classify.completed",
+            payload={
+                "event": "classify.completed",
+                "tenant_id": tenant_id,
+                "principal": principal,
+                "id": result.id,
+                "filename": result.filename,
+                "created_at": result.created_at.isoformat(),
+                "primary_category": result.classification.primary.value,
+                "confidence": result.classification.confidence_of(
+                    result.classification.primary
+                ),
+                "elapsed_ms": result.elapsed_ms,
+            },
+            request_id=request_id,
+        )
+    except Exception:  # noqa: BLE001
+        # Webhook delivery must never leak back to the request path.
+        pass
 
 
 def _save_upload(upload: UploadFile) -> tuple[str, str]:
@@ -34,6 +75,7 @@ def _save_upload(upload: UploadFile) -> tuple[str, str]:
 @router.post("/classify", response_model=ProcessResult)
 async def classify(
     request: Request,
+    background: BackgroundTasks,
     file: UploadFile = File(...),
     note: str | None = Form(None),
 ) -> ProcessResult:
@@ -41,14 +83,26 @@ async def classify(
         raise HTTPException(415, "Upload must be an image.")
     principal = getattr(request.state, "principal", None)
     tenant_id = getattr(request.state, "tenant_id", None)
+    request_id = getattr(request.state, "request_id", None)
     enforce_quota(principal, tenant_id=tenant_id)
     rid, path = _save_upload(file)
-    return await asyncio.to_thread(process_image, path, note, True, rid, principal, tenant_id)
+    result = await asyncio.to_thread(
+        process_image, path, note, True, rid, principal, tenant_id
+    )
+    background.add_task(
+        _dispatch_classify_event,
+        result,
+        tenant_id=tenant_id,
+        principal=principal,
+        request_id=request_id,
+    )
+    return result
 
 
 @router.post("/classify/batch", response_model=list[ProcessResult])
 async def classify_batch(
     request: Request,
+    background: BackgroundTasks,
     files: list[UploadFile] = File(...),
     note: str | None = Form(None),
 ) -> list[ProcessResult]:
@@ -56,18 +110,31 @@ async def classify_batch(
         raise HTTPException(400, "No files.")
     principal = getattr(request.state, "principal", None)
     tenant_id = getattr(request.state, "tenant_id", None)
+    request_id = getattr(request.state, "request_id", None)
     enforce_quota(principal, tenant_id=tenant_id)
     saved = [_save_upload(f) for f in files]
     tasks = [
         asyncio.to_thread(process_image, p, note, True, rid, principal, tenant_id)
         for rid, p in saved
     ]
-    return await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks)
+    for result in results:
+        background.add_task(
+            _dispatch_classify_event,
+            result,
+            tenant_id=tenant_id,
+            principal=principal,
+            request_id=request_id,
+        )
+    return results
 
 
 @router.post("/classify/{item_id}/reclassify", response_model=ProcessResult)
 async def reclassify(
-    item_id: str, request: Request, note: str | None = Form(None)
+    item_id: str,
+    request: Request,
+    background: BackgroundTasks,
+    note: str | None = Form(None),
 ) -> ProcessResult:
     repo = Repository()
     tenant_id = getattr(request.state, "tenant_id", None)
@@ -75,9 +142,18 @@ async def reclassify(
     if not record or not record.image_path or not Path(record.image_path).exists():
         raise HTTPException(404, "Original image not available for reclassification.")
     principal = getattr(request.state, "principal", None)
-    return await asyncio.to_thread(
+    request_id = getattr(request.state, "request_id", None)
+    result = await asyncio.to_thread(
         process_image, record.image_path, note, True, item_id, principal, tenant_id
     )
+    background.add_task(
+        _dispatch_classify_event,
+        result,
+        tenant_id=tenant_id,
+        principal=principal,
+        request_id=request_id,
+    )
+    return result
 
 
 @router.post("/classify/{item_id}/correct")
