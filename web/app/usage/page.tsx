@@ -101,15 +101,13 @@ export default function UsagePage() {
               <Lock size={14} weight="duotone" /> Billing coming soon
             </li>
           </ul>
-          <button
-            type="button"
-            className="btn btn-cue mt-1"
-            disabled
-            aria-disabled="true"
-            title="Stripe checkout wiring lands in the next release"
+          <Link
+            href="/pricing"
+            className="btn btn-cue mt-1 inline-flex items-center justify-center gap-1.5"
           >
-            Upgrade (soon)
-          </button>
+            See plans
+            <Lightning size={14} weight="duotone" />
+          </Link>
         </article>
       </section>
 

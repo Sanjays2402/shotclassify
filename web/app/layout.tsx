@@ -99,6 +99,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/webhooks">Webhooks</NavLink>
               <NavLink href="/notifications">Inbox</NavLink>
               <NavLink href="/usage">Usage</NavLink>
+              <NavLink href="/pricing">Pricing</NavLink>
               <NavLink href="/account">Account</NavLink>
               <NavLink href="/signin">Sign in</NavLink>
               <NavLink href="/welcome">Welcome</NavLink>

@@ -110,7 +110,7 @@ export function QuotaMeter({ compact = false }: { compact?: boolean }) {
         </div>
         {data.over_limit ? (
           <Link
-            href="#upgrade"
+            href="/pricing"
             className="btn btn-cue inline-flex items-center gap-1.5"
           >
             <Lightning size={16} weight="duotone" />
