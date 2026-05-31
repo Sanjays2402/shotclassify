@@ -26,6 +26,11 @@ nodeRequire.cache[serverOnlyPath] = {
 // Point the webhooks store at a temp dir before importing the module.
 const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "shotclassify-webhooks-"));
 process.env.SHOTCLASSIFY_STORE_DIR = tmpDir;
+// This suite uses localhost http servers as webhook targets. The SSRF guard
+// blocks loopback in production; flip the test escape hatch on so we
+// exercise the rest of the delivery pipeline. The dedicated SSRF tests in
+// url-safety.test.mts run without this flag and prove loopback IS blocked.
+process.env.SHOTCLASSIFY_WEBHOOK_ALLOW_LOOPBACK = "1";
 
 const { createWebhook, redeliver, listDeliveries } = await import("./webhooks");
 

@@ -8,6 +8,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { notifyWebhookFailed } from "./notifications";
+import { checkOutboundUrl } from "./url-safety";
+import { readWebhookAllowlist } from "./webhook-allowlist";
 
 export type Webhook = {
   id: string;
@@ -85,6 +87,14 @@ export async function createWebhook(input: {
     new URL(url);
   } catch {
     throw new Error("Invalid URL");
+  }
+  // Pre-flight SSRF check. We do a DNS-aware check here so the user gets
+  // immediate feedback at save time, then re-check at every delivery in
+  // case DNS rebinds to a private address after creation.
+  const allow = await readWebhookAllowlist();
+  const safety = await checkOutboundUrl(url, { allowHostnames: allow });
+  if (!safety.ok) {
+    throw new Error(`Webhook URL rejected: ${safety.message}`);
   }
   const hook: Webhook = {
     id: crypto.randomUUID(),
@@ -223,6 +233,27 @@ async function attemptDelivery(
   attempt: number,
 ): Promise<{ ok: boolean; status: number | null; error: string | null; latency: number }> {
   const t0 = Date.now();
+  // Re-validate the URL at delivery time. Defends against DNS rebinding and
+  // against allowlist edits made after the subscription was created.
+  try {
+    const allow = await readWebhookAllowlist();
+    const safety = await checkOutboundUrl(hook.url, { allowHostnames: allow });
+    if (!safety.ok) {
+      return {
+        ok: false,
+        status: null,
+        error: `ssrf_blocked: ${safety.reason}`,
+        latency: Date.now() - t0,
+      };
+    }
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: null,
+      error: `safety_check_failed: ${err?.message || "unknown"}`,
+      latency: Date.now() - t0,
+    };
+  }
   try {
     const ac = new AbortController();
     const timeout = setTimeout(() => ac.abort(), 8_000);

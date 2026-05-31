@@ -14,6 +14,8 @@ import {
   PaperPlaneTilt,
   Pause,
   Play,
+  ShieldCheck,
+  X,
 } from "@phosphor-icons/react/dist/ssr";
 
 type WebhookRow = {
@@ -69,6 +71,10 @@ export default function WebhooksPage() {
   } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [allowlist, setAllowlist] = useState<string[] | null>(null);
+  const [allowDraft, setAllowDraft] = useState("");
+  const [allowBusy, setAllowBusy] = useState(false);
+  const [allowMsg, setAllowMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -90,6 +96,51 @@ export default function WebhooksPage() {
     const t = setInterval(load, 10_000);
     return () => clearInterval(t);
   }, [load]);
+
+  const loadAllowlist = useCallback(async () => {
+    try {
+      const r = await fetch("/api/webhooks/allowlist", {
+        credentials: "same-origin",
+      });
+      if (!r.ok) throw new Error(`${r.status}`);
+      const j = await r.json();
+      setAllowlist(Array.isArray(j?.hostnames) ? j.hostnames : []);
+    } catch {
+      setAllowlist([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAllowlist();
+  }, [loadAllowlist]);
+
+  const saveAllowlist = useCallback(
+    async (next: string[]) => {
+      setAllowBusy(true);
+      setAllowMsg(null);
+      try {
+        const r = await fetch("/api/webhooks/allowlist", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ hostnames: next }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j?.error?.message || `${r.status}`);
+        setAllowlist(j.hostnames || []);
+        if (Array.isArray(j.rejected) && j.rejected.length > 0) {
+          setAllowMsg(`Rejected: ${j.rejected.join(", ")}`);
+        } else {
+          setAllowMsg("Saved");
+          setTimeout(() => setAllowMsg(null), 1500);
+        }
+      } catch (e: any) {
+        setAllowMsg(e?.message || "Save failed");
+      } finally {
+        setAllowBusy(false);
+      }
+    },
+    [],
+  );
 
   const create = useCallback(async () => {
     const url = newUrl.trim();
@@ -329,6 +380,80 @@ export default function WebhooksPage() {
         <p className="text-xs opacity-60">
           Subscribed event: <code className="font-mono">classify.completed</code>
         </p>
+      </section>
+
+      <section
+        className="rounded border p-4 space-y-3"
+        style={{ borderColor: "var(--color-rule)" }}
+        aria-label="Outbound delivery safety"
+      >
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <ShieldCheck size={16} weight="duotone" />
+          Outbound delivery safety
+        </div>
+        <p className="text-xs opacity-70 max-w-2xl">
+          Deliveries are blocked when the URL resolves to a loopback, link-local,
+          private, multicast, broadcast, or cloud metadata address. Cloud
+          metadata addresses (169.254.169.254 and friends) can never be
+          overridden. Add a hostname below to permit private destinations on
+          your network.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          {(allowlist || []).map((h) => (
+            <span
+              key={h}
+              className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs font-mono"
+              style={{ borderColor: "var(--color-rule)" }}
+            >
+              {h}
+              <button
+                type="button"
+                aria-label={`Remove ${h} from allowlist`}
+                className="opacity-60 hover:opacity-100"
+                disabled={allowBusy}
+                onClick={() =>
+                  saveAllowlist((allowlist || []).filter((x) => x !== h))
+                }
+              >
+                <X size={12} weight="bold" />
+              </button>
+            </span>
+          ))}
+          {allowlist !== null && allowlist.length === 0 && (
+            <span className="text-xs opacity-60">No exceptions.</span>
+          )}
+        </div>
+        <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+          <input
+            type="text"
+            placeholder="internal-hook.corp.lan"
+            value={allowDraft}
+            onChange={(e) => setAllowDraft(e.target.value)}
+            className="rounded border px-3 py-2 text-sm font-mono"
+            style={{ borderColor: "var(--color-rule)" }}
+            aria-label="Hostname to allow"
+          />
+          <button
+            type="button"
+            className="btn btn-secondary text-sm px-4 py-2 disabled:opacity-50"
+            disabled={allowBusy || !allowDraft.trim()}
+            onClick={async () => {
+              const v = allowDraft.trim().toLowerCase();
+              if (!v) return;
+              const next = Array.from(
+                new Set([...(allowlist || []), v]),
+              );
+              await saveAllowlist(next);
+              setAllowDraft("");
+            }}
+          >
+            <Plus size={14} weight="bold" />
+            <span className="ml-1">Allow hostname</span>
+          </button>
+        </div>
+        {allowMsg && (
+          <p className="text-xs opacity-70" role="status">{allowMsg}</p>
+        )}
       </section>
 
       <section>

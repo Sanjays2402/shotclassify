@@ -2,6 +2,43 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, and an admin dashboard.
 
+## What's new: SSRF protection for outbound webhooks
+
+Webhook deliveries now refuse to POST to loopback, link-local, private,
+multicast, broadcast, or cloud metadata addresses. The check runs at both
+save time (so the dashboard rejects a bad URL immediately) and at every
+delivery attempt (so DNS rebinding cannot redirect a previously-approved
+hostname to an internal IP). Cloud metadata endpoints like
+`169.254.169.254` are blocked unconditionally and cannot be allowlisted.
+
+Workspace owners who do need to deliver to private destinations can add
+explicit hostname exceptions on the Webhooks page under "Outbound
+delivery safety". Blocked attempts are recorded in the delivery log with
+an `ssrf_blocked:<reason>` error so incident response still has an
+audit trail.
+
+### Try it
+
+```bash
+cd web && npm run dev
+open http://localhost:3000/webhooks
+
+# Attempt a metadata-service URL via the API; this MUST 400.
+curl -sS -X POST http://localhost:3000/v1/webhooks \
+  -H "Authorization: Bearer sk_live_xxx" \
+  -H "content-type: application/json" \
+  -d '{"url":"http://169.254.169.254/latest/meta-data"}'
+
+# Read or update the workspace allowlist.
+curl -s http://localhost:3000/api/webhooks/allowlist
+curl -sS -X PUT http://localhost:3000/api/webhooks/allowlist \
+  -H "content-type: application/json" \
+  -d '{"hostnames":["internal-hook.corp.lan"]}'
+```
+
+Covered by `web/lib/url-safety.test.mts` and the SSRF assertions in
+`web/lib/webhooks.test.mts` (`npm test`).
+
 ## What's new: TOTP step-up MFA for admin mutations
 
 Destructive admin actions now require a recent second factor on top of the role check. The `require_mfa_step_up()` dependency is wired onto every mutating admin route (IP allowlist PUT, retention PUT, retention run, SSO config PUT, routing-rules PUT, admin force-logout-principal) so a stolen browser session alone cannot reconfigure tenant security. API-key callers (machine-to-machine) bypass MFA because the key itself is a possession factor.
