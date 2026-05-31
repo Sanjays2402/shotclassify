@@ -29,6 +29,14 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - Account & GDPR controls at `/account`: shows the signed-in principal (GitHub OAuth session or API key), counts of stored classifications and audit rows, one-click JSON export of everything under your principal, and a type-to-confirm "erase everything" button wired to `DELETE /v1/me/data?confirm=erase`. Sign in/out lives in the same panel.
 - Usage & free-tier quota at `/usage`: per-principal monthly meter (read from `GET /v1/me/usage`) with progress bar, remaining count, plan comparison, and an upgrade CTA. The header carries a compact live meter on every page. Classify endpoints return `402 quota_exceeded` once the per-principal `SHOTCLASSIFY_FREE_MONTHLY_LIMIT` (default 200) is hit for the calendar month so customers see the wall before they hit it in code.
 
+- First run onboarding at `/welcome`: a three step tour (classify a screenshot, browse history, get an API key) auto-opens once per browser via a dismissable overlay, and can be replayed from the Account page or the `/welcome` deep link.
+
+## Try the onboarding tour
+
+1. `cd web && pnpm install && pnpm dev`
+2. Open http://127.0.0.1:3000 in a fresh incognito window. The three step tour appears over the live feed; arrow keys, mouse, or `Esc` all work.
+3. Visit http://127.0.0.1:3000/welcome any time for the full page version, or `/account` to replay the tour from a returning session.
+
 ## Try the usage meter
 
 ```bash

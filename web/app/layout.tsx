@@ -5,6 +5,7 @@ import { Inter, Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import Ticker from "@/components/Ticker";
 import HotKeys from "@/components/HotKeys";
 import { QuotaMeter } from "@/components/QuotaMeter";
+import OnboardingTour from "@/components/OnboardingTour";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -34,6 +35,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`${inter.variable} ${display.variable} ${mono.variable}`}>
       <body>
         <HotKeys />
+        <OnboardingTour />
         <Ticker />
         <header
           className="border-b"
@@ -70,6 +72,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/webhooks">Webhooks</NavLink>
               <NavLink href="/usage">Usage</NavLink>
               <NavLink href="/account">Account</NavLink>
+              <NavLink href="/welcome">Welcome</NavLink>
             </nav>
             <div className="ml-auto flex items-center gap-3">
               <QuotaMeter compact />

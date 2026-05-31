@@ -11,9 +11,12 @@ import {
   Database,
   ShieldCheck,
   Warning,
+  PlayCircle,
 } from "@phosphor-icons/react/dist/ssr";
+import Link from "next/link";
 import { fetcher } from "@/lib/api";
 import { QuotaMeter } from "@/components/QuotaMeter";
+import { resetOnboarded } from "@/lib/onboarding";
 
 type Me = {
   principal: string;
@@ -235,6 +238,46 @@ export default function AccountPage() {
             {flash.msg}
           </div>
         )}
+      </section>
+
+      {/* Onboarding replay */}
+      <section className="panel p-5">
+        <div className="flex items-start gap-3">
+          <PlayCircle size={28} weight="duotone" className="opacity-80" />
+          <div className="flex-1 min-w-0">
+            <div className="eyebrow">Tour</div>
+            <div className="h-display text-[18px] mb-1">Replay first run tour</div>
+            <p className="text-[13px] opacity-70 mb-3">
+              Show the three step walkthrough again. Useful after you reset the
+              browser or share the link with a teammate.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  resetOnboarded();
+                  window.dispatchEvent(
+                    new CustomEvent("shotclassify:show-tour"),
+                  );
+                }}
+                className="text-[13px] px-3 py-1.5 rounded font-medium"
+                style={{
+                  background: "var(--color-felt)",
+                  color: "var(--color-chalk)",
+                }}
+              >
+                Start tour
+              </button>
+              <Link
+                href="/welcome"
+                className="text-[13px] px-3 py-1.5 rounded border"
+                style={{ borderColor: "var(--color-rule)" }}
+              >
+                Open welcome page
+              </Link>
+            </div>
+          </div>
+        </div>
       </section>
     </div>
   );
