@@ -56,6 +56,8 @@ With the API and web both running, open <http://127.0.0.1:3000/demo>. Click any 
 
 For your own frames, open <http://127.0.0.1:3000/upload> and drop one or more images. Each file gets its own result card with a thumbnail, the primary call and its confidence, round-trip latency, full per-class confidence bars, the model's rationale, and the OCR transcript. Cards stream in parallel, errors stay scoped to the failing file, and any card opens the full replay at `/shots/{id}`.
 
+Every shot detail page at `/shots/{id}` now ships an Umpire room panel. Pick the true class from a chip grid and hit "Make the call" to persist a human correction through `POST /v1/classify/{id}/correct`, which feeds the calibration dashboard. Or hit "Rerun the pitch" to fire `POST /v1/classify/{id}/reclassify` against the saved frame and see the new primary class without re-uploading. The page revalidates in place, so the chip, confidence, and rationale all update without a reload.
+
 For a live operational view of the classifier, open <http://127.0.0.1:3000/stats>. The page reads `/v1/history/aggregate` and renders the class mix, mean confidence per class, a 24-bin ingest tempo chart, the confidence calibration histogram, and p50/p95/p99 latency, all from real rows in the store. Switch the window between 24h, 7d, and 30d. With an empty database the page shows a clearly labelled seeded preview so the layout is never blank.
 
 One-shot curl against the same endpoint the demo page calls:
@@ -64,6 +66,14 @@ One-shot curl against the same endpoint the demo page calls:
 curl -s -X POST http://127.0.0.1:7441/v1/classify \
   -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
   -F "file=@samples/fake-receipt.png" | jq '.classification.primary, .classification.confidences[0]'
+```
+
+Logging a human correction (the action behind the Umpire room button):
+
+```bash
+curl -s -X POST http://127.0.0.1:7441/v1/classify/$SHOT_ID/correct \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -F category=chart | jq
 ```
 
 And the analytics rollup that powers `/stats`:

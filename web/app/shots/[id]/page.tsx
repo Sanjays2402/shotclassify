@@ -16,6 +16,7 @@ import {
 import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
 import { SampleBadge } from "@/components/SampleBadge";
+import { UmpireControls } from "@/components/UmpireControls";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import {
   CATEGORIES,
@@ -226,6 +227,13 @@ export default function ShotDetail({
                 "The model called this class on visual layout, density, and OCR cues. No verbal rationale on file for this record."}
             </p>
           </div>
+
+          <UmpireControls
+            id={rec.id}
+            primary={rec.primary_category}
+            corrected={rec.user_corrected_to ?? null}
+            disabled={isSample}
+          />
 
           {rec.image_path && (
             <div className="panel p-3">
