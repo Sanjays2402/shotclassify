@@ -18,6 +18,7 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - `GET /v1/history` paginated history with category filter and full-text search over OCR + filename.
 - `GET /v1/history/stats` total count.
 - `GET /v1/history/aggregate?hours=24` rich rollups for the analytics dashboard: per-class counts and mean confidence, latency p50/p95/p99, hourly ingest tempo, and a 10-bin confidence histogram. Powers the `/stats` page.
+- `GET /v1/history/export?format=csv|json` streaming download of the classification history (honors `category`, `q`, and `limit` filters; up to 5000 rows). The shots page exposes an Export menu that hits the same endpoint.
 - `GET /v1/history/{id}` full record with OCR transcript and confidence distribution.
 - Web UI: upload page, shots list, per-shot detail with OCR transcript, `/stats` analytics dashboard with class mix, calibration histogram, ingest tempo, and latency percentiles, plus a calibration page with reliability diagram and ECE/Brier/Log loss.
 - API key + GitHub OAuth session auth, request-id middleware, OpenTelemetry FastAPI instrumentation.
@@ -83,6 +84,14 @@ And the analytics rollup that powers `/stats`:
 ```bash
 curl -s "http://127.0.0.1:7441/v1/history/aggregate?hours=24" \
   -H "x-api-key: $SHOTCLASSIFY_API_KEY" | jq '.total, .latency_ms, .per_class[0]'
+```
+
+Download the full classification history as CSV (or JSON) from the shots page Export menu, or directly:
+
+```bash
+curl -s -OJ "http://127.0.0.1:7441/v1/history/export?format=csv&limit=1000" \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY"
+# add &category=signup or &q=stripe to narrow it down
 ```
 
 ## Quick start

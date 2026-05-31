@@ -6,6 +6,7 @@ import useSWR from "swr";
 import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
 import { SampleBadge } from "@/components/SampleBadge";
+import { ExportMenu } from "@/components/ExportMenu";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import {
   CATEGORIES,
@@ -129,6 +130,15 @@ export default function ShotsPage() {
         >
           Reset
         </button>
+
+        <div className="ml-auto">
+          <ExportMenu
+            category={cat || undefined}
+            q={q || undefined}
+            limit={Math.max(limit, 1000)}
+            disabled={isSample}
+          />
+        </div>
       </div>
 
       <div className="panel overflow-hidden">

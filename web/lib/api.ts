@@ -27,4 +27,17 @@ export const ENDPOINTS = {
   stats: "/api/stats",
   aggregate: (hours: number = 24) => `/api/aggregate?hours=${hours}`,
   classify: "/api/classify",
+  historyExport: (params?: {
+    format?: "csv" | "json";
+    limit?: number;
+    category?: string;
+    q?: string;
+  }) => {
+    const sp = new URLSearchParams();
+    sp.set("format", params?.format ?? "csv");
+    if (params?.limit) sp.set("limit", String(params.limit));
+    if (params?.category) sp.set("category", params.category);
+    if (params?.q) sp.set("q", params.q);
+    return `/api/history/export?${sp.toString()}`;
+  },
 };
