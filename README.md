@@ -2,7 +2,22 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
-## What's new: per-route scope enforcement on API keys
+## What's new: tamper-evident audit log (SHA-256 hash chain)
+
+Every audit row is now cryptographically linked to the previous row in the same workspace using `entry_hash = sha256(prev_hash || canonical_json(fields))`. Modifying, deleting, or inserting an audit row out of band breaks the chain, and the new `GET /v1/audit/verify` endpoint reports exactly where. The admin audit page surfaces a shield badge plus a one-click Verify button and shows the current tip hash so workspace owners can pin it off-platform (e.g. in a quarterly compliance report) to detect future tampering even by an attacker who controls the API.
+
+Migration `0018_audit_hash_chain` adds `prev_hash` and `entry_hash` to `audit_log`. Legacy rows from before the chain are tolerated as a single reset point so upgrading does not look like tampering. Coverage in `tests/test_audit_chain.py` proves both the happy path and that a direct DB mutation of a historical row is detected at the correct row id.
+
+### Try it
+
+Local dashboard: http://localhost:3000/settings/audit (click **Verify chain**).
+
+```bash
+curl -sS -H "X-API-Key: $ADMIN_KEY" http://localhost:7441/v1/audit/verify
+# => {"ok":true,"checked":42,"tenant_id":"acme","broken_at":null,"reason":null,"tip_hash":"<64-hex>"}
+```
+
+## Previous: per-route scope enforcement on API keys
 
 DB-issued API keys now carry scopes (`read:classifications`, `write:classifications`, `read:audit`, `admin`) and every public `/v1/*` route checks them. A key minted with only `read:classifications` can list and export history but cannot delete, bulk-mutate, or correct records, cannot pull the audit log, cannot manage webhooks, and cannot mint or revoke other keys. The `admin` scope is a superset shorthand; session cookies fall back to the existing role check so dashboard users are unaffected.
 

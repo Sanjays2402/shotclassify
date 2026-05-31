@@ -99,6 +99,12 @@ class AuditLogRow(Base):
     target_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Tamper-evident chain: sha256 of (prev_hash || canonical_json(fields)),
+    # linked per-tenant. `prev_hash` is the previous row's `entry_hash`, or
+    # the literal string "GENESIS" for the first row in a tenant. Verifier
+    # in shotclassify_store.audit recomputes and rejects any divergence.
+    prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    entry_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class SavedViewRow(Base):

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, Fragment } from "react";
+import { useCallback, useMemo, useState, Fragment } from "react";
 import useSWR from "swr";
 import {
   ClipboardText,
@@ -10,6 +10,8 @@ import {
   ArrowsClockwise,
   Shield,
   CheckCircle,
+  ShieldCheck,
+  ShieldWarning,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -86,6 +88,34 @@ export default function AuditLogPage() {
   const forbidden = err?.status === 401 || err?.status === 403;
   const events = Array.isArray(data) ? data : [];
 
+  type VerifyResult = {
+    ok: boolean;
+    checked: number;
+    tenant_id: string | null;
+    broken_at: string | null;
+    reason: string | null;
+    tip_hash: string | null;
+  };
+  const [verify, setVerify] = useState<VerifyResult | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyErr, setVerifyErr] = useState<string | null>(null);
+  const runVerify = useCallback(async () => {
+    setVerifying(true);
+    setVerifyErr(null);
+    try {
+      const r = await fetch("/api/audit/verify", { cache: "no-store" });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t || `HTTP ${r.status}`);
+      }
+      setVerify((await r.json()) as VerifyResult);
+    } catch (e) {
+      setVerifyErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVerifying(false);
+    }
+  }, []);
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
       <header className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -117,6 +147,54 @@ export default function AuditLogPage() {
           </a>
         </div>
       </header>
+
+      <section
+        aria-label="Tamper-evident chain"
+        className="mb-4 flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+      >
+        <div className="flex items-start gap-3">
+          {verify?.ok === false ? (
+            <ShieldWarning size={22} weight="duotone" className="mt-0.5 text-rose-600" aria-hidden />
+          ) : verify?.ok ? (
+            <ShieldCheck size={22} weight="duotone" className="mt-0.5 text-emerald-600" aria-hidden />
+          ) : (
+            <Shield size={22} weight="duotone" className="mt-0.5 text-slate-500" aria-hidden />
+          )}
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-900">
+              Tamper-evident hash chain
+            </p>
+            {verify?.ok === false ? (
+              <p className="text-xs text-rose-700">
+                Chain broken at <span className="font-mono">{verify.broken_at}</span>. {verify.reason}
+              </p>
+            ) : verify?.ok ? (
+              <p className="text-xs text-slate-600">
+                Verified {verify.checked} rows. Tip{" "}
+                <span className="font-mono" title={verify.tip_hash ?? ""}>
+                  {verify.tip_hash ? `${verify.tip_hash.slice(0, 12)}\u2026` : "(empty)"}
+                </span>
+              </p>
+            ) : verifyErr ? (
+              <p className="text-xs text-rose-700 break-all">{verifyErr}</p>
+            ) : (
+              <p className="text-xs text-slate-600">
+                Each row is SHA-256 linked to the previous row. Verify to detect any tampering or out-of-band edits.
+              </p>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={runVerify}
+          disabled={verifying}
+          className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:opacity-60 sm:self-auto"
+          aria-label="Verify audit hash chain"
+        >
+          <ShieldCheck size={16} weight="duotone" aria-hidden />
+          {verifying ? "Verifying\u2026" : "Verify chain"}
+        </button>
+      </section>
 
       <section
         aria-label="Filters"
