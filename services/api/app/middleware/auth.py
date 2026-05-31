@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from itsdangerous import BadSignature, URLSafeSerializer
 from shotclassify_common import get_settings
-from shotclassify_store import api_keys_store, session_store
+from shotclassify_store import api_keys_store, memberships_store, session_store
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -154,7 +154,14 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
                         )
                 request.state.principal = info.principal
                 request.state.session_id = info.id
-                request.state.role = role_for_login(info.principal)
+                # Membership rows (if any) are the source of truth for role.
+                # This is the wiring that lets workspace admins hand out
+                # roles from the /members UI without redeploying the env
+                # var ``AUTH_ROLE_MAP``.
+                member_role = memberships_store.role_for_member(
+                    info.tenant_id, info.principal
+                )
+                request.state.role = member_role or role_for_login(info.principal)
                 return await call_next(request)
         return JSONResponse(
             {"error": "unauthorized", "detail": "Provide X-API-Key or login via /auth/login."},

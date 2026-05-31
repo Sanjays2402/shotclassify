@@ -8,6 +8,8 @@ from .db import (
     AuditLogRow,
     Base,
     ClassificationRow,
+    InvitationRow,
+    MembershipRow,
     MfaCredentialRow,
     SavedViewRow,
     SessionRow,
@@ -18,6 +20,8 @@ from .db import (
 )
 from . import api_keys as api_keys_store
 from .api_keys import ApiKeyRecord
+from . import memberships as memberships_store
+from .memberships import InvitationRecord, MembershipRecord
 from .repository import Repository
 from .saved_views import SavedViewRepository
 from . import sessions as session_store
@@ -76,4 +80,9 @@ __all__ = [
     "mfa_store",
     "api_keys_store",
     "ApiKeyRecord",
+    "memberships_store",
+    "MembershipRecord",
+    "MembershipRow",
+    "InvitationRecord",
+    "InvitationRow",
 ]

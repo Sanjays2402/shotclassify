@@ -2,6 +2,45 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, and an admin dashboard.
 
+## What's new: workspace members + email invitations with one-shot tokens
+
+Workspace admins can now manage who has access to a tenant from the
+product, not from a YAML file. Roles assigned to a member in the
+`memberships` table override the legacy `AUTH_ROLE_MAP` env var on every
+request, so promoting a teammate to admin no longer requires a redeploy.
+
+What ships:
+
+- `memberships` and `invitations` tables (Alembic `0013_memberships`),
+  both strictly scoped by `tenant_id`. Invitation tokens are stored as
+  SHA-256 hashes; the plaintext is shown exactly once.
+- `GET/PUT/DELETE /v1/members` and `GET/POST/DELETE /v1/invitations` plus
+  `POST /v1/invitations/accept` for the invitee. All admin mutations
+  require the admin role and MFA step-up.
+- Last-admin guard: the API refuses to demote or remove the last admin
+  of a workspace (409), so a misclick can't lock the workspace out of
+  role management.
+- Auth middleware now prefers the member's role over the env-var map and
+  the audit middleware records every mutation with actor, tenant, IP,
+  and target id.
+- Settings UI at `/settings/members` for invite, role change, revoke,
+  and remove. Built with shadcn/ui patterns and Phosphor duotone icons.
+- Six tests in `tests/test_memberships.py` proving cross-tenant
+  isolation, last-admin protection, and single-use invite tokens.
+
+### Try it
+
+```bash
+make api                 # serves on :7441
+pnpm --dir web dev       # /settings/members
+
+# Invite a teammate (admin key on tenant acme):
+curl -s -X POST http://127.0.0.1:7441/v1/invitations \
+  -H 'x-api-key: admin-key' \
+  -H 'content-type: application/json' \
+  -d '{"email":"alice@company.com","role":"operator","ttl_days":7}'
+```
+
 ## What's new: DB-backed API keys with scopes, expiry, and revocation
 
 The FastAPI service now treats the `api_keys` table as the source of truth

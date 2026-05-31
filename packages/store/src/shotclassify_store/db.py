@@ -209,6 +209,62 @@ class MfaCredentialRow(Base):
     )
 
 
+class MembershipRow(Base):
+    """Binds a principal (OAuth/SSO login) to a tenant with a role.
+
+    Membership rows are the authoritative source of role assignment once a
+    tenant has any rows for a principal; the legacy ``AUTH_ROLE_MAP`` env
+    var only applies as a fallback. A principal may be a member of
+    multiple tenants (different roles per tenant) since enterprise users
+    typically belong to more than one workspace.
+    """
+
+    __tablename__ = "memberships"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    principal: Mapped[str] = mapped_column(String(128), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    invited_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
+class InvitationRow(Base):
+    """Pending email invitation to join a tenant with a preset role.
+
+    The plaintext invite token is shown exactly once when the invite is
+    created; the row stores only its SHA-256 hash so a leaked DB backup
+    cannot be replayed. Accept consumes the row by setting
+    ``accepted_at``/``accepted_by`` and a membership row is created in the
+    same transaction.
+    """
+
+    __tablename__ = "invitations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True)
+    invited_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    accepted_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()
