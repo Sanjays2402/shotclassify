@@ -17,6 +17,7 @@ import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
 import { SampleBadge } from "@/components/SampleBadge";
 import { UmpireControls } from "@/components/UmpireControls";
+import ShareActions from "@/components/ShareActions";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import {
   CATEGORIES,
@@ -111,6 +112,11 @@ export default function ShotDetail({
         <span className="opacity-40">/</span>
         <span className="num">{shortId(rec.id)}</span>
         {isSample && <SampleBadge note="No record found; rendering seeded sample." />}
+        {!isSample && (
+          <div className="ml-auto">
+            <ShareActions id={rec.id} />
+          </div>
+        )}
       </div>
 
       <header className="panel p-5 flex flex-wrap items-end justify-between gap-4">

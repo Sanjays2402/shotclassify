@@ -21,6 +21,20 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - `GET /v1/history/export?format=csv|json` streaming download of the classification history (honors `category`, `q`, and `limit` filters; up to 5000 rows). The shots page exposes an Export menu that hits the same endpoint.
 - `GET /v1/history/{id}` full record with OCR transcript and confidence distribution.
 - Web UI: upload page, shots list, per-shot detail with OCR transcript, `/stats` analytics dashboard with class mix, calibration histogram, ingest tempo, and latency percentiles, plus a calibration page with reliability diagram and ECE/Brier/Log loss.
+- Public share links at `/r/<shot-id>`: server-rendered, no-auth result pages with confidence distribution, OCR transcript, and a dynamic 1200x630 OpenGraph image for link previews on Slack, Twitter, iMessage, and LinkedIn. Each shot detail page has a one-click Copy share link button.
+
+## Try the share feature
+
+1. `pnpm --filter web dev` (or `cd web && npm run dev`) and open http://localhost:3000.
+2. Upload a screenshot at http://localhost:3000/upload, open it from `/shots`, click Copy share link.
+3. Paste the link in an incognito window. The public page renders without auth. Paste it in Slack to see the OG card.
+
+Direct curl against the FastAPI service that backs the share page:
+
+```
+curl -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  http://127.0.0.1:7441/v1/history/<shot-id>
+```
 - API key + GitHub OAuth session auth, request-id middleware, OpenTelemetry FastAPI instrumentation.
 
 ## Stack
