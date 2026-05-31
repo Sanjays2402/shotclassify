@@ -190,3 +190,29 @@ def revoke_all_for_principal(principal: str, *, except_sid: str | None = None) -
         result = s.execute(stmt)
         s.commit()
         return int(result.rowcount or 0)
+
+
+def clip_active_for_tenant(tenant_id: str, ttl: timedelta) -> int:
+    """Shorten ``expires_at`` for every active tenant session that currently
+    exceeds ``now + ttl``.
+
+    Called when an admin lowers the per-tenant session TTL so a long-lived
+    cookie minted before the policy change cannot outlive the new rule.
+    Sessions whose remaining lifetime is already under ``ttl`` are left
+    alone. Returns the number of rows updated.
+    """
+    if not tenant_id:
+        return 0
+    now = datetime.now(UTC)
+    cutoff = now + ttl
+    stmt = (
+        update(SessionRow)
+        .where(SessionRow.tenant_id == tenant_id)
+        .where(SessionRow.revoked_at.is_(None))
+        .where(SessionRow.expires_at > cutoff)
+        .values(expires_at=cutoff)
+    )
+    with get_session() as s:
+        result = s.execute(stmt)
+        s.commit()
+        return int(result.rowcount or 0)

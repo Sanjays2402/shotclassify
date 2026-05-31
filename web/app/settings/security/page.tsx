@@ -286,6 +286,7 @@ export default function SecuritySettingsPage() {
 
       <RetentionSection />
       <SsoSection />
+      <SessionPolicySection />
       <SessionsSection />
     </div>
   );
@@ -930,6 +931,244 @@ function SsoSection() {
                   ? "text-emerald-700 dark:text-emerald-400"
                   : "text-red-700 dark:text-red-400"
               }`}
+            >
+              {flash.kind === "ok" ? (
+                <CheckCircle size={14} weight="duotone" />
+              ) : (
+                <Warning size={14} weight="duotone" />
+              )}
+              {flash.msg}
+            </p>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+type SessionPolicyResponse = {
+  tenant_id: string;
+  session_ttl_minutes: number | null;
+  default_minutes: number;
+  effective_minutes: number;
+  min_minutes: number;
+  max_minutes: number;
+  clipped?: number;
+};
+
+function SessionPolicySection() {
+  const { data, error, isLoading, mutate } = useSWR<SessionPolicyResponse>(
+    "/api/settings/security/sessions",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+
+  const [override, setOverride] = useState<boolean>(false);
+  const [value, setValue] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!data) return;
+    if (data.session_ttl_minutes != null) {
+      setOverride(true);
+      setValue(String(data.session_ttl_minutes));
+    } else {
+      setOverride(false);
+      setValue(String(data.default_minutes));
+    }
+  }, [data?.session_ttl_minutes, data?.default_minutes]);
+
+  const status = error as ApiError | undefined;
+  const unauth = status?.status === 401;
+  const forbidden = status?.status === 403;
+
+  const dirty = useMemo(() => {
+    if (!data) return false;
+    if (!override) return data.session_ttl_minutes !== null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return false;
+    return Math.trunc(parsed) !== data.session_ttl_minutes;
+  }, [data, override, value]);
+
+  const presets: Array<{ label: string; minutes: number }> = [
+    { label: "1 hour", minutes: 60 },
+    { label: "8 hours", minutes: 480 },
+    { label: "1 day", minutes: 1440 },
+    { label: "7 days", minutes: 10080 },
+    { label: "30 days", minutes: 43200 },
+  ];
+
+  async function save() {
+    if (!data) return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      let body: { session_ttl_minutes: number | null };
+      if (!override) {
+        body = { session_ttl_minutes: null };
+      } else {
+        const parsed = Math.trunc(Number(value));
+        if (!Number.isFinite(parsed)) {
+          setFlash({ kind: "err", msg: "Enter a whole number of minutes." });
+          setBusy(false);
+          return;
+        }
+        if (parsed < data.min_minutes || parsed > data.max_minutes) {
+          setFlash({
+            kind: "err",
+            msg: `Minutes must be between ${data.min_minutes} and ${data.max_minutes}.`,
+          });
+          setBusy(false);
+          return;
+        }
+        body = { session_ttl_minutes: parsed };
+      }
+      const res = await fetch("/api/settings/security/sessions", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setFlash({ kind: "err", msg: text || `Save failed (${res.status})` });
+        setBusy(false);
+        return;
+      }
+      const next: SessionPolicyResponse = await res.json();
+      const clipped = next.clipped ?? 0;
+      setFlash({
+        kind: "ok",
+        msg:
+          clipped > 0
+            ? `Saved. Shortened ${clipped} active session${clipped === 1 ? "" : "s"}.`
+            : "Saved.",
+      });
+      await mutate(next, { revalidate: false });
+    } catch (e) {
+      setFlash({ kind: "err", msg: (e as Error).message || "Save failed" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-center gap-2 mb-2">
+        <Clock size={20} weight="duotone" className="text-violet-600" />
+        <h2 className="text-base font-semibold">Session lifetime</h2>
+        {data?.tenant_id ? (
+          <span className="ml-auto rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+            tenant: {data.tenant_id}
+          </span>
+        ) : null}
+      </div>
+      <p className="text-sm text-zinc-500 mb-4">
+        How long a signed-in browser session stays valid before the user
+        must re-authenticate. Lowering this value also clips active
+        sessions whose remaining lifetime would exceed the new ceiling,
+        so a long-lived cookie cannot outlive a tightened policy.
+      </p>
+
+      {isLoading ? (
+        <div className="space-y-2" aria-busy="true">
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+        </div>
+      ) : unauth ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Sign in to manage session policy.
+        </div>
+      ) : forbidden ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Admin role required to change session policy.
+        </div>
+      ) : !data ? (
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+          Could not load session policy.
+        </div>
+      ) : (
+        <>
+          <div className="mb-4 flex flex-wrap items-center gap-3 text-sm">
+            <span className="text-zinc-500">Current:</span>
+            <span className="rounded-md bg-zinc-100 px-2 py-1 font-mono text-xs dark:bg-zinc-900">
+              {data.effective_minutes} min
+            </span>
+            <span className="text-zinc-500">
+              ({data.session_ttl_minutes == null ? "global default" : "workspace override"})
+            </span>
+          </div>
+
+          <label className="mb-3 flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={override}
+              onChange={(e) => setOverride(e.target.checked)}
+              aria-label="Override the global session lifetime for this workspace"
+            />
+            <span>
+              Override the global default ({data.default_minutes} min) for this workspace.
+            </span>
+          </label>
+
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <input
+              type="number"
+              inputMode="numeric"
+              min={data.min_minutes}
+              max={data.max_minutes}
+              step={1}
+              disabled={!override}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              aria-label="Session lifetime in minutes"
+              className="w-40 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-mono shadow-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 disabled:cursor-not-allowed disabled:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:disabled:bg-zinc-900"
+            />
+            <span className="text-xs text-zinc-500">
+              minutes ({data.min_minutes} to {data.max_minutes})
+            </span>
+          </div>
+
+          <div className="mb-4 flex flex-wrap gap-2">
+            {presets.map((p) => (
+              <button
+                key={p.minutes}
+                type="button"
+                disabled={!override}
+                onClick={() => setValue(String(p.minutes))}
+                className="rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={save}
+              disabled={!dirty || busy}
+              className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-zinc-300 dark:disabled:bg-zinc-700"
+            >
+              <FloppyDisk size={16} weight="duotone" />
+              {busy ? "Saving" : "Save"}
+            </button>
+            <span className="text-xs text-zinc-500">
+              Step-up MFA may be required.
+            </span>
+          </div>
+
+          {flash ? (
+            <p
+              className={`mt-3 inline-flex items-center gap-1 text-sm ${
+                flash.kind === "ok"
+                  ? "text-emerald-700 dark:text-emerald-400"
+                  : "text-red-700 dark:text-red-400"
+              }`}
+              role="status"
             >
               {flash.kind === "ok" ? (
                 <CheckCircle size={14} weight="duotone" />

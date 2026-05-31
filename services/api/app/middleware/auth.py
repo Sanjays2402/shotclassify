@@ -7,9 +7,13 @@ session, and force-logout every device a user is signed in on.
 """
 from __future__ import annotations
 
+from datetime import timedelta
+
 from itsdangerous import BadSignature, URLSafeSerializer
 from shotclassify_common import get_settings
 from shotclassify_store import api_keys_store, memberships_store, scim_store, session_store
+from shotclassify_store import get_session_policy
+from shotclassify_store.sessions import SESSION_TTL
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -38,6 +42,26 @@ def _signer() -> URLSafeSerializer:
     return URLSafeSerializer(get_settings().app_secret_key, salt="shotclassify-session")
 
 
+def _resolve_session_ttl(tenant_id: str | None) -> timedelta:
+    """Return the cookie session TTL for ``tenant_id``.
+
+    Falls back to the global :data:`SESSION_TTL` when the tenant has
+    not set an override (or when no tenant context is available, as is
+    the case for pre-login flows). Any unexpected error reading the
+    settings is logged silently to the global default so a corrupt
+    settings row can never lock a workspace out of fresh logins.
+    """
+    try:
+        if not tenant_id:
+            return SESSION_TTL
+        policy = get_session_policy(tenant_id)
+        if policy.session_ttl_minutes is None:
+            return SESSION_TTL
+        return timedelta(minutes=int(policy.session_ttl_minutes))
+    except Exception:
+        return SESSION_TTL
+
+
 def issue_session(
     login: str,
     *,
@@ -61,6 +85,7 @@ def issue_session(
         client_ip=client_ip,
         user_agent=user_agent,
         auth_method=auth_method,
+        ttl=_resolve_session_ttl(tenant_id),
     )
     cookie = _signer().dumps({"sid": info.id})
     return cookie, info.id

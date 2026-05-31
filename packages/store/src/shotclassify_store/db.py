@@ -168,6 +168,14 @@ class TenantSettingsRow(Base):
     # buyers can prove which storage region is in effect during a security
     # review. Storage backend selection itself is a deploy-time concern.
     data_residency: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Per-tenant cookie session lifetime, in minutes. NULL falls back to
+    # the global default in ``sessions.SESSION_TTL``. Enterprise buyers
+    # routinely require a max session age (often 480 minutes for SOC2 or
+    # 60 for high-risk admin tenancy); this column lets each workspace
+    # pick its own without redeploying. Enforced at session creation in
+    # ``issue_session`` and clipped on existing rows when the policy is
+    # lowered so a sleeping browser tab cannot outlive the new rule.
+    session_ttl_minutes: Mapped[int | None] = mapped_column(nullable=True)
     # SCIM 2.0 provisioning token. When ``scim_enabled`` is True an external
     # identity provider (Okta, Azure AD, Google Workspace) can call
     # ``/scim/v2/*`` with ``Authorization: Bearer <token>`` to provision and
@@ -465,6 +473,10 @@ def init_db() -> None:
                 if "scim_default_role" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN scim_default_role VARCHAR(16)"
+                    ))
+                if "session_ttl_minutes" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN session_ttl_minutes INTEGER"
                     ))
             if insp.has_table("sessions"):
                 scols = {c["name"] for c in insp.get_columns("sessions")}

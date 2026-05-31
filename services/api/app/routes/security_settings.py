@@ -10,16 +10,22 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, HTTPException, Request
 
 from shotclassify_store import (
+    SESSION_TTL_MAX_MINUTES,
+    SESSION_TTL_MIN_MINUTES,
     get_ip_allowlist,
     get_privacy_settings,
     get_retention_days,
+    get_session_policy,
     get_sso_config,
     purge_expired_for_tenant,
     set_ip_allowlist,
     set_privacy_settings,
     set_retention_days,
+    set_session_policy,
     set_sso_config,
 )
+from datetime import timedelta
+from shotclassify_store.sessions import SESSION_TTL, clip_active_for_tenant
 
 from ..middleware.mfa import require_mfa_step_up
 from ..middleware.rbac import require_role
@@ -198,3 +204,62 @@ def put_privacy_route(request: Request, payload: dict = Body(...)) -> dict:
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return cfg.to_dict()
+
+
+@router.get("/sessions", dependencies=[require_role("admin")])
+def get_session_policy_route(request: Request) -> dict:
+    """Return the per-tenant cookie session TTL policy.
+
+    Includes the effective minutes (the override if set, else the global
+    default) so the UI can show what every new login will actually use
+    without re-implementing the fallback logic.
+    """
+    tenant_id = _tenant(request)
+    policy = get_session_policy(tenant_id)
+    default_minutes = int(SESSION_TTL.total_seconds() // 60)
+    effective = policy.session_ttl_minutes or default_minutes
+    return {
+        **policy.to_dict(),
+        "default_minutes": default_minutes,
+        "effective_minutes": effective,
+    }
+
+
+@router.put(
+    "/sessions",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_session_policy_route(request: Request, payload: dict = Body(...)) -> dict:
+    """Set or clear the per-tenant cookie session TTL.
+
+    Body: ``{"session_ttl_minutes": int|null}``. ``null`` clears the
+    override and the tenant returns to the global default. Lowering the
+    TTL also clips every active session whose remaining lifetime exceeds
+    the new ceiling so a long-lived browser cookie cannot outlive the
+    new rule. ``clipped`` in the response reports how many sessions were
+    shortened.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "Body must be a JSON object.")
+    if "session_ttl_minutes" not in payload:
+        raise HTTPException(
+            422, "Field 'session_ttl_minutes' is required (integer or null)."
+        )
+    raw = payload["session_ttl_minutes"]
+    actor = getattr(request.state, "principal", None)
+    try:
+        policy = set_session_policy(
+            tenant_id, session_ttl_minutes=raw, updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    default_minutes = int(SESSION_TTL.total_seconds() // 60)
+    effective = policy.session_ttl_minutes or default_minutes
+    clipped = clip_active_for_tenant(tenant_id, timedelta(minutes=effective))
+    return {
+        **policy.to_dict(),
+        "default_minutes": default_minutes,
+        "effective_minutes": effective,
+        "clipped": clipped,
+    }

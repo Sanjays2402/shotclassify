@@ -390,3 +390,104 @@ def set_privacy_settings(
     return PrivacySettings(
         tenant_id=tenant_id, redact_modes=modes, data_residency=residency
     )
+
+
+# --- Session policy: per-tenant cookie session TTL ------------------------
+
+
+# Bounds on the configurable per-tenant session TTL. The lower bound keeps
+# admins from locking themselves out with a 0-minute policy (any browser
+# round trip would already be expired). The upper bound prevents a tenant
+# from quietly opting out of session rotation entirely; 365 days is the
+# longest a SOC2 auditor will tolerate without a written exception.
+SESSION_TTL_MIN_MINUTES = 5
+SESSION_TTL_MAX_MINUTES = 60 * 24 * 365
+
+
+@dataclass(frozen=True)
+class SessionPolicy:
+    tenant_id: str
+    session_ttl_minutes: int | None  # None = use global default
+
+    def to_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "session_ttl_minutes": self.session_ttl_minutes,
+            "min_minutes": SESSION_TTL_MIN_MINUTES,
+            "max_minutes": SESSION_TTL_MAX_MINUTES,
+        }
+
+
+def get_session_policy(tenant_id: str | None) -> SessionPolicy:
+    """Return the session policy for ``tenant_id``.
+
+    Empty/unknown tenant returns the "use global default" sentinel so
+    callers can blindly pass it through to ``issue_session`` without
+    branching on whether the tenant has ever opened settings.
+    """
+    if not tenant_id:
+        return SessionPolicy(tenant_id="", session_ttl_minutes=None)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return SessionPolicy(tenant_id=tenant_id, session_ttl_minutes=None)
+        return SessionPolicy(
+            tenant_id=tenant_id,
+            session_ttl_minutes=getattr(row, "session_ttl_minutes", None),
+        )
+
+
+def set_session_policy(
+    tenant_id: str,
+    *,
+    session_ttl_minutes: int | None,
+    updated_by: str | None,
+) -> SessionPolicy:
+    """Persist a per-tenant cookie session TTL (in minutes) or clear it.
+
+    ``None`` clears the override and the tenant returns to the global
+    default. Raises ``ValueError`` for out-of-range or non-integer values
+    so the API layer can surface a 422 with a precise message.
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    norm: int | None
+    if session_ttl_minutes is None:
+        norm = None
+    else:
+        if isinstance(session_ttl_minutes, bool) or not isinstance(
+            session_ttl_minutes, int
+        ):
+            raise ValueError("session_ttl_minutes must be an integer or null")
+        if (
+            session_ttl_minutes < SESSION_TTL_MIN_MINUTES
+            or session_ttl_minutes > SESSION_TTL_MAX_MINUTES
+        ):
+            raise ValueError(
+                f"session_ttl_minutes must be between "
+                f"{SESSION_TTL_MIN_MINUTES} and {SESSION_TTL_MAX_MINUTES} minutes"
+            )
+        norm = session_ttl_minutes
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                session_ttl_minutes=norm,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.session_ttl_minutes = norm
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return SessionPolicy(tenant_id=tenant_id, session_ttl_minutes=norm)

@@ -2,7 +2,27 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
-## What's new: zero-downtime API key rotation with grace window
+## What's new: per-tenant cookie session lifetime
+
+Workspace admins can now set the cookie session TTL per tenant from `/settings/security` (UI) or `PUT /v1/settings/security/sessions` (API). Lowering the policy clips every active session for the tenant whose remaining lifetime exceeds the new ceiling, so a long-lived cookie minted before the change cannot outlive the new rule. Clearing the override (sending `null`) returns the tenant to the global default in `sessions.SESSION_TTL`. Bounds are 5 minutes to 365 days; values outside that range return 422 with a precise message. Coverage in `tests/test_session_policy.py`.
+
+### Try it
+
+```bash
+# Read the active policy (admin role required).
+curl -s -H 'X-API-Key: $ADMIN_KEY' http://localhost:7441/v1/settings/security/sessions
+# => {"tenant_id":"acme","session_ttl_minutes":null,"default_minutes":43200,
+#     "effective_minutes":43200,"min_minutes":5,"max_minutes":525600}
+
+# Tighten to 8 hours. "clipped" reports how many active sessions were shortened.
+curl -s -X PUT -H 'X-API-Key: $ADMIN_KEY' -H 'content-type: application/json' \
+  -d '{"session_ttl_minutes":480}' http://localhost:7441/v1/settings/security/sessions
+# => {...,"session_ttl_minutes":480,"effective_minutes":480,"clipped":3}
+```
+
+Manage from the dashboard at <http://localhost:3000/settings/security>.
+
+## Previous: zero-downtime API key rotation with grace window
 
 Workspace admins can rotate a `/v1/api-keys` credential with `POST /v1/api-keys/{id}/rotate`. The endpoint mints a successor key that inherits the source key's tenant binding, scopes, and per-key rate limit override, then shortens the old key's `expires_at` to `now + grace_minutes` (default 24 hours, max 7 days, `0` revokes immediately). Both keys authenticate during the grace window so production integrations can swap the secret without dropped requests, then the old key hard-fails 401 on its own.
 
