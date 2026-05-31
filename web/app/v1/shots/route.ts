@@ -9,13 +9,14 @@ import {
   v1Error,
 } from "@/lib/v1auth";
 import { filterShotListQuery } from "@/lib/v1-core";
+import { withObservability } from "@/lib/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const FORWARD_HEADERS = ["x-total-count", "x-offset", "x-limit"];
 
-export async function GET(req: NextRequest) {
+async function getHandler(req: NextRequest): Promise<Response> {
   const auth = await authenticate(req);
   if (auth instanceof NextResponse) return auth;
 
@@ -52,3 +53,5 @@ export async function GET(req: NextRequest) {
   }
   return new NextResponse(body, { status: upstream.status, headers });
 }
+
+export const GET = withObservability("/v1/shots", getHandler);

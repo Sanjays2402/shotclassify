@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAndTouch, hasScope, workspaceOf } from "@/lib/keystore";
 import { dispatchEvent } from "@/lib/webhooks";
 import { notifyClassifyCompleted } from "@/lib/notifications";
+import { withObservability } from "@/lib/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,7 +29,7 @@ function errorResponse(status: number, code: string, message: string) {
   );
 }
 
-export async function POST(req: NextRequest) {
+async function postHandler(req: NextRequest): Promise<Response> {
   const token = extractToken(req);
   if (!token) {
     return errorResponse(
@@ -111,7 +112,7 @@ export async function POST(req: NextRequest) {
   });
 }
 
-export async function GET() {
+async function getHandler(): Promise<Response> {
   return NextResponse.json({
     name: "shotclassify",
     version: "v1",
@@ -120,3 +121,6 @@ export async function GET() {
     body: "multipart/form-data; field 'file' = image",
   });
 }
+
+export const POST = withObservability("/v1/classify", postHandler);
+export const GET = withObservability("/v1/classify", () => getHandler());

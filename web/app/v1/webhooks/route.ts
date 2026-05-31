@@ -15,6 +15,7 @@ import {
   type Webhook,
 } from "@/lib/webhooks";
 import { workspaceOf } from "@/lib/keystore";
+import { withObservability } from "@/lib/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +27,7 @@ function publicView(hook: Webhook) {
   return { ...rest, secret_prefix: secret.slice(0, 12) };
 }
 
-export async function GET(req: NextRequest) {
+async function getHandler(req: NextRequest): Promise<Response> {
   const auth = await authenticate(req, "read");
   if (auth instanceof NextResponse) return auth;
 
@@ -34,7 +35,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ webhooks: hooks.map(publicView) });
 }
 
-export async function POST(req: NextRequest) {
+async function postHandler(req: NextRequest): Promise<Response> {
   const auth = await authenticate(req, "admin");
   if (auth instanceof NextResponse) return auth;
 
@@ -94,3 +95,6 @@ export async function POST(req: NextRequest) {
     { status: 201 },
   );
 }
+
+export const GET = withObservability("/v1/webhooks", getHandler);
+export const POST = withObservability("/v1/webhooks", postHandler);

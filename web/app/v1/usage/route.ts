@@ -2,11 +2,12 @@
 // Useful for customers building quota meters in their own dashboards.
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate, keyHeaders } from "@/lib/v1auth";
+import { withObservability } from "@/lib/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+async function getHandler(req: NextRequest): Promise<Response> {
   const auth = await authenticate(req);
   if (auth instanceof NextResponse) return auth;
   const { key } = auth;
@@ -25,3 +26,5 @@ export async function GET(req: NextRequest) {
     { headers: keyHeaders(key) },
   );
 }
+
+export const GET = withObservability("/v1/usage", getHandler);

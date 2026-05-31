@@ -15,6 +15,7 @@ import {
   ListMagnifyingGlass,
   EnvelopeSimple,
   ChartLineUp,
+  Pulse,
   Lock,
   ArrowSquareOut,
   WebhooksLogo,
@@ -262,6 +263,13 @@ export default function AdminConsolePage() {
           value="Manage"
           href="/admin/legal-holds"
           sub="freeze deletes"
+        />
+        <StatCard
+          icon={<Pulse size={18} weight="duotone" />}
+          label="Observability"
+          value="Probes"
+          href="/admin/observability"
+          sub="healthz, readyz, metrics"
         />
       </div>
 

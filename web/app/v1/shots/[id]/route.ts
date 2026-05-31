@@ -7,14 +7,15 @@ import {
   v1Error,
 } from "@/lib/v1auth";
 import { isValidShotId } from "@/lib/v1-core";
+import { withObservability } from "@/lib/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(
+async function getHandler(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-) {
+): Promise<Response> {
   const auth = await authenticate(req);
   if (auth instanceof NextResponse) return auth;
 
@@ -47,3 +48,5 @@ export async function GET(
     },
   });
 }
+
+export const GET = withObservability("/v1/shots/:id", getHandler);

@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authenticate, v1Error } from "@/lib/v1auth";
 import { deleteWebhook, getWebhook, type Webhook } from "@/lib/webhooks";
 import { workspaceOf } from "@/lib/keystore";
+import { withObservability } from "@/lib/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,10 +14,10 @@ function publicView(hook: Webhook) {
   return { ...rest, secret_prefix: secret.slice(0, 12) };
 }
 
-export async function GET(
+async function getHandler(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-) {
+): Promise<Response> {
   const auth = await authenticate(req, "read");
   if (auth instanceof NextResponse) return auth;
 
@@ -30,10 +31,10 @@ export async function GET(
   return NextResponse.json({ webhook: publicView(hook) });
 }
 
-export async function DELETE(
+async function deleteHandler(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-) {
+): Promise<Response> {
   const auth = await authenticate(req, "admin");
   if (auth instanceof NextResponse) return auth;
 
@@ -46,3 +47,6 @@ export async function DELETE(
   }
   return NextResponse.json({ deleted: id });
 }
+
+export const GET = withObservability("/v1/webhooks/:id", getHandler);
+export const DELETE = withObservability("/v1/webhooks/:id", deleteHandler);

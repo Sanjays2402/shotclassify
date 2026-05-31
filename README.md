@@ -2,6 +2,39 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: liveness, readiness, and Prometheus metrics on the web tier
+
+Kubernetes-style probes and a Prometheus exposition endpoint are now baked into the Next.js web tier alongside the existing FastAPI ones, so a buyer's SRE team can scrape and rotate pods without bespoke glue. `GET /healthz` returns `{ status: "ok", uptime_seconds }` and is dependency-free, matching the Kubernetes guidance that liveness must not flap on upstream failures. `GET /readyz` runs real dependency checks (upstream FastAPI `/healthz` reachability plus keystore directory writability) and returns 503 when any check fails, which is the correct signal for a load balancer to pull the pod out of rotation without restarting it. `GET /metrics` emits Prometheus text format v0.0.4 with three series populated by the `/v1` API surface (`shotclassify_http_requests_total`, `shotclassify_http_request_duration_seconds`, `shotclassify_http_errors_total`) plus `shotclassify_process_uptime_seconds`. Every `/v1` request is wrapped by `withObservability(route, handler)`, which also resolves or mints a request id (honoring upstream `x-request-id`, `x-correlation-id`, or `traceparent` when safe) and echoes it on every response for end-to-end tracing. Coverage in `web/lib/metrics.test.mts`. Live admin view at `/admin/observability`.
+
+### Try it
+
+```bash
+# 1. Boot the web tier.
+pnpm --filter shotclassify-web dev   # http://localhost:3000
+
+# 2. Liveness is fast and dependency-free.
+curl -i http://localhost:3000/healthz
+# HTTP/1.1 200 OK
+# x-request-id: <hex>
+# {"status":"ok","uptime_seconds":12}
+
+# 3. Readiness checks the upstream classifier and the keystore.
+curl -i http://localhost:3000/readyz
+# HTTP/1.1 200 OK   (or 503 with per-check detail when degraded)
+# {"status":"ready","checks":[{"name":"upstream_api","ok":true},{"name":"keystore","ok":true}]}
+
+# 4. Scrape Prometheus metrics. Hit /v1 first so series exist.
+curl -s -H "Authorization: Bearer $SK" http://localhost:3000/v1/usage > /dev/null
+curl -s http://localhost:3000/metrics | grep shotclassify_http_requests_total
+# shotclassify_http_requests_total{method="GET",route="/v1/usage",status="2xx"} 1
+
+# 5. Request ids propagate end-to-end.
+curl -s -D - -H "x-request-id: trace-abc-1" http://localhost:3000/healthz | grep -i x-request-id
+# x-request-id: trace-abc-1
+```
+
+Dashboard UI: <http://localhost:3000/admin/observability>.
+
 ## What's new: enforced API key rotation policy
 
 SOC 2 CC6.1 and most enterprise procurement reviews expect a documented and *enforced* credential rotation window, not just a written policy. Workspace admins can now cap the lifetime of every newly minted or rotated API key from `Settings -> Security -> API key rotation policy` (or `PUT /v1/settings/security/api-key-ttl`). When a cap is set, `POST /v1/api-keys` rejects any `ttl_days` longer than the cap and applies the cap as the default when `ttl_days` is omitted, so a tenant with a policy can never silently mint an unbounded key. `POST /v1/api-keys/{id}/rotate` clamps the successor's expiry to the cap as well, so rotation never extends past the documented window. Existing keys are not retroactively shortened: a tightened policy will not break a live integration. The cap is surfaced on `GET /v1/api-keys` (field `ttl_policy`) so the admin UI can render the active value. Admin-only, MFA step-up required, audit-logged by the existing tamper-evident chain. Coverage in `tests/test_api_key_ttl_policy.py`.
