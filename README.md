@@ -26,6 +26,25 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - Public share links at `/r/<shot-id>`: server-rendered, no-auth result pages with confidence distribution, OCR transcript, and a dynamic 1200x630 OpenGraph image for link previews on Slack, Twitter, iMessage, and LinkedIn. Each shot detail page has a one-click Copy share link button.
 - Outbound webhooks at `/webhooks`: register HTTPS endpoints that receive a signed JSON POST every time a classification completes. Each subscription gets a one-time `whsec_...` secret; deliveries are signed with `X-Shotclassify-Signature: sha256=<hmac>` over the raw body. Failed deliveries retry up to 4 times with backoff and every attempt is recorded in a live delivery log. Pause, resume, or send a test event from the dashboard.
 - Bulk classify at `/batch`: drop a `.zip` (or a folder of stills) and the page extracts in the browser, fans the images out to the live classifier with bounded concurrency, tracks per-row status, surfaces shot IDs (each one persists to history and fires webhooks), and offers a one-click CSV export with id, filename, class, confidence, latency, and any error per row.
+- Account & GDPR controls at `/account`: shows the signed-in principal (GitHub OAuth session or API key), counts of stored classifications and audit rows, one-click JSON export of everything under your principal, and a type-to-confirm "erase everything" button wired to `DELETE /v1/me/data?confirm=erase`. Sign in/out lives in the same panel.
+
+## Try the account page
+
+1. `cd web && pnpm dev` (or `npm run dev`), open http://localhost:3000/account.
+2. You will see the principal the web app authenticates as (the configured `SHOTCLASSIFY_API_KEY`, or your GitHub login if you signed in via the API host).
+3. Download a JSON bundle of every classification and audit row stored under that principal:
+
+```bash
+curl -sS -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  http://127.0.0.1:7441/v1/me/data > my-shotclassify-data.json
+```
+
+4. To permanently erase the same rows (used by the danger zone button):
+
+```bash
+curl -sS -X DELETE -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  "http://127.0.0.1:7441/v1/me/data?confirm=erase"
+```
 
 ## Try batch
 
