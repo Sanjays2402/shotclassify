@@ -26,9 +26,13 @@ from .retention import (
     set_retention_days,
 )
 from .tenant_settings import (
+    SsoConfig,
     get_ip_allowlist,
+    get_sso_config,
     ip_matches_allowlist,
     set_ip_allowlist,
+    set_sso_config,
+    tenant_for_sso_domain,
 )
 
 __all__ = [
@@ -58,4 +62,8 @@ __all__ = [
     "purge_expired_for_tenant",
     "purge_expired_all_tenants",
     "list_tenants_with_retention",
+    "SsoConfig",
+    "get_sso_config",
+    "set_sso_config",
+    "tenant_for_sso_domain",
 ]

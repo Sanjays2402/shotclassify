@@ -39,6 +39,7 @@ class SessionInfo:
     revoked_at: datetime | None
     client_ip: str | None
     user_agent: str | None
+    auth_method: str = "oauth"
 
     def to_dict(self) -> dict:
         return {
@@ -51,6 +52,7 @@ class SessionInfo:
             "revoked_at": self.revoked_at.isoformat() if self.revoked_at else None,
             "client_ip": self.client_ip,
             "user_agent": self.user_agent,
+            "auth_method": self.auth_method,
         }
 
 
@@ -65,6 +67,7 @@ def _to_info(row: SessionRow) -> SessionInfo:
         revoked_at=row.revoked_at,
         client_ip=row.client_ip,
         user_agent=row.user_agent,
+        auth_method=getattr(row, "auth_method", "oauth") or "oauth",
     )
 
 
@@ -75,6 +78,7 @@ def create(
     client_ip: str | None,
     user_agent: str | None,
     ttl: timedelta = SESSION_TTL,
+    auth_method: str = "oauth",
 ) -> SessionInfo:
     now = datetime.now(UTC)
     row = SessionRow(
@@ -87,6 +91,7 @@ def create(
         revoked_at=None,
         client_ip=client_ip,
         user_agent=(user_agent or "")[:512] or None,
+        auth_method=auth_method,
     )
     with get_session() as s:
         s.add(row)

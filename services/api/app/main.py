@@ -37,6 +37,7 @@ from .routes import saved_views as saved_views_routes
 from .routes import security_settings as security_settings_routes
 from .routes import sessions as sessions_routes
 from .routes import settings as settings_routes
+from .routes import sso as sso_routes
 
 
 @asynccontextmanager
@@ -122,6 +123,7 @@ def create_app() -> FastAPI:
     app.include_router(saved_views_routes.router)
     app.include_router(security_settings_routes.router)
     app.include_router(sessions_routes.router)
+    app.include_router(sso_routes.router)
     storage_root = Path(s.storage_local_dir)
     storage_root.mkdir(parents=True, exist_ok=True)
     app.mount("/blob", StaticFiles(directory=str(storage_root)), name="blob")

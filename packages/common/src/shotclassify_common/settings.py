@@ -55,6 +55,20 @@ class Settings(BaseSettings):
     auth_oauth_client_secret: str = ""
     auth_allowed_github_login: str = ""
     auth_api_key: str = "dev-api-key-change-me"
+    # OIDC SSO. One generic OIDC provider for the deployment (configurable
+    # per workspace at the issuer level once we ship per-tenant client
+    # registration). Works with Google Workspace, Okta, Azure AD, Auth0,
+    # Keycloak, anything that publishes /.well-known/openid-configuration.
+    # When ``auth_sso_enabled`` is False the SSO routes refuse to mint a
+    # session and the admin UI shows a "not configured" banner.
+    auth_sso_enabled: bool = False
+    auth_sso_issuer: str = ""
+    auth_sso_client_id: str = ""
+    auth_sso_client_secret: str = ""
+    auth_sso_scopes: str = "openid email profile"
+    # Optional explicit redirect URI for IdPs that pin it server-side.
+    # When empty we derive it from the inbound request URL at callback time.
+    auth_sso_redirect_uri: str = ""
     # RBAC. Roles: admin, operator, viewer. The default API key (auth_api_key)
     # always maps to ``admin`` for backward compatibility. auth_api_keys lets you
     # provision multiple non-admin keys: JSON object of {key: role}, e.g.

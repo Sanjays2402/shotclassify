@@ -121,6 +121,14 @@ class TenantSettingsRow(Base):
     # Enforced per tenant so different customers can pick their own
     # compliance window without code changes.
     retention_days: Mapped[int | None] = mapped_column(nullable=True)
+    # SSO (OIDC) config and enforcement. When ``sso_enforced`` is True the
+    # auth middleware rejects any session for this tenant that was not
+    # minted via the SSO callback. ``sso_domain`` is the email domain that
+    # auto-routes to this tenant during /auth/sso/login (Google Workspace /
+    # Okta / Azure AD). ``sso_provider`` is a free-form label for UX only.
+    sso_enforced: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sso_domain: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    sso_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -154,6 +162,10 @@ class SessionRow(Base):
     )
     client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # How the session was authenticated. ``oauth`` (legacy GitHub) or
+    # ``sso`` (OIDC). Used by enforce-SSO middleware to reject password /
+    # legacy oauth sessions for tenants that have switched to SSO-only.
+    auth_method: Mapped[str] = mapped_column(String(16), default="oauth", nullable=False)
 
 
 @lru_cache(maxsize=1)
@@ -204,6 +216,27 @@ def init_db() -> None:
                 Base.metadata.tables["tenant_settings"].create(bind=conn)
             if not insp.has_table("sessions"):
                 Base.metadata.tables["sessions"].create(bind=conn)
+            # 0011 SSO columns. Cheap ALTERs so dev SQLite stays current.
+            if insp.has_table("tenant_settings"):
+                tcols = {c["name"] for c in insp.get_columns("tenant_settings")}
+                if "sso_enforced" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN sso_enforced BOOLEAN NOT NULL DEFAULT 0"
+                    ))
+                if "sso_domain" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN sso_domain VARCHAR(128)"
+                    ))
+                if "sso_provider" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN sso_provider VARCHAR(64)"
+                    ))
+            if insp.has_table("sessions"):
+                scols = {c["name"] for c in insp.get_columns("sessions")}
+                if "auth_method" not in scols:
+                    conn.execute(text(
+                        "ALTER TABLE sessions ADD COLUMN auth_method VARCHAR(16) NOT NULL DEFAULT 'oauth'"
+                    ))
     except Exception:
         # Best-effort. Real schema management lives in alembic.
         pass

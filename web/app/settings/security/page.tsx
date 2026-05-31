@@ -15,6 +15,7 @@ import {
   Broom,
   Devices,
   SignOut,
+  Key as KeyIcon,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -284,6 +285,7 @@ export default function SecuritySettingsPage() {
       </section>
 
       <RetentionSection />
+      <SsoSection />
       <SessionsSection />
     </div>
   );
@@ -696,6 +698,206 @@ function RetentionSection() {
                   ? "text-emerald-700 dark:text-emerald-300"
                   : "text-rose-700 dark:text-rose-300")
               }
+            >
+              {flash.kind === "ok" ? (
+                <CheckCircle size={14} weight="duotone" />
+              ) : (
+                <Warning size={14} weight="duotone" />
+              )}
+              {flash.msg}
+            </p>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+type SsoConfig = {
+  tenant_id: string;
+  enforced: boolean;
+  domain: string | null;
+  provider: string | null;
+};
+
+type SsoPublic = { enabled: boolean; issuer: string | null };
+
+function SsoSection() {
+  const { data, error, isLoading, mutate } = useSWR<SsoConfig>(
+    "/api/settings/security/sso",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+  const { data: pub } = useSWR<SsoPublic>(
+    `/api/sso-config`,
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+  const [enforced, setEnforced] = useState(false);
+  const [domain, setDomain] = useState("");
+  const [provider, setProvider] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
+
+  useEffect(() => {
+    if (data) {
+      setEnforced(data.enforced);
+      setDomain(data.domain ?? "");
+      setProvider(data.provider ?? "");
+    }
+  }, [data]);
+
+  const status = error as (Error & { status?: number }) | undefined;
+  const unauth = status?.status === 401;
+  const forbidden = status?.status === 403;
+
+  const dirty =
+    !!data &&
+    (enforced !== data.enforced ||
+      (domain || null) !== data.domain ||
+      (provider || null) !== data.provider);
+
+  const save = async () => {
+    setBusy(true);
+    setFlash(null);
+    try {
+      const res = await fetch("/api/settings/security/sso", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          enforced,
+          domain: domain.trim() || null,
+          provider: provider.trim() || null,
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `${res.status} ${res.statusText}`);
+      }
+      const body = (await res.json()) as SsoConfig;
+      setFlash({
+        kind: "ok",
+        msg: body.enforced
+          ? "Saved. SSO is required for this workspace. Existing non-SSO sessions are now rejected."
+          : "Saved. SSO is configured but not enforced.",
+      });
+      mutate();
+    } catch (e) {
+      setFlash({ kind: "err", msg: e instanceof Error ? e.message : "Save failed." });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <header className="mb-4 flex items-start gap-3">
+        <KeyIcon size={22} weight="duotone" className="mt-0.5 text-emerald-600" />
+        <div className="flex-1">
+          <h2 className="text-lg font-semibold tracking-tight">Single sign-on (OIDC)</h2>
+          <p className="text-sm text-zinc-500">
+            Route users in your email domain through your identity provider
+            (Google Workspace, Okta, Azure AD). Turn on enforcement to reject
+            any session that did not flow through SSO.
+          </p>
+        </div>
+        {pub ? (
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+              pub.enabled
+                ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400"
+            }`}
+            title={pub.issuer ?? ""}
+          >
+            {pub.enabled ? "IdP configured" : "IdP not configured"}
+          </span>
+        ) : null}
+      </header>
+
+      {isLoading ? (
+        <div className="h-24 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+      ) : unauth ? (
+        <div className="flex items-center gap-2 rounded-md bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          <Lock size={16} weight="duotone" />
+          Sign in to manage SSO settings.
+        </div>
+      ) : forbidden ? (
+        <div className="flex items-center gap-2 rounded-md bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          <Lock size={16} weight="duotone" />
+          Only workspace admins can configure SSO.
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium">Email domain</span>
+              <input
+                type="text"
+                value={domain}
+                onChange={(e) => setDomain(e.target.value)}
+                placeholder="acme.com"
+                spellCheck={false}
+                className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-zinc-700 dark:bg-zinc-900"
+              />
+              <span className="text-xs text-zinc-500">
+                Users signing in with this domain are routed to this workspace.
+              </span>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium">Provider label</span>
+              <input
+                type="text"
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+                placeholder="Okta"
+                spellCheck={false}
+                className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-zinc-700 dark:bg-zinc-900"
+              />
+              <span className="text-xs text-zinc-500">
+                Shown on the sign-in page. Free-form (Google, Okta, Azure AD).
+              </span>
+            </label>
+          </div>
+
+          <label className="mt-4 flex items-start gap-3 rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+            <input
+              type="checkbox"
+              checked={enforced}
+              onChange={(e) => setEnforced(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500"
+            />
+            <span className="flex-1">
+              <span className="font-medium">Require SSO for this workspace</span>
+              <span className="block text-xs text-zinc-500">
+                Reject any session that was not minted via the OIDC callback.
+                API key callers (machine-to-machine) remain allowed.
+              </span>
+            </span>
+          </label>
+
+          <div className="mt-4 flex items-center justify-between">
+            <p className="text-xs text-zinc-500">
+              Status: {data?.enforced ? "Enforced" : "Available but not required"}
+              {data?.domain ? <> · Domain {data.domain}</> : null}
+            </p>
+            <button
+              type="button"
+              onClick={save}
+              disabled={!dirty || busy}
+              className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-300 dark:disabled:bg-zinc-700"
+            >
+              <FloppyDisk size={16} weight="duotone" />
+              {busy ? "Saving" : "Save"}
+            </button>
+          </div>
+          {flash ? (
+            <p
+              className={`mt-3 inline-flex items-center gap-1 text-sm ${
+                flash.kind === "ok"
+                  ? "text-emerald-700 dark:text-emerald-400"
+                  : "text-red-700 dark:text-red-400"
+              }`}
             >
               {flash.kind === "ok" ? (
                 <CheckCircle size={14} weight="duotone" />

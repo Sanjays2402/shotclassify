@@ -106,15 +106,55 @@ function SignedOutCard({
   loginHref: string;
   error: string | null;
 }) {
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+  const [email, setEmail] = useState("");
+  useEffect(() => {
+    fetch("/api/sso-config")
+      .then((r) => r.json())
+      .then((j) => setSsoEnabled(!!j?.enabled))
+      .catch(() => setSsoEnabled(false));
+  }, []);
+  const ssoHref = email.trim()
+    ? `${API_BASE}/auth/sso/login?email=${encodeURIComponent(email.trim())}`
+    : `${API_BASE}/auth/sso/login`;
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[14px]">You are not signed in.</p>
+      {ssoEnabled ? (
+        <div className="flex flex-col gap-2 rounded-md border p-3" style={{ borderColor: "var(--color-rule)" }}>
+          <label htmlFor="sso-email" className="text-[12px] font-medium">
+            Work email (optional)
+          </label>
+          <input
+            id="sso-email"
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@acme.com"
+            className="rounded-md border px-3 py-2 text-[13px] outline-none focus:ring-2 focus:ring-emerald-500/20"
+            style={{ borderColor: "var(--color-rule)" }}
+          />
+          <a
+            href={ssoHref}
+            className="inline-flex items-center justify-center gap-2 rounded-md px-4 py-2.5 text-[14px] font-medium border"
+            style={{ background: "var(--color-felt)", color: "white" }}
+          >
+            <ShieldCheck size={18} weight="duotone" />
+            Continue with SSO
+          </a>
+          <p className="text-[11px] opacity-60">
+            Routes you to your workspace identity provider (Google Workspace,
+            Okta, Azure AD). If your workspace requires SSO, sign in here.
+          </p>
+        </div>
+      ) : null}
       <a
         href={loginHref}
         className="inline-flex items-center justify-center gap-2 rounded-md px-4 py-2.5 text-[14px] font-medium border transition-colors"
         style={{
-          background: "var(--color-felt)",
-          color: "white",
+          background: ssoEnabled ? "transparent" : "var(--color-felt)",
+          color: ssoEnabled ? "inherit" : "white",
           borderColor: "var(--color-felt-rail, var(--color-felt))",
         }}
       >

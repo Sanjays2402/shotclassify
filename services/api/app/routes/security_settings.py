@@ -12,9 +12,11 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from shotclassify_store import (
     get_ip_allowlist,
     get_retention_days,
+    get_sso_config,
     purge_expired_for_tenant,
     set_ip_allowlist,
     set_retention_days,
+    set_sso_config,
 )
 
 from ..middleware.rbac import require_role
@@ -105,3 +107,43 @@ def run_retention_route(request: Request) -> dict:
     tenant_id = _tenant(request)
     result = purge_expired_for_tenant(tenant_id)
     return result.to_dict()
+
+
+@router.get("/sso", dependencies=[require_role("admin")])
+def get_sso_route(request: Request) -> dict:
+    """Return the SSO config for the caller's tenant."""
+    tenant_id = _tenant(request)
+    return get_sso_config(tenant_id).to_dict()
+
+
+@router.put("/sso", dependencies=[require_role("admin")])
+def put_sso_route(request: Request, payload: dict = Body(...)) -> dict:
+    """Update per-tenant SSO config.
+
+    Body: ``{"enforced": bool, "domain": str|null, "provider": str|null}``.
+    Setting ``enforced=True`` immediately rejects any active non-SSO session
+    for the tenant on its next request. Domain uniqueness is enforced at the
+    store layer so two tenants cannot claim the same email domain.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "Body must be a JSON object.")
+    enforced = bool(payload.get("enforced", False))
+    domain = payload.get("domain")
+    provider = payload.get("provider")
+    if domain is not None and not isinstance(domain, str):
+        raise HTTPException(422, "'domain' must be a string or null.")
+    if provider is not None and not isinstance(provider, str):
+        raise HTTPException(422, "'provider' must be a string or null.")
+    actor = getattr(request.state, "principal", None)
+    try:
+        cfg = set_sso_config(
+            tenant_id,
+            enforced=enforced,
+            domain=domain or None,
+            provider=provider or None,
+            updated_by=actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return cfg.to_dict()

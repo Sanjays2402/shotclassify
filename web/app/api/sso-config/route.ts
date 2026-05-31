@@ -1,0 +1,19 @@
+import { NextResponse } from "next/server";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const API = process.env.SHOTCLASSIFY_API_BASE || "http://127.0.0.1:7441";
+
+export async function GET() {
+  try {
+    const r = await fetch(`${API}/auth/sso/config`, { cache: "no-store" });
+    const text = await r.text();
+    return new NextResponse(text, {
+      status: r.status,
+      headers: { "content-type": r.headers.get("content-type") ?? "application/json" },
+    });
+  } catch {
+    return NextResponse.json({ enabled: false, issuer: null }, { status: 200 });
+  }
+}

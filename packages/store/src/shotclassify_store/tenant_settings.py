@@ -85,6 +85,134 @@ def set_ip_allowlist(
     return normalized
 
 
+# --- SSO configuration ----------------------------------------------------
+
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class SsoConfig:
+    tenant_id: str
+    enforced: bool
+    domain: str | None
+    provider: str | None
+
+    def to_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "enforced": self.enforced,
+            "domain": self.domain,
+            "provider": self.provider,
+        }
+
+
+def get_sso_config(tenant_id: str) -> SsoConfig:
+    if not tenant_id:
+        return SsoConfig(tenant_id="", enforced=False, domain=None, provider=None)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return SsoConfig(tenant_id=tenant_id, enforced=False, domain=None, provider=None)
+        return SsoConfig(
+            tenant_id=tenant_id,
+            enforced=bool(getattr(row, "sso_enforced", False)),
+            domain=getattr(row, "sso_domain", None),
+            provider=getattr(row, "sso_provider", None),
+        )
+
+
+def set_sso_config(
+    tenant_id: str,
+    *,
+    enforced: bool,
+    domain: str | None,
+    provider: str | None,
+    updated_by: str | None,
+) -> SsoConfig:
+    """Update the per-tenant SSO settings.
+
+    ``enforced=True`` means the auth middleware refuses any non-SSO session
+    for this tenant. ``domain`` (e.g. ``acme.com``) is used by
+    ``/auth/sso/login?email=...`` to route a user to the correct tenant
+    without exposing tenant ids in URLs.
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    norm_domain: str | None = None
+    if domain:
+        d = domain.strip().lower().lstrip("@")
+        if not d or " " in d or "." not in d or len(d) > 128:
+            raise ValueError(f"invalid SSO domain: {domain!r}")
+        norm_domain = d
+    norm_provider: str | None = None
+    if provider:
+        p = provider.strip()[:64]
+        if p:
+            norm_provider = p
+    init_db()
+    with get_session() as s:
+        # Domain uniqueness across tenants: refuse to overwrite another
+        # tenant's claim on the same domain. Otherwise an admin of tenant B
+        # could hijack tenant A's email routing.
+        if norm_domain:
+            clash = s.execute(
+                select(TenantSettingsRow).where(
+                    TenantSettingsRow.sso_domain == norm_domain,
+                    TenantSettingsRow.tenant_id != tenant_id,
+                )
+            ).scalar_one_or_none()
+            if clash is not None:
+                raise ValueError(
+                    f"SSO domain {norm_domain!r} is already configured for another tenant"
+                )
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                sso_enforced=enforced,
+                sso_domain=norm_domain,
+                sso_provider=norm_provider,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.sso_enforced = enforced
+            row.sso_domain = norm_domain
+            row.sso_provider = norm_provider
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return SsoConfig(
+        tenant_id=tenant_id,
+        enforced=enforced,
+        domain=norm_domain,
+        provider=norm_provider,
+    )
+
+
+def tenant_for_sso_domain(domain: str) -> str | None:
+    """Return the tenant_id whose SSO config claims ``domain``, if any."""
+    if not domain:
+        return None
+    d = domain.strip().lower().lstrip("@")
+    if not d:
+        return None
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.sso_domain == d)
+        ).scalar_one_or_none()
+        return row.tenant_id if row else None
+
+
 def ip_matches_allowlist(ip: str, cidrs: list[str]) -> bool:
     """Return True if ``ip`` is contained by any CIDR in ``cidrs``.
 

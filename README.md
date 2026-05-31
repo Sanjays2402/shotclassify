@@ -1,5 +1,32 @@
 # shotclassify
 
+Video and image shot classifier with per-tenant rules, audit trail, and an admin dashboard.
+
+## What's new: enterprise SSO (OIDC) with per-workspace enforcement
+
+Wire one OIDC identity provider (Google Workspace, Okta, Azure AD, Auth0, Keycloak) for the deployment, then opt each tenant in by claiming its email domain and turning on enforcement. When `enforced=true`, the auth middleware refuses any session for that tenant that was not minted via `/auth/sso/callback`. API-key (machine-to-machine) callers are unaffected.
+
+Configure the IdP via env on the API:
+
+```
+AUTH_SSO_ENABLED=true
+AUTH_SSO_ISSUER=https://accounts.google.com
+AUTH_SSO_CLIENT_ID=...
+AUTH_SSO_CLIENT_SECRET=...
+# optional: AUTH_SSO_REDIRECT_URI=https://app.example.com/auth/sso/callback
+```
+
+Admins manage per-workspace SSO at http://localhost:3000/settings/security ("Single sign-on (OIDC)" card), or via the API:
+
+```
+curl -s -X PUT http://127.0.0.1:7441/v1/settings/security/sso \
+  -H 'x-api-key: ADMIN_KEY' -H 'content-type: application/json' \
+  -d '{"enforced": true, "domain": "acme.com", "provider": "Okta"}'
+```
+
+Domain claims are unique across tenants so a second workspace cannot hijack another tenant's email routing. Sign-in begins at `GET /auth/sso/login?email=alice@acme.com`.
+
+
 ShotClassify is a real-time screenshot classifier with confidence scores, OCR, history, share links, and a programmatic /v1 API.
 
 ## What's new: revocable browser sessions

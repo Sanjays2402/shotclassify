@@ -24,6 +24,10 @@ PUBLIC_PATHS = {
     "/auth/login",
     "/auth/callback",
     "/auth/logout",
+    "/auth/sso/login",
+    "/auth/sso/callback",
+    "/auth/sso/config",
+    "/auth/sso/_test/issue",
     "/docs",
     "/redoc",
     "/openapi.json",
@@ -40,18 +44,23 @@ def issue_session(
     client_ip: str | None = None,
     user_agent: str | None = None,
     tenant_id: str | None = None,
+    auth_method: str = "oauth",
 ) -> tuple[str, str]:
     """Mint a server-side session, return ``(cookie_value, session_id)``.
 
     The cookie carries only the signed session id; the principal and
     every other attribute live in the database so they can be revoked
-    independently of the cookie's signature.
+    independently of the cookie's signature. ``auth_method`` records
+    which flow minted the session ("oauth", "sso") so the enforce-SSO
+    check in the auth middleware can reject legacy logins for tenants
+    that have switched to OIDC-only.
     """
     info = session_store.create(
         principal=login,
         tenant_id=tenant_id,
         client_ip=client_ip,
         user_agent=user_agent,
+        auth_method=auth_method,
     )
     cookie = _signer().dumps({"sid": info.id})
     return cookie, info.id
@@ -107,6 +116,26 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
                 not s.auth_allowed_github_login
                 or info.principal == s.auth_allowed_github_login
             ):
+                # Enforce SSO at the session boundary. If the resolved tenant
+                # has ``sso_enforced=True`` and this session was not minted
+                # via the SSO callback, refuse it. API-key callers are exempt
+                # because they cover machine-to-machine integrations that
+                # cannot run an interactive browser flow.
+                from shotclassify_store.tenant_settings import get_sso_config
+
+                if info.tenant_id:
+                    cfg = get_sso_config(info.tenant_id)
+                    if cfg.enforced and info.auth_method != "sso":
+                        return JSONResponse(
+                            {
+                                "error": "sso_required",
+                                "detail": (
+                                    "This workspace requires single sign-on. "
+                                    "Sign in again via /auth/sso/login."
+                                ),
+                            },
+                            status_code=401,
+                        )
                 request.state.principal = info.principal
                 request.state.session_id = info.id
                 request.state.role = role_for_login(info.principal)
