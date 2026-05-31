@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from shotclassify_store import memberships_store
 
+from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
 from ..middleware.rbac import require_role
 
@@ -96,7 +97,7 @@ def update_member_role(
     "/members/{principal}",
     dependencies=[require_role("admin"), require_mfa_step_up()],
 )
-def remove_member(principal: str, request: Request) -> dict:
+def remove_member(principal: str, request: Request, dry_run: bool = dry_run_query()):
     tenant_id = _require_tenant(request)
     caller = getattr(request.state, "principal", None)
     if principal == caller:
@@ -114,6 +115,14 @@ def remove_member(principal: str, request: Request) -> dict:
                 status_code=409,
                 detail="Cannot remove the last admin of this workspace.",
             )
+    if dry_run:
+        request.state.audit_target_id = principal
+        if existing_role is None:
+            return mark_dry_run(request, would_remove=None)
+        return mark_dry_run(
+            request,
+            would_remove={"principal": principal, "role": existing_role},
+        )
     removed = memberships_store.remove_member(tenant_id, principal)
     if not removed:
         raise HTTPException(404, "Member not found.")
@@ -174,8 +183,18 @@ def create_invitation(payload: CreateInvitationRequest, request: Request) -> dic
     "/invitations/{invitation_id}",
     dependencies=[require_role("admin"), require_mfa_step_up()],
 )
-def revoke_invitation(invitation_id: str, request: Request) -> dict:
+def revoke_invitation(invitation_id: str, request: Request, dry_run: bool = dry_run_query()):
     tenant_id = _require_tenant(request)
+    if dry_run:
+        records = memberships_store.list_invitations(tenant_id, include_inactive=False)
+        match = next((r for r in records if r.id == invitation_id), None)
+        if match is None:
+            return mark_dry_run(request, would_revoke=None)
+        request.state.audit_target_id = match.id
+        return mark_dry_run(
+            request,
+            would_revoke={"id": match.id, "email": getattr(match, "email", None)},
+        )
     record = memberships_store.revoke_invitation(invitation_id, tenant_id=tenant_id)
     if record is None:
         raise HTTPException(404, "Invitation not found.")

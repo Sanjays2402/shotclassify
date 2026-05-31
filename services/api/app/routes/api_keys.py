@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from shotclassify_store import api_keys_store
 
+from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
 from ..middleware.rbac import require_role
 
@@ -110,10 +111,21 @@ def create_my_key(
 def revoke_my_key(
     key_id: str,
     request: Request,
+    dry_run: bool = dry_run_query(),
     _: str = require_role("admin"),
 ):
     """Soft-revoke a key. Returns 404 (not 403) for unknown or wrong-tenant ids."""
     tenant_id = getattr(request.state, "tenant_id", None)
+    if dry_run:
+        keys = api_keys_store.list_keys(tenant_id=tenant_id, include_revoked=True)
+        record = next((k for k in keys if k.id == key_id), None)
+        if record is None or getattr(record, "revoked_at", None) is not None:
+            return mark_dry_run(request, would_revoke=None)
+        request.state.audit_target_id = record.id
+        return mark_dry_run(
+            request,
+            would_revoke={"id": record.id, "label": getattr(record, "label", None)},
+        )
     record = api_keys_store.revoke(key_id, tenant_id=tenant_id)
     if record is None:
         raise HTTPException(404, "API key not found.")

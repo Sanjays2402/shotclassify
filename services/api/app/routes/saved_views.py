@@ -15,6 +15,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 
 from shotclassify_store import SavedViewRepository
 
+from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.rbac import require_role
 
 router = APIRouter(prefix="/v1/saved-views", tags=["saved-views"])
@@ -96,9 +97,22 @@ def update_view(
 
 
 @router.delete("/{view_id}", dependencies=[require_role("operator")])
-def delete_view(request: Request, view_id: str) -> dict:
+def delete_view(request: Request, view_id: str, dry_run: bool = dry_run_query()) -> dict | object:
     principal, tenant_id = _scope(request)
-    ok = SavedViewRepository().delete(
+    repo = SavedViewRepository()
+    if dry_run:
+        existing = repo.get(view_id, principal=principal, tenant_id=tenant_id) if hasattr(repo, "get") else None
+        present = existing is not None
+        if not present:
+            # Fallback: enumerate to check existence without mutating.
+            try:
+                rows = repo.list(principal=principal, tenant_id=tenant_id)
+                present = any((r.get("id") if isinstance(r, dict) else getattr(r, "id", None)) == view_id for r in rows)
+            except Exception:
+                present = False
+        request.state.audit_target_id = view_id
+        return mark_dry_run(request, would_delete={"id": view_id} if present else None)
+    ok = repo.delete(
         view_id, principal=principal, tenant_id=tenant_id
     )
     if not ok:

@@ -20,6 +20,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from shotclassify_store import mfa_store
 
+from ..dryrun import dry_run_query, mark_dry_run
+
 router = APIRouter(prefix="/v1/mfa", tags=["mfa"])
 
 
@@ -96,7 +98,7 @@ def challenge(body: VerifyCodeIn, request: Request):
 
 
 @router.delete("")
-def disable(body: VerifyCodeIn, request: Request):
+def disable(body: VerifyCodeIn, request: Request, dry_run: bool = dry_run_query()):
     """Remove the MFA credential.
 
     Requires a current code so a stolen active session cannot silently
@@ -104,8 +106,13 @@ def disable(body: VerifyCodeIn, request: Request):
     """
     principal = _require_human_principal(request)
     sid = getattr(request.state, "session_id", None)
-    # Verify possession of the factor before allowing removal.
+    # Verify possession of the factor before allowing removal, even on
+    # dry-runs. A preview path that skipped this check would let a
+    # stolen session enumerate whether MFA is enabled without proving
+    # possession of the factor.
     if not mfa_store.verify_step_up(principal, body.code, session_id=sid):
         raise HTTPException(400, "Invalid code.")
+    if dry_run:
+        return mark_dry_run(request, would_remove={"principal": principal})
     removed = mfa_store.disable(principal)
     return {"removed": removed}

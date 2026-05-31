@@ -58,6 +58,9 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
             client_ip = forwarded.split(",")[0].strip()
+        extra = getattr(request.state, "audit_extra", None) or None
+        if getattr(request.state, "dry_run", False) and (extra is None or "dry_run" not in extra):
+            extra = {**(extra or {}), "dry_run": True}
         try:
             AuditRepository().record(
                 principal=str(principal),
@@ -70,6 +73,7 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 elapsed_ms=elapsed_ms,
                 target_id=target_id,
                 tenant_id=getattr(request.state, "tenant_id", None),
+                extra=extra,
             )
         except Exception as exc:  # pragma: no cover - never break the request path
             log.warning("audit_log_write_failed", error=str(exc), path=path)

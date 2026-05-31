@@ -19,16 +19,17 @@ function authHeaders(req: NextRequest): HeadersInit {
 
 export async function POST(req: NextRequest) {
   const body = await req.text();
-  const res = await fetch(`${API}/v1/history/bulk`, {
+  const url = new URL(req.url);
+  const res = await fetch(`${API}/v1/history/bulk${url.search}`, {
     method: "POST",
     headers: authHeaders(req),
     body,
   });
   const text = await res.text();
-  return new NextResponse(text, {
-    status: res.status,
-    headers: {
-      "content-type": res.headers.get("content-type") ?? "application/json",
-    },
-  });
+  const headers: Record<string, string> = {
+    "content-type": res.headers.get("content-type") ?? "application/json",
+  };
+  const dryRun = res.headers.get("x-dry-run");
+  if (dryRun) headers["x-dry-run"] = dryRun;
+  return new NextResponse(text, { status: res.status, headers });
 }

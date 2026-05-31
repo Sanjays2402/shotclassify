@@ -2,7 +2,44 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, and an admin dashboard.
 
-## What's new: PII redaction and data residency per workspace
+## What's new: sandbox / dry-run mode on every destructive endpoint
+
+Every mutating endpoint that deletes, revokes, or removes state now
+accepts `?dry_run=true`. The API returns the counts that would change
+without touching the database, sets the `X-Dry-Run: true` response
+header, and writes an audit row tagged `extra.dry_run = true` so SIEM
+filters can separate previews from real mutations. Enterprise admins
+can now answer "what happens if I run this?" before they actually run
+it, which is a hard requirement on every procurement checklist we have
+seen.
+
+Covered routes: `/v1/workspace/data`, `/v1/me/data`,
+`/v1/history/{id}`, `/v1/history/bulk`, `/v1/saved-views/{id}`,
+`/v1/sessions/{id}`, `/v1/sessions/revoke-all`,
+`/v1/sessions/admin/revoke-principal`, `/v1/api-keys/{id}`,
+`/v1/members/{principal}`, `/v1/invitations/{id}`, `/v1/mfa`.
+
+The browser surface lives at `/settings/sandbox` with a live preview
+for bulk history deletes.
+
+### Try it
+
+```bash
+# Preview a bulk delete of three shot ids without touching them.
+curl -s -X POST 'http://localhost:7441/v1/history/bulk?dry_run=true' \
+  -H "x-api-key: $ACME_ADMIN_KEY" -H "content-type: application/json" \
+  -d '{"ids":["id-1","id-2","id-3"],"action":"delete"}'
+# -> {"ok":true,"dry_run":true,"applied":false,"action":"delete",
+#     "requested":3,"would_affect":2,"missing":["id-3"], ...}
+
+# Preview workspace-wide GDPR erasure.
+curl -si -X DELETE 'http://localhost:7441/v1/workspace/data?dry_run=true' \
+  -H "x-api-key: $ACME_ADMIN_KEY" -H "x-tenant: acme" | grep -i x-dry-run
+```
+
+UI lives at `/settings/sandbox` in the web app.
+
+## Previous: PII redaction and data residency per workspace
 
 Workspace admins can now opt into automatic PII redaction on OCR text
 and extracted fields, and pin a data residency label that every API

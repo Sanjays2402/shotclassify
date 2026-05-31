@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from shotclassify_common import Category, ClassificationRecord
 from shotclassify_store import Repository
 
+from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.rbac import require_role
 
 router = APIRouter(prefix="/v1/history", tags=["history"])
@@ -177,7 +178,7 @@ def get_one(item_id: str, request: Request) -> ClassificationRecord:
 
 
 @router.post("/bulk", dependencies=[require_role("operator")])
-def bulk(request: Request, payload: dict = Body(...)) -> dict:
+def bulk(request: Request, payload: dict = Body(...), dry_run: bool = dry_run_query()) -> dict:
     """Apply an action to many saved shots at once.
 
     Body fields:
@@ -228,6 +229,12 @@ def bulk(request: Request, payload: dict = Body(...)) -> dict:
     missing: list[str] = []
     for rid in ids:
         if action == "delete":
+            if dry_run:
+                if repo.get(rid, tenant_id=tenant_id) is not None:
+                    affected += 1
+                else:
+                    missing.append(rid)
+                continue
             if repo.delete(rid, tenant_id=tenant_id):
                 affected += 1
             else:
@@ -240,6 +247,9 @@ def bulk(request: Request, payload: dict = Body(...)) -> dict:
         if action in {"pin", "unpin"}:
             want = action == "pin"
             if bool(rec.pinned) == want:
+                continue
+            if dry_run:
+                affected += 1
                 continue
             updated = repo.update_meta(rid, pinned=want, tenant_id=tenant_id)
             if updated:
@@ -258,11 +268,31 @@ def bulk(request: Request, payload: dict = Body(...)) -> dict:
             new_tags = [t for t in current if t not in remove_set]
         if new_tags == current:
             continue
+        if dry_run:
+            affected += 1
+            continue
         updated = repo.update_meta(rid, tags=new_tags, tenant_id=tenant_id)
         if updated:
             affected += 1
         else:
             missing.append(rid)
+    if dry_run:
+        request.state.dry_run = True
+        request.state.audit_extra = {
+            **(getattr(request.state, "audit_extra", None) or {}),
+            "dry_run": True,
+            "bulk_action": action,
+        }
+        return {
+            "ok": True,
+            "dry_run": True,
+            "applied": False,
+            "action": action,
+            "requested": len(ids),
+            "would_affect": affected,
+            "missing": missing,
+            "tags": tags_in if action != "delete" else [],
+        }
     return {
         "ok": True,
         "action": action,
@@ -274,9 +304,18 @@ def bulk(request: Request, payload: dict = Body(...)) -> dict:
 
 
 @router.delete("/{item_id}", dependencies=[require_role("operator")])
-def delete(item_id: str, request: Request):
+def delete(item_id: str, request: Request, dry_run: bool = dry_run_query()):
     tenant_id = getattr(request.state, "tenant_id", None)
-    if not Repository().delete(item_id, tenant_id=tenant_id):
+    repo = Repository()
+    if dry_run:
+        rec = repo.get(item_id, tenant_id=tenant_id)
+        if rec is None:
+            return mark_dry_run(request, would_delete=None)
+        return mark_dry_run(
+            request,
+            would_delete={"id": item_id, "filename": getattr(rec, "filename", None)},
+        )
+    if not repo.delete(item_id, tenant_id=tenant_id):
         raise HTTPException(404, "Not found.")
     return {"ok": True}
 

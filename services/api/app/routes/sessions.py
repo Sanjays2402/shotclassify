@@ -15,6 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 from shotclassify_store import session_store
 
+from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
 from ..middleware.rbac import require_role
 
@@ -56,7 +57,7 @@ def list_mine(
 
 
 @router.delete("/{session_id}")
-def revoke_one(session_id: str, request: Request):
+def revoke_one(session_id: str, request: Request, dry_run: bool = dry_run_query()):
     """Revoke a single session.
 
     Owners can revoke their own sessions; admins can revoke any session.
@@ -71,6 +72,11 @@ def revoke_one(session_id: str, request: Request):
     if info.principal != principal and role != "admin":
         # Mask existence to prevent cross-principal session id enumeration.
         raise HTTPException(404, "Session not found.")
+    if dry_run:
+        return mark_dry_run(
+            request,
+            would_revoke={"id": session_id, "principal": info.principal},
+        )
     revoked = session_store.revoke(session_id)
     return {"revoked": revoked, "id": session_id}
 
@@ -82,6 +88,7 @@ def revoke_all(
         True,
         description="Keep the calling session active so the user is not logged out of this tab.",
     ),
+    dry_run: bool = dry_run_query(),
 ):
     """Force-logout every session for the calling principal.
 
@@ -90,6 +97,10 @@ def revoke_all(
     """
     principal = _principal(request)
     current_sid = getattr(request.state, "session_id", None) if keep_current else None
+    if dry_run:
+        rows = session_store.list_for_principal(principal, include_revoked=False)
+        n = sum(1 for r in rows if r.id != current_sid)
+        return mark_dry_run(request, would_revoke={"count": n, "keep_current": keep_current})
     count = session_store.revoke_all_for_principal(principal, except_sid=current_sid)
     return {"revoked": count}
 
@@ -113,10 +124,17 @@ def list_all(
 def admin_revoke_principal(
     request: Request,
     principal: str = Query(..., description="Principal whose sessions should be revoked."),
+    dry_run: bool = dry_run_query(),
     _: str = require_role("admin"),
 ):
     """Admin force-logout: revoke every session belonging to ``principal``."""
     if not principal.strip():
         raise HTTPException(422, "principal is required.")
+    if dry_run:
+        rows = session_store.list_for_principal(principal, include_revoked=False)
+        return mark_dry_run(
+            request,
+            would_revoke={"count": len(rows), "principal": principal},
+        )
     count = session_store.revoke_all_for_principal(principal)
     return {"revoked": count, "principal": principal}

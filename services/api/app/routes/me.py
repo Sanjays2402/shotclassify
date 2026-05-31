@@ -24,6 +24,8 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, Query, Request
 from shotclassify_store import AuditRepository, Repository
 
+from ..dryrun import dry_run_query, mark_dry_run
+
 router = APIRouter(prefix="/v1/me", tags=["data-lifecycle"])
 
 
@@ -68,14 +70,27 @@ def delete_my_data(
         "",
         description="Must equal 'erase' to acknowledge the destructive operation.",
     ),
-) -> dict:
-    if confirm != "erase":
+    dry_run: bool = dry_run_query(),
+):
+    if not dry_run and confirm != "erase":
         raise HTTPException(
             400,
             "Pass ?confirm=erase to permanently delete all stored data for the caller.",
         )
     principal = _require_principal(request)
     tenant_id = getattr(request.state, "tenant_id", None)
+    if dry_run:
+        repo = Repository()
+        audit = AuditRepository()
+        return mark_dry_run(
+            request,
+            principal=principal,
+            tenant_id=tenant_id,
+            would_delete={
+                "classifications": len(repo.list_by_principal(principal, tenant_id=tenant_id)),
+                "audit_log": len(audit.list_for_principal(principal, tenant_id=tenant_id)),
+            },
+        )
     classifications_removed = Repository().delete_by_principal(principal, tenant_id=tenant_id)
     audit_removed = AuditRepository().delete_for_principal(principal, tenant_id=tenant_id)
     return {
