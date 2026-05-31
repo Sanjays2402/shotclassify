@@ -25,3 +25,4 @@ uploads/
 *.log
 .terraform/
 *.tfstate*
+web/tsconfig.tsbuildinfo
