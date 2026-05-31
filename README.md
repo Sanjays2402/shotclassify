@@ -2,6 +2,36 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: security incident registry and per-tenant notification contacts
+
+Enterprise procurement and DPA reviews always ask the same question: how will you notify us of a security incident, and where can we see your history? Both halves now ship in-product.
+
+`GET /v1/trust/incidents` is a public, append-only registry of security incidents (id, severity, status, title, summary, affected components, published timestamp). It needs no credentials so a procurement reviewer can verify it from a terminal the same way they'd hit a status page. The registry is vendor-owned in `packages/store/src/shotclassify_store/incidents.py` so it ships with the binary and cannot be tampered with through the API.
+
+Workspace admins can wire notification contacts at `Settings -> Security -> Incidents` or via `POST /v1/incident-subscriptions`. Each contact picks a channel (`email` or `webhook`), an endpoint, a minimum severity (`low`, `medium`, `high`, `critical`), and an optional label. All mutating routes require the admin role plus a fresh MFA step-up, and are picked up automatically by the existing `AuditLogMiddleware` so the actor, IP, request id, and timestamp land in the tamper-evident audit chain. Every store call is strictly scoped by `tenant_id`; cross-tenant reads, patches, and deletes return 404. Coverage in `tests/test_incident_subscriptions.py`.
+
+### Try it
+
+```bash
+# 1. Boot the API and web tiers.
+make dev   # FastAPI on :7441, Next.js on :3000
+
+# 2. Public registry, no auth.
+curl -s http://localhost:7441/v1/trust/incidents | jq '.items[0]'
+
+# 3. List this workspace's notification contacts (admin role).
+curl -s -H "x-api-key: $SHOTCLASSIFY_ADMIN_KEY" \
+     http://localhost:7441/v1/incident-subscriptions | jq
+
+# 4. Add an email contact for high+critical incidents.
+curl -s -X POST -H "x-api-key: $SHOTCLASSIFY_ADMIN_KEY" \
+     -H "content-type: application/json" \
+     -d '{"channel":"email","endpoint":"security@acme.example","severity_min":"high","label":"SecOps"}' \
+     http://localhost:7441/v1/incident-subscriptions | jq
+```
+
+UI: <http://localhost:3000/settings/security/incidents>.
+
 ## What's new: liveness, readiness, and Prometheus metrics on the web tier
 
 Kubernetes-style probes and a Prometheus exposition endpoint are now baked into the Next.js web tier alongside the existing FastAPI ones, so a buyer's SRE team can scrape and rotate pods without bespoke glue. `GET /healthz` returns `{ status: "ok", uptime_seconds }` and is dependency-free, matching the Kubernetes guidance that liveness must not flap on upstream failures. `GET /readyz` runs real dependency checks (upstream FastAPI `/healthz` reachability plus keystore directory writability) and returns 503 when any check fails, which is the correct signal for a load balancer to pull the pod out of rotation without restarting it. `GET /metrics` emits Prometheus text format v0.0.4 with three series populated by the `/v1` API surface (`shotclassify_http_requests_total`, `shotclassify_http_request_duration_seconds`, `shotclassify_http_errors_total`) plus `shotclassify_process_uptime_seconds`. Every `/v1` request is wrapped by `withObservability(route, handler)`, which also resolves or mints a request id (honoring upstream `x-request-id`, `x-correlation-id`, or `traceparent` when safe) and echoes it on every response for end-to-end tracing. Coverage in `web/lib/metrics.test.mts`. Live admin view at `/admin/observability`.

@@ -470,6 +470,40 @@ class SubprocessorAckRow(Base):
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
 
+class IncidentSubscriptionRow(Base):
+    """Per-tenant security incident notification subscription.
+
+    Enterprise procurement (DPAs, SOC2) requires the vendor to commit to
+    a notification channel for security incidents and breaches. This row
+    captures which contact (email or webhook URL) a given workspace wants
+    notified, at what minimum severity, and who set it up.
+
+    Rows are strictly tenant-scoped; every query path filters on
+    ``tenant_id`` so one workspace can never enumerate or mutate another
+    workspace's contacts.
+    """
+
+    __tablename__ = "incident_subscriptions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    endpoint: Mapped[str] = mapped_column(String(512), nullable=False)
+    severity_min: Mapped[str] = mapped_column(String(16), nullable=False, default="low")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    last_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_incident_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()
@@ -620,6 +654,8 @@ def init_db() -> None:
                 Base.metadata.tables["legal_holds"].create(bind=conn)
             if not insp.has_table("subprocessor_acks"):
                 Base.metadata.tables["subprocessor_acks"].create(bind=conn)
+            if not insp.has_table("incident_subscriptions"):
+                Base.metadata.tables["incident_subscriptions"].create(bind=conn)
     except Exception:
         # Best-effort. Real schema management lives in alembic.
         pass

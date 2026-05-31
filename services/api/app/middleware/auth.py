@@ -36,6 +36,7 @@ PUBLIC_PATHS = {
     "/redoc",
     "/openapi.json",
     "/v1/trust/subprocessors",
+    "/v1/trust/incidents",
 }
 
 

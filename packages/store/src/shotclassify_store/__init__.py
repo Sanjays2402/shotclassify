@@ -45,6 +45,13 @@ from .db import LegalHoldRow
 from . import subprocessors as subprocessors_store
 from .subprocessors import Acknowledgement as SubprocessorAck, Subprocessor
 from .db import SubprocessorAckRow
+from . import incidents as incidents_store
+from .incidents import (
+    Incident,
+    IncidentSubscriptionError,
+    Subscription as IncidentSubscription,
+)
+from .db import IncidentSubscriptionRow
 from .tenant_settings import (
     API_KEY_MAX_TTL_DAYS,
     API_KEY_MIN_TTL_DAYS,
@@ -148,5 +155,10 @@ __all__ = [
     "subprocessors_store",
     "SubprocessorAck",
     "SubprocessorAckRow",
+    "incidents_store",
+    "Incident",
+    "IncidentSubscription",
+    "IncidentSubscriptionError",
+    "IncidentSubscriptionRow",
     "Subprocessor",
 ]
