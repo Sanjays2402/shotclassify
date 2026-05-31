@@ -2,6 +2,28 @@
 
 ShotClassify is a real-time screenshot classifier with confidence scores, OCR, history, share links, and a programmatic /v1 API.
 
+## What's new: pinned shots
+
+Every row on `/shots` now has a star. Click it to pin the shot, click again to unpin. The history toolbar has a "Pinned only" toggle, the detail page has a Pin button, and the bulk action bar gained Pin and Unpin so you can star a whole filtered set in one click. Pinned state is real database state, scoped to your tenant, and surfaces through `/v1/history`.
+
+Try it:
+
+```sh
+cd web && pnpm dev
+open http://localhost:3000/shots
+# Star a row, then flip the "Pinned" toggle in the filter bar.
+
+# Pin a shot programmatically:
+curl -s -X PATCH http://localhost:3000/api/shots/<id> \
+  -H 'content-type: application/json' \
+  -d '{"pinned":true}' | jq
+
+# Only pinned shots in history:
+curl -s 'http://localhost:3000/api/history?pinned=true' | jq '.[].id'
+```
+
+Covered by `tests/test_history_pinned.py`.
+
 ## What's new: programmatic webhook management via /v1/webhooks
 
 The `/v1/webhooks` endpoint lets API users register, list, fetch, and delete webhook subscriptions without opening the dashboard. Same `Authorization: Bearer sk_...` header the rest of /v1 uses. The signing secret is returned exactly once at creation time.

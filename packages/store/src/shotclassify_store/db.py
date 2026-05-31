@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Any
 
 from shotclassify_common import get_settings
-from sqlalchemy import JSON, DateTime, Float, String, Text, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, Float, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -45,6 +45,9 @@ class ClassificationRow(Base):
     # lowercase strings; the repository normalizes input before write.
     label: Mapped[str | None] = mapped_column(String(256), nullable=True)
     tags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # "Star" flag for the history page. Lets users mark important shots and
+    # filter to just their pinned set. Indexed for cheap pinned-only queries.
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
 
 
 class ApiKeyRow(Base):
@@ -106,6 +109,19 @@ class SavedViewRow(Base):
     )
 
 
+class TenantSettingsRow(Base):
+    """Per-tenant security settings (currently the IP allowlist)."""
+
+    __tablename__ = "tenant_settings"
+
+    tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ip_allowlist: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()
@@ -141,9 +157,17 @@ def init_db() -> None:
                 conn.execute(text("ALTER TABLE classifications ADD COLUMN label VARCHAR(256)"))
             if "tags" not in cols:
                 conn.execute(text("ALTER TABLE classifications ADD COLUMN tags JSON"))
+            if "pinned" not in cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE classifications ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
             # Dev SQLite bootstrap for the saved_views table (alembic 0006).
             if not insp.has_table("saved_views"):
                 Base.metadata.tables["saved_views"].create(bind=conn)
+            if not insp.has_table("tenant_settings"):
+                Base.metadata.tables["tenant_settings"].create(bind=conn)
     except Exception:
         # Best-effort. Real schema management lives in alembic.
         pass

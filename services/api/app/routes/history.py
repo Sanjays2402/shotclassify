@@ -119,6 +119,7 @@ def list_history(
     max_conf: float | None = Query(None, ge=0.0, le=1.0),
     sort: str = Query("new", pattern="^(new|old|conf_asc|conf_desc)$"),
     tag: str | None = Query(None, max_length=32, description="Filter by a single tag (case-insensitive)."),
+    pinned: bool | None = Query(None, description="If true, only pinned; if false, only unpinned."),
 ) -> list[ClassificationRecord]:
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
@@ -134,6 +135,7 @@ def list_history(
         max_conf=max_conf,
         sort=sort,
         tag=tag,
+        pinned=pinned,
     )
     total = repo.count_filtered(
         category=category,
@@ -144,6 +146,7 @@ def list_history(
         min_conf=min_conf,
         max_conf=max_conf,
         tag=tag,
+        pinned=pinned,
     )
     response.headers["x-total-count"] = str(total)
     response.headers["x-offset"] = str(offset)
@@ -201,9 +204,9 @@ def bulk(request: Request, payload: dict = Body(...)) -> dict:
             raise HTTPException(400, "`ids` must contain non-empty strings.")
         ids.append(i.strip())
     action = payload.get("action")
-    if action not in {"delete", "tag_add", "tag_remove"}:
+    if action not in {"delete", "tag_add", "tag_remove", "pin", "unpin"}:
         raise HTTPException(
-            400, "`action` must be one of: delete, tag_add, tag_remove."
+            400, "`action` must be one of: delete, tag_add, tag_remove, pin, unpin."
         )
     tags_in: list[str] = []
     if action in {"tag_add", "tag_remove"}:
@@ -233,6 +236,16 @@ def bulk(request: Request, payload: dict = Body(...)) -> dict:
         rec = repo.get(rid, tenant_id=tenant_id)
         if not rec:
             missing.append(rid)
+            continue
+        if action in {"pin", "unpin"}:
+            want = action == "pin"
+            if bool(rec.pinned) == want:
+                continue
+            updated = repo.update_meta(rid, pinned=want, tenant_id=tenant_id)
+            if updated:
+                affected += 1
+            else:
+                missing.append(rid)
             continue
         current = list(rec.tags or [])
         if action == "tag_add":
@@ -289,12 +302,15 @@ def patch(
     """
     if not isinstance(payload, dict):
         raise HTTPException(400, "Body must be a JSON object.")
-    allowed = {"label", "tags"}
+    allowed = {"label", "tags", "pinned"}
     unknown = set(payload) - allowed
     if unknown:
         raise HTTPException(400, f"Unknown field(s): {sorted(unknown)}")
     label_in = payload.get("label", ...)
     tags_in = payload.get("tags", None)
+    pinned_in = payload.get("pinned", None)
+    if pinned_in is not None and not isinstance(pinned_in, bool):
+        raise HTTPException(400, "`pinned` must be a boolean.")
     clear_label = False
     label_val: str | None = None
     if label_in is not ...:
@@ -316,6 +332,7 @@ def patch(
         tags=tags_in,
         tenant_id=tenant_id,
         clear_label=clear_label,
+        pinned=pinned_in,
     )
     if not rec:
         raise HTTPException(404, "Not found.")

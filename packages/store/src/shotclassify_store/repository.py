@@ -139,6 +139,7 @@ class Repository:
         max_conf: float | None = None,
         sort: str = "new",
         tag: str | None = None,
+        pinned: bool | None = None,
     ):
         from sqlalchemy import asc, desc
 
@@ -174,6 +175,8 @@ class Repository:
             # adequate for the small, normalized tag vocabulary we write.
             needle = f'%"{tag.strip().lower()}"%'
             stmt = stmt.where(ClassificationRow.tags.cast(Text).ilike(needle))
+        if pinned is not None:
+            stmt = stmt.where(ClassificationRow.pinned == bool(pinned))
         stmt = self._scope_tenant(stmt, tenant_id)
         return stmt
 
@@ -190,6 +193,7 @@ class Repository:
         max_conf: float | None = None,
         sort: str = "new",
         tag: str | None = None,
+        pinned: bool | None = None,
     ) -> list[ClassificationRecord]:
         stmt = self._list_stmt(
             category=category,
@@ -201,6 +205,7 @@ class Repository:
             max_conf=max_conf,
             sort=sort,
             tag=tag,
+            pinned=pinned,
         )
         if offset:
             stmt = stmt.offset(int(offset))
@@ -219,6 +224,7 @@ class Repository:
         min_conf: float | None = None,
         max_conf: float | None = None,
         tag: str | None = None,
+        pinned: bool | None = None,
     ) -> int:
         from sqlalchemy import func
 
@@ -231,6 +237,7 @@ class Repository:
             min_conf=min_conf,
             max_conf=max_conf,
             tag=tag,
+            pinned=pinned,
         ).order_by(None).with_only_columns(func.count(ClassificationRow.id))
         with get_session() as s:
             return int(s.execute(stmt).scalar() or 0)
@@ -253,6 +260,7 @@ class Repository:
         tags: list[str] | None = None,
         tenant_id: str | None = None,
         clear_label: bool = False,
+        pinned: bool | None = None,
     ) -> ClassificationRecord | None:
         """Update the user-editable label and/or tags on a single record.
 
@@ -286,6 +294,8 @@ class Repository:
                     if len(cleaned_tags) >= 16:
                         break
                 row.tags = cleaned_tags
+            if pinned is not None:
+                row.pinned = bool(pinned)
             s.commit()
         return self.get(item_id, tenant_id=tenant_id)
 
@@ -447,4 +457,5 @@ class Repository:
             user_corrected_to=Category(row.user_corrected_to) if row.user_corrected_to else None,
             label=row.label,
             tags=list(row.tags or []),
+            pinned=bool(getattr(row, "pinned", False) or False),
         )

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Scales, CaretLeft, CaretRight, Trash, Tag, CheckSquare, Square } from "@phosphor-icons/react/dist/ssr";
+import { Scales, CaretLeft, CaretRight, Trash, Tag, CheckSquare, Square, Star } from "@phosphor-icons/react/dist/ssr";
 import { useSWRConfig } from "swr";
 import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
@@ -33,6 +33,7 @@ type Row = {
   created_at: string;
   label?: string | null;
   tags?: string[];
+  pinned?: boolean;
 };
 
 function fmtTime(iso: string): string {
@@ -59,6 +60,7 @@ export default function ShotsPage() {
   const [sort, setSort] = useState<"new" | "old" | "conf_desc" | "conf_asc">("new");
   const [tag, setTag] = useState("");
   const [tagDebounced, setTagDebounced] = useState("");
+  const [pinnedOnly, setPinnedOnly] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
   const [bulk, setBulk] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -85,7 +87,7 @@ export default function ShotsPage() {
   // Reset to first page whenever a filter changes.
   useEffect(() => {
     setPage(0);
-  }, [cat, qDebounced, limit, since, until, minConfPct, sort, tagDebounced]);
+  }, [cat, qDebounced, limit, since, until, minConfPct, sort, tagDebounced, pinnedOnly]);
 
   const toggleBulk = (id: string) => {
     setBulk((prev) => {
@@ -124,8 +126,9 @@ export default function ShotsPage() {
       min_conf: minConfPct > 0 ? minConfPct / 100 : undefined,
       sort,
       tag: tagDebounced || undefined,
+      pinned: pinnedOnly ? true : undefined,
     }),
-    [limit, page, cat, qDebounced, since, until, minConfPct, sort, tagDebounced]
+    [limit, page, cat, qDebounced, since, until, minConfPct, sort, tagDebounced, pinnedOnly]
   );
 
   const { data: payload, error, isLoading } = useSWR<{
@@ -151,7 +154,7 @@ export default function ShotsPage() {
     });
   };
   async function runBulk(
-    action: "delete" | "tag_add" | "tag_remove",
+    action: "delete" | "tag_add" | "tag_remove" | "pin" | "unpin",
     tagsArg?: string[],
   ) {
     if (bulkBusy || bulk.size === 0) return;
@@ -162,7 +165,7 @@ export default function ShotsPage() {
         ids: Array.from(bulk),
         action,
       };
-      if (action !== "delete") body.tags = tagsArg ?? [];
+      if (action === "tag_add" || action === "tag_remove") body.tags = tagsArg ?? [];
       const res = await fetch("/api/history/bulk", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -179,7 +182,11 @@ export default function ShotsPage() {
           ? "deleted"
           : action === "tag_add"
           ? "tagged"
-          : "untagged";
+          : action === "tag_remove"
+          ? "untagged"
+          : action === "pin"
+          ? "pinned"
+          : "unpinned";
       setBulkFlash({
         kind: "ok",
         msg: `${verb} ${json.affected} shot${json.affected === 1 ? "" : "s"}${
@@ -198,6 +205,24 @@ export default function ShotsPage() {
       setBulkBusy(false);
     }
   }
+  async function togglePin(row: Row) {
+    const want = !row.pinned;
+    try {
+      const res = await fetch(`/api/shots/${encodeURIComponent(row.id)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pinned: want }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await reloadHistory();
+    } catch (e) {
+      setBulkFlash({
+        kind: "err",
+        msg: (e as Error).message || "Pin failed.",
+      });
+    }
+  }
+
   const total = payload?.total ?? 0;
 
   const isSample = !!error || !Array.isArray(data) || data.length === 0;
@@ -338,6 +363,18 @@ export default function ShotsPage() {
         </label>
 
         <button
+          type="button"
+          className="btn btn-ghost text-[12px]"
+          aria-pressed={pinnedOnly}
+          onClick={() => setPinnedOnly((v) => !v)}
+          title={pinnedOnly ? "Show every shot" : "Show only pinned shots"}
+          style={pinnedOnly ? { color: "#b45309" } : undefined}
+        >
+          <Star size={14} weight={pinnedOnly ? "fill" : "duotone"} /> Pinned
+          {pinnedOnly ? " only" : ""}
+        </button>
+
+        <button
           className="btn btn-ghost"
           onClick={() => {
             setCat("");
@@ -348,6 +385,7 @@ export default function ShotsPage() {
             setMinConfPct(0);
             setSort("new");
             setTag("");
+            setPinnedOnly(false);
             setPage(0);
             setPicked([]);
           }}
@@ -480,6 +518,24 @@ export default function ShotsPage() {
             type="button"
             className="btn btn-ghost text-[12px]"
             disabled={bulkBusy}
+            onClick={() => void runBulk("pin")}
+            title="Pin every selected shot"
+          >
+            <Star size={14} weight="fill" /> Pin
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost text-[12px]"
+            disabled={bulkBusy}
+            onClick={() => void runBulk("unpin")}
+            title="Unpin every selected shot"
+          >
+            <Star size={14} weight="duotone" /> Unpin
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost text-[12px]"
+            disabled={bulkBusy}
             onClick={() => {
               if (
                 window.confirm(
@@ -579,6 +635,7 @@ export default function ShotsPage() {
                     })()}
                   </th>
                   <th className="w-[28px]" aria-label="Select for compare" />
+                  <th className="w-[28px]" aria-label="Pinned" />
                   <th>ID</th>
                   <th>Class</th>
                   <th>Confidence</th>
@@ -607,6 +664,20 @@ export default function ShotsPage() {
                         onChange={() => togglePick(r.id)}
                         aria-label={`Select ${shortId(r.id)} to compare`}
                       />
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => void togglePin(r)}
+                        disabled={isSample}
+                        className="inline-flex items-center justify-center w-6 h-6 rounded-sm hover:bg-black/[0.04]"
+                        aria-label={r.pinned ? `Unpin ${shortId(r.id)}` : `Pin ${shortId(r.id)}`}
+                        aria-pressed={!!r.pinned}
+                        title={r.pinned ? "Pinned. Click to unpin." : "Pin this shot"}
+                        style={r.pinned ? { color: "#b45309" } : { color: "rgba(0,0,0,0.35)" }}
+                      >
+                        <Star size={15} weight={r.pinned ? "fill" : "duotone"} />
+                      </button>
                     </td>
                     <td>
                       <Link

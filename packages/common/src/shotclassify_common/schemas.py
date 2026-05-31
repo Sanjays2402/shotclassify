@@ -172,3 +172,4 @@ class ClassificationRecord(BaseModel):
     user_corrected_to: Category | None = None
     label: str | None = None
     tags: list[str] = Field(default_factory=list)
+    pinned: bool = False

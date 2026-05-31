@@ -2,7 +2,8 @@
 
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
+import { Star } from "@phosphor-icons/react/dist/ssr";
 import {
   Bar,
   BarChart,
@@ -45,6 +46,7 @@ type Detail = {
   user_corrected_to?: Category | null;
   label?: string | null;
   tags?: string[];
+  pinned?: boolean;
   // Server may also include richer fields.
   classification?: {
     primary: Category;
@@ -64,6 +66,8 @@ export default function ShotDetail({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const { mutate: globalMutate } = useSWRConfig();
+  const [pinBusy, setPinBusy] = useState(false);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const { data, error, isLoading } = useSWR<Detail>(
@@ -118,7 +122,41 @@ export default function ShotDetail({
         <span className="num">{shortId(rec.id)}</span>
         {isSample && <SampleBadge note="No record found; rendering seeded sample." />}
         {!isSample && (
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              disabled={pinBusy}
+              onClick={async () => {
+                const want = !rec.pinned;
+                setPinBusy(true);
+                try {
+                  const res = await fetch(`/api/shots/${encodeURIComponent(rec.id)}`, {
+                    method: "PATCH",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ pinned: want }),
+                  });
+                  if (!res.ok) throw new Error(await res.text());
+                  await globalMutate(ENDPOINTS.historyItem(rec.id));
+                  await globalMutate(
+                    (key) => typeof key === "string" && key.startsWith("/api/history"),
+                    undefined,
+                    { revalidate: true },
+                  );
+                } catch {
+                  // best effort; SWR retry will refetch.
+                } finally {
+                  setPinBusy(false);
+                }
+              }}
+              className="btn btn-ghost text-[12px]"
+              aria-pressed={!!rec.pinned}
+              aria-label={rec.pinned ? "Unpin this shot" : "Pin this shot"}
+              title={rec.pinned ? "Pinned. Click to unpin." : "Pin this shot"}
+              style={rec.pinned ? { color: "#b45309" } : undefined}
+            >
+              <Star size={14} weight={rec.pinned ? "fill" : "duotone"} />
+              {rec.pinned ? "Pinned" : "Pin"}
+            </button>
             <ShareActions id={rec.id} />
           </div>
         )}
