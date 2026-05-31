@@ -3,6 +3,7 @@
 // multipart form-data body to the upstream FastAPI /v1/classify.
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAndTouch } from "@/lib/keystore";
+import { dispatchEvent } from "@/lib/webhooks";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,6 +77,20 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await upstream.text();
+  if (upstream.ok) {
+    try {
+      const parsed = JSON.parse(body);
+      dispatchEvent("classify.completed", {
+        event: "classify.completed",
+        delivered_at: new Date().toISOString(),
+        source: "/v1/classify",
+        api_key_id: key.id,
+        result: parsed,
+      }).catch(() => {});
+    } catch {
+      /* non-json upstream, skip */
+    }
+  }
   return new NextResponse(body, {
     status: upstream.status,
     headers: {

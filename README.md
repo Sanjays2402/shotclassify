@@ -24,6 +24,30 @@ Takes a screenshot upload, runs OCR (Tesseract) and a vision LLM in parallel, an
 - Side-by-side compare view at `/compare?a=<id>&b=<id>`: pick any two shots from history (or pass IDs via URL), see class chips, full probability distributions, OCR text, and a delta summary (same-class, confidence delta, latency delta). Multi-select two rows on `/shots` and hit Compare to jump in.
 - User-generated API keys at `/keys`: generate, copy once, list with prefix/created/last-used/call-count, revoke. Keys are hashed at rest. A new `POST /v1/classify` Next.js route accepts `Authorization: Bearer sk_live_...` and forwards to the FastAPI classifier, returning the same JSON the in-app uploader sees. Per-key usage counters tick on every call.
 - Public share links at `/r/<shot-id>`: server-rendered, no-auth result pages with confidence distribution, OCR transcript, and a dynamic 1200x630 OpenGraph image for link previews on Slack, Twitter, iMessage, and LinkedIn. Each shot detail page has a one-click Copy share link button.
+- Outbound webhooks at `/webhooks`: register HTTPS endpoints that receive a signed JSON POST every time a classification completes. Each subscription gets a one-time `whsec_...` secret; deliveries are signed with `X-Shotclassify-Signature: sha256=<hmac>` over the raw body. Failed deliveries retry up to 4 times with backoff and every attempt is recorded in a live delivery log. Pause, resume, or send a test event from the dashboard.
+
+## Try webhooks
+
+1. `cd web && pnpm dev` (or `npm run dev`) and open http://localhost:3000/webhooks.
+2. Grab a free URL from https://webhook.site, paste it in the Add endpoint form, click Create.
+3. Save the `whsec_...` secret from the reveal banner, then click Test to send a `ping` event. The delivery log updates within seconds with status, latency, and HTTP code.
+4. Run any classification (drag-drop on `/upload`, or the curl below). A `classify.completed` payload fires automatically.
+
+Verify the signature in your handler:
+
+```
+import hmac, hashlib
+expected = 'sha256=' + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+assert hmac.compare_digest(expected, request.headers['x-shotclassify-signature'])
+```
+
+A quick end-to-end via the keyed API:
+
+```
+curl -X POST http://localhost:3000/v1/classify \
+  -H "Authorization: Bearer sk_live_YOUR_KEY" \
+  -F "file=@screenshot.png"
+```
 
 ## Try the API keys
 
