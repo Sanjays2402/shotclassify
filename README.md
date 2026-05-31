@@ -26,11 +26,14 @@ scoping, delivery + redeliver scoping, and allowlist partitioning.
 cd web && npm test          # 88 tests, includes 5 cross-tenant cases
 npm run dev                 # http://localhost:3000/webhooks
 
-# Create a webhook in your workspace (key determines tenant)
+# Create a workspace-bound API key from the dashboard at /keys
+# (set the Workspace field to e.g. acme), then:
 curl -sS -X POST http://localhost:3000/v1/webhooks \
-  -H "x-api-key: $SHOTCLASSIFY_KEY" \
+  -H "Authorization: Bearer $SHOTCLASSIFY_KEY" \
   -H "content-type: application/json" \
   -d '{"url":"https://example.com/hook","events":["classify.completed"]}'
+# Response includes the signing secret once. The webhook is bound to the
+# workspace_id encoded in the API key and is invisible to other tenants.
 ```
 
 ## Previous: workspace-wide GDPR export and erasure

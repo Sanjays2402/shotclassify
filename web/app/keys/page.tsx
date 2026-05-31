@@ -24,6 +24,7 @@ type KeyRow = {
   usage_count: number;
   rotated_at?: string | null;
   scopes?: KeyScope[];
+  workspace_id?: string;
 };
 
 function fmtDate(iso: string | null): string {
@@ -44,6 +45,7 @@ export default function KeysPage() {
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newWorkspace, setNewWorkspace] = useState("");
   const [newScope, setNewScope] = useState<"read" | "write" | "admin">("write");
   const [revealed, setRevealed] = useState<{
     name: string;
@@ -79,6 +81,7 @@ export default function KeysPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: newName,
+          workspace_id: newWorkspace.trim() || undefined,
           scopes:
             newScope === "admin"
               ? ["read", "write", "admin"]
@@ -94,13 +97,14 @@ export default function KeysPage() {
       const j = await r.json();
       setRevealed({ name: j.key.name, plaintext: j.plaintext });
       setNewName("");
+      setNewWorkspace("");
       await load();
     } catch (e: any) {
       setErr(e?.message || "Could not create key.");
     } finally {
       setCreating(false);
     }
-  }, [newName, load]);
+  }, [newName, newWorkspace, newScope, load]);
 
   const onRotate = useCallback(
     async (id: string, name: string) => {
@@ -219,6 +223,30 @@ export default function KeysPage() {
                 borderColor: "var(--color-rule)",
               }}
             />
+          </div>
+          <div className="min-w-[180px]">
+            <label htmlFor="key-workspace" className="eyebrow block mb-1">
+              Workspace
+            </label>
+            <input
+              id="key-workspace"
+              type="text"
+              placeholder="default"
+              value={newWorkspace}
+              onChange={(e) => setNewWorkspace(e.target.value)}
+              maxLength={64}
+              pattern="[A-Za-z0-9][A-Za-z0-9_\-]*"
+              aria-describedby="key-workspace-help"
+              className="w-full rounded-md border px-3 py-2 text-[13px] bg-white outline-none focus:ring-2 font-mono"
+              style={{ borderColor: "var(--color-rule)" }}
+            />
+            <p
+              id="key-workspace-help"
+              className="mt-1 text-[11px]"
+              style={{ color: "var(--color-ink-mute)" }}
+            >
+              Webhooks and deliveries are isolated per workspace.
+            </p>
           </div>
           <div className="min-w-[180px]">
             <label htmlFor="key-scope" className="eyebrow block mb-1">
@@ -393,6 +421,15 @@ export default function KeysPage() {
                       >
                         {k.name}
                       </a>
+                      {k.workspace_id && k.workspace_id !== "default" ? (
+                        <div
+                          className="mt-0.5 text-[11px] font-mono"
+                          style={{ color: "var(--color-ink-mute)" }}
+                          title="Workspace this key is bound to. Webhooks and deliveries are isolated per workspace."
+                        >
+                          ws: {k.workspace_id}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-3 py-2 font-mono text-[12px]">
                       {k.prefix}...
