@@ -62,6 +62,17 @@ class CreateKeyRequest(BaseModel):
             "single field instead of a join against the audit log."
         ),
     )
+    access_windows: list[dict] | None = Field(
+        default=None,
+        max_length=16,
+        description=(
+            "Optional time-of-day access windows. Each window is an "
+            "object {weekdays:[0..6], start:'HH:MM', end:'HH:MM', "
+            "tz:'IANA/Zone'}. Mon=0..Sun=6, end strictly after start, "
+            "no overnight wrap. When set, requests outside every "
+            "window are rejected with HTTP 403."
+        ),
+    )
 
 
 def _effective_tenant(request: Request, requested: str | None) -> str | None:
@@ -135,6 +146,7 @@ def create_my_key(
             allowed_cidrs=payload.allowed_cidrs,
             monthly_quota=payload.monthly_quota,
             owner_email=payload.owner_email,
+            access_windows=payload.access_windows,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -579,3 +591,87 @@ def list_unowned_keys(
         "count": len(records),
         "keys": [r.to_dict() for r in records],
     }
+
+
+class AccessWindowsRequest(BaseModel):
+    access_windows: list[dict] = Field(
+        default_factory=list,
+        max_length=16,
+        description=(
+            "Replacement time-of-day access windows for this key. Each "
+            "entry is {weekdays:[0..6], start:'HH:MM', end:'HH:MM', "
+            "tz:'IANA/Zone'}. Pass an empty list to clear the restriction."
+        ),
+    )
+
+
+@router.get("/{key_id}/access-windows", dependencies=[require_scope("admin")])
+def get_key_access_windows(
+    key_id: str,
+    request: Request,
+    _: str = require_role("admin"),
+):
+    """Return the current per-key access windows.
+
+    Returns 404 for unknown ids or keys belonging to another tenant so a
+    tenant-scoped admin cannot probe ids across workspaces.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    keys = api_keys_store.list_keys(tenant_id=tenant_id, include_revoked=True)
+    record = next((k for k in keys if k.id == key_id), None)
+    if record is None:
+        raise HTTPException(404, "API key not found.")
+    return {
+        "id": record.id,
+        "label": record.label,
+        "access_windows": list(record.access_windows or []),
+    }
+
+
+@router.patch(
+    "/{key_id}/access-windows",
+    dependencies=[require_mfa_step_up(), require_scope("admin")],
+)
+def set_key_access_windows(
+    key_id: str,
+    payload: AccessWindowsRequest,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+    _: str = require_role("admin"),
+):
+    """Replace the per-key time-of-day access windows.
+
+    Pass ``access_windows=[]`` to clear the restriction. Returns 404 for
+    unknown ids or keys belonging to another tenant. Returns 422 with
+    the offending entry on invalid window input.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if dry_run:
+        try:
+            preview = api_keys_store.normalize_access_windows(payload.access_windows)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        keys = api_keys_store.list_keys(tenant_id=tenant_id, include_revoked=True)
+        record = next((k for k in keys if k.id == key_id), None)
+        if record is None:
+            return mark_dry_run(request, would_set=None)
+        request.state.audit_target_id = record.id
+        return mark_dry_run(
+            request,
+            would_set={
+                "id": record.id,
+                "label": record.label,
+                "current_access_windows": list(record.access_windows or []),
+                "new_access_windows": preview,
+            },
+        )
+    try:
+        record = api_keys_store.set_access_windows(
+            key_id, tenant_id=tenant_id, windows=payload.access_windows
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if record is None:
+        raise HTTPException(404, "API key not found.")
+    request.state.audit_target_id = record.id
+    return {"key": record.to_dict()}

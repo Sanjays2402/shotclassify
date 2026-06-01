@@ -24,6 +24,7 @@ import {
   Scales,
   Gauge,
   ChartBar,
+  Clock as ClockIcon,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -269,6 +270,13 @@ export default function AdminConsolePage() {
           value="Configure"
           href="/settings/security/rate-limits"
           sub="per workspace, per key"
+        />
+        <StatCard
+          icon={<ClockIcon size={18} weight="duotone" />}
+          label="Key access windows"
+          value="Configure"
+          href="/settings/security/api-key-access-windows"
+          sub="time-of-day per API key"
         />
         <StatCard
           icon={<ChartBar size={18} weight="duotone" />}

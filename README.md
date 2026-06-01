@@ -2,6 +2,29 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
+## What's new: per-API-key time-of-day access windows
+
+Procurement reviews under PCI-DSS 7 and SOX change-management routinely ask whether a long-lived machine credential can be bound to a business-hours or maintenance window without revoking and re-issuing it. ShotClassify now ships that as a first-class control on every `sk_live_*` key. Each key carries an optional `access_windows` list. Each entry is an object `{weekdays:[0..6], start:"HH:MM", end:"HH:MM", tz:"IANA/Zone"}` (Mon=0..Sun=6, end strictly after start, no overnight wrap; split into two windows if you need that). Empty or NULL means "accept at any time" (legacy default, fully backward compatible). When set, the same authentication boundary that already enforces the per-key source-IP allowlist evaluates the wall-clock in the window's own zone and rejects requests that fall outside every window with `HTTP 403 api_key_outside_window`, echoing the configured windows back so an operator can see exactly which schedule blocked them. Evaluating each window in its declared IANA zone is what makes "US business hours" follow daylight savings without operator intervention. Enforcement lives in `services/api/app/middleware/auth.py` alongside the CIDR check so no new route can bypass it. Admin only with MFA step-up on writes; tenant-scoped so a workspace admin cannot probe key ids in another workspace. The new settings page at `/settings/security/api-key-access-windows` lists every active key, summarises its current schedule, and lets admins toggle weekdays, pick start and end with native time inputs, and choose a timezone from a datalist of common zones. Empty / loading / error states are real, not placeholders. Coverage in `tests/test_api_key_access_windows.py` proves an out-of-window request is blocked, clearing the windows restores access, an overnight-wrap window is rejected with 422, and `GET /v1/api-keys/{id}/access-windows` returns 404 (not 403) for unknown ids so cross-tenant id probing is impossible.
+
+### Try it
+
+```
+# Mint a key restricted to US/Pacific business hours, Mon-Fri:
+curl -sS -X POST -H 'content-type: application/json' \
+  -H 'X-API-Key: <admin>' -H 'X-MFA-OTP: <code>' \
+  -d '{"label":"prod-batch","scopes":["write:classifications"],"owner_email":"ops@acme.com",
+        "access_windows":[{"weekdays":[0,1,2,3,4],"start":"09:00","end":"17:00","tz":"America/Los_Angeles"}]}' \
+  http://localhost:7441/v1/api-keys
+
+# Read or replace the windows on an existing key (PATCH with [] clears the restriction):
+curl -sS http://localhost:7441/v1/api-keys/<key_id>/access-windows -H 'X-API-Key: <admin>'
+curl -sS -X PATCH -H 'content-type: application/json' -H 'X-API-Key: <admin>' -H 'X-MFA-OTP: <code>' \
+  -d '{"access_windows":[]}' \
+  http://localhost:7441/v1/api-keys/<key_id>/access-windows
+```
+
+Dashboard: `http://localhost:3000/settings/security/api-key-access-windows`.
+
 ## What's new: per-workspace upload content-type allow-list (DLP control)
 
 Procurement reviews at regulated buyers (financial services, healthcare, public sector) ask whether the SaaS vendor can restrict per-workspace which file formats are allowed to enter the pipeline. SVG (active content), TIFF (large parser surface), HEIC (closed format) are common excludes. ShotClassify now answers that with a per-tenant allow-list of upload `Content-Type` values. `GET /v1/settings/security/upload-content-types` returns the list and the deployment-known catalog the UI offers as one-click chips; `PUT` replaces it (admin role + fresh MFA step-up). When the list is empty the legacy gate (any `image/*`) is preserved so existing single-tenant deployments are unaffected. When non-empty, every `POST /v1/classify`, `POST /v1/classify/batch`, and `POST /v1/queue` upload whose declared `Content-Type` is not on the list is rejected with HTTP 415 `content_type_not_allowed` *before* the bytes are buffered or routed to the model. Entries are normalised (lower-cased, MIME parameters stripped, validated as `type/subtype`), de-duplicated, and stored in sorted order so the audit log shows clean diffs; the cap is 32 entries per workspace. Strictly tenant-scoped: a tightened policy on `acme` never affects an upload in `globex`. The admin console exposes a dedicated settings page at `/settings/security/upload-content-types` with empty / loading / error states and a chip-list of known image MIME types. Coverage in `tests/test_upload_content_types_policy.py` proves the default is unset, the policy actually rejects a JPEG when locked to PNG, the policy is strictly tenant-scoped (parallel admin keys), clearing the policy returns to the legacy gate, and invalid bodies are rejected with HTTP 422.

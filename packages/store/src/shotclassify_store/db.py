@@ -94,6 +94,11 @@ class ApiKeyRow(Base):
     # value. Procurement uses this to cap the spend a single integration
     # credential can incur in a billing period without revoking it outright.
     monthly_quota: Mapped[int | None] = mapped_column(nullable=True)
+    # Optional per-key time-of-day access windows. ``None`` or ``[]`` means
+    # the key is accepted at any time (default). When set, the auth
+    # middleware rejects requests that fall outside every window with
+    # HTTP 403 ``api_key_outside_window``. See migration 0045.
+    access_windows: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
 
 
 class ApiKeyMonthlyUsageRow(Base):

@@ -318,6 +318,27 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
                             },
                             status_code=403,
                         )
+                if record.access_windows:
+                    if not api_keys_store.is_within_access_windows(
+                        record.access_windows
+                    ):
+                        return JSONResponse(
+                            {
+                                "error": "api_key_outside_window",
+                                "detail": (
+                                    "This API key is restricted to a "
+                                    "configured time-of-day access window "
+                                    "and the current time is outside every "
+                                    "window. Try again during an allowed "
+                                    "window or remove the restriction in "
+                                    "Settings -> API keys."
+                                ),
+                                "access_windows": [
+                                    dict(w) for w in record.access_windows
+                                ],
+                            },
+                            status_code=403,
+                        )
                 request.state.principal = f"api-key:{record.id}"
                 request.state.auth_api_key = api_key
                 request.state.auth_api_key_id = record.id

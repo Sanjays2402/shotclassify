@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import re
 import secrets
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Iterable
@@ -94,6 +96,113 @@ def normalize_scopes(scopes: Iterable[str] | None) -> list[str]:
 # enough for ``/32`` per office plus per-CI-runner ranges, low enough to
 # keep auth-time matching constant-time in practice.
 _MAX_ALLOWED_CIDRS = 64
+_MAX_ACCESS_WINDOWS = 16
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def _parse_hhmm(value: str) -> int:
+    """Return minutes-since-midnight for ``HH:MM`` or raise ValueError."""
+    m = _TIME_RE.match(str(value or "").strip())
+    if not m:
+        raise ValueError(f"invalid HH:MM time: {value!r}")
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
+def normalize_access_windows(windows) -> list[dict]:
+    """Validate and canonicalise a list of access windows.
+
+    Each window must be a dict with keys ``weekdays`` (list of ints in
+    0..6, Mon=0..Sun=6), ``start`` and ``end`` ("HH:MM", 24h, end > start
+    on the same day, no overnight wrap), and ``tz`` (an IANA zone name).
+    Returns a deduped, sorted list. An empty / missing input means "no
+    restriction" and returns ``[]``. Raises :class:`ValueError` on any
+    malformed entry so callers see 422.
+    """
+    if not windows:
+        return []
+    if not isinstance(windows, (list, tuple)):
+        raise ValueError("access_windows must be a list of window objects")
+    if len(windows) > _MAX_ACCESS_WINDOWS:
+        raise ValueError(
+            f"too many access windows: {len(windows)} (max {_MAX_ACCESS_WINDOWS})"
+        )
+    seen: set[tuple] = set()
+    out: list[dict] = []
+    for raw in windows:
+        if not isinstance(raw, dict):
+            raise ValueError("each access window must be an object")
+        weekdays_raw = raw.get("weekdays")
+        if not isinstance(weekdays_raw, (list, tuple)) or not weekdays_raw:
+            raise ValueError("weekdays must be a non-empty list of 0..6 ints")
+        weekdays: list[int] = []
+        for d in weekdays_raw:
+            if isinstance(d, bool) or not isinstance(d, int):
+                raise ValueError(f"weekday must be int 0..6, got {d!r}")
+            if d < 0 or d > 6:
+                raise ValueError(f"weekday out of range: {d}")
+            if d not in weekdays:
+                weekdays.append(d)
+        weekdays.sort()
+        start_min = _parse_hhmm(raw.get("start"))
+        end_min = _parse_hhmm(raw.get("end"))
+        if end_min <= start_min:
+            raise ValueError(
+                "window end must be strictly after start (no overnight wrap; "
+                "split into two windows if you need that)"
+            )
+        tz_name = str(raw.get("tz") or "UTC").strip() or "UTC"
+        try:
+            ZoneInfo(tz_name)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"invalid IANA timezone: {tz_name!r}") from exc
+        canonical = {
+            "weekdays": weekdays,
+            "start": f"{start_min // 60:02d}:{start_min % 60:02d}",
+            "end": f"{end_min // 60:02d}:{end_min % 60:02d}",
+            "tz": tz_name,
+        }
+        key = (tuple(weekdays), canonical["start"], canonical["end"], tz_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(canonical)
+    out.sort(key=lambda w: (w["tz"], w["start"], w["end"], tuple(w["weekdays"])))
+    return out
+
+
+def is_within_access_windows(
+    windows, *, now: datetime | None = None
+) -> bool:
+    """True when ``now`` falls inside at least one window.
+
+    An empty / missing list means "no restriction" and returns True so
+    legacy keys keep working. Each window is evaluated in its own
+    declared zone, which is what makes "US business hours" follow DST
+    without operator intervention.
+    """
+    items = list(windows or [])
+    if not items:
+        return True
+    t = now or _now()
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=UTC)
+    for w in items:
+        try:
+            zone = ZoneInfo(w.get("tz") or "UTC")
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+        local = t.astimezone(zone)
+        if local.weekday() not in (w.get("weekdays") or []):
+            continue
+        try:
+            start = _parse_hhmm(w.get("start"))
+            end = _parse_hhmm(w.get("end"))
+        except ValueError:
+            continue
+        cur = local.hour * 60 + local.minute
+        if start <= cur < end:
+            return True
+    return False
 
 
 def normalize_cidrs(cidrs: Iterable[str] | None) -> list[str]:
@@ -165,6 +274,7 @@ class ApiKeyRecord:
     monthly_quota: int | None
     monthly_usage: int = 0
     owner_email: str | None = None
+    access_windows: list[dict] | None = None
 
     @property
     def is_active(self) -> bool:
@@ -199,6 +309,7 @@ class ApiKeyRecord:
             "monthly_quota": self.monthly_quota,
             "monthly_usage": self.monthly_usage,
             "owner_email": self.owner_email,
+            "access_windows": [dict(w) for w in (self.access_windows or [])],
         }
 
 
@@ -242,6 +353,7 @@ def _row_to_record(row: ApiKeyRow, *, monthly_usage: int = 0) -> ApiKeyRecord:
         monthly_quota=row.monthly_quota,
         monthly_usage=monthly_usage,
         owner_email=row.owner_email,
+        access_windows=list(row.access_windows or []) or None,
     )
 
 
@@ -286,6 +398,7 @@ def create_key(
     allowed_cidrs: Iterable[str] | None = None,
     monthly_quota: int | None = None,
     owner_email: str | None = None,
+    access_windows: list[dict] | None = None,
 ) -> tuple[ApiKeyRecord, str]:
     """Mint a new key. Returns ``(record, plaintext_token)``.
 
@@ -365,6 +478,7 @@ def create_key(
     normalized_owner = normalize_owner_email(owner_email, required=False)
     token = _new_token()
     cidrs = normalize_cidrs(allowed_cidrs)
+    windows = normalize_access_windows(access_windows)
     row = ApiKeyRow(
         id=_new_id(),
         label=label[:128],
@@ -376,6 +490,7 @@ def create_key(
         allowed_cidrs=cidrs or None,
         monthly_quota=monthly_quota,
         owner_email=normalized_owner,
+        access_windows=windows or None,
     )
     with get_session() as ses:
         ses.add(row)
@@ -486,6 +601,31 @@ def set_allowed_cidrs(
         if tenant_id is not None and row.tenant_id != tenant_id:
             return None
         row.allowed_cidrs = normalised or None
+        ses.commit()
+        ses.refresh(row)
+    return _row_to_record(row)
+
+
+def set_access_windows(
+    key_id: str,
+    *,
+    tenant_id: str | None,
+    windows: list[dict] | None,
+) -> ApiKeyRecord | None:
+    """Replace the per-key access windows.
+
+    Pass ``windows=[]`` or ``None`` to clear the restriction. Returns
+    ``None`` when the key is missing or belongs to another tenant.
+    Raises :class:`ValueError` on invalid window input.
+    """
+    normalised = normalize_access_windows(windows)
+    with get_session() as ses:
+        row = ses.scalar(select(ApiKeyRow).where(ApiKeyRow.id == key_id))
+        if row is None:
+            return None
+        if tenant_id is not None and row.tenant_id != tenant_id:
+            return None
+        row.access_windows = normalised or None
         ses.commit()
         ses.refresh(row)
     return _row_to_record(row)
