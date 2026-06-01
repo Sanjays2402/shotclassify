@@ -56,6 +56,7 @@ from .routes import incidents as incidents_routes
 from .routes import legal as legal_routes
 from .routes import support_access as support_access_routes
 from .routes import well_known as well_known_routes
+from .routes import scopes as scopes_routes
 
 
 @asynccontextmanager
@@ -173,6 +174,7 @@ def create_app() -> FastAPI:
     app.include_router(support_access_routes.router)
     app.include_router(support_access_routes.admin_router)
     app.include_router(well_known_routes.router)
+    app.include_router(scopes_routes.router)
     # Ensure the storage root exists for uploads. Blobs are served only
     # through the authenticated, tenant-scoped /v1/blobs/{id} endpoint;
     # the previous unauthenticated StaticFiles mount at /blob was removed

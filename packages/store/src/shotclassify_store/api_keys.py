@@ -34,6 +34,7 @@ from sqlalchemy import func, select, update
 
 from .db import ApiKeyMonthlyUsageRow, ApiKeyRow, get_session
 from . import tenant_settings as _tenant_settings
+from .scope_catalog import all_scope_ids
 
 # Canonical scope strings. ``admin`` is a superset shorthand the auth layer
 # expands so callers don't have to list every read+write capability.
@@ -42,9 +43,11 @@ WRITE_CLASSIFICATIONS = "write:classifications"
 READ_AUDIT = "read:audit"
 ADMIN = "admin"
 
-VALID_SCOPES = frozenset(
-    {READ_CLASSIFICATIONS, WRITE_CLASSIFICATIONS, READ_AUDIT, ADMIN}
-)
+# Authoritative list lives in :mod:`scope_catalog`. Keeping that as the
+# single source of truth means a new scope shipped without a catalog
+# entry fails API-key creation immediately instead of being silently
+# accepted with no documentation for auditors.
+VALID_SCOPES = all_scope_ids()
 
 # Scope -> role mapping for backward compatibility with ``require_role``.
 # ``admin`` wins, then write implies operator, then read-only is viewer.
@@ -348,6 +351,31 @@ def list_keys(
             usage = _read_usage_locked(ses, r.id, ym) if r.monthly_quota is not None else 0
             out.append(_row_to_record(r, monthly_usage=usage))
     return out
+
+
+def get_by_id(key_id: str) -> ApiKeyRecord | None:
+    """Fetch a key record by id, including revoked/expired ones.
+
+    Used by introspection and admin tooling so the caller can see
+    ``revoked_at`` / ``expires_at`` for diagnostics. Returns ``None`` when
+    the row does not exist or the backing table is not initialized.
+    """
+    if not key_id:
+        return None
+    try:
+        with get_session() as ses:
+            row = ses.scalar(select(ApiKeyRow).where(ApiKeyRow.id == key_id))
+            if row is None:
+                return None
+            ym = _current_year_month()
+            usage = (
+                _read_usage_locked(ses, row.id, ym)
+                if row.monthly_quota is not None
+                else 0
+            )
+            return _row_to_record(row, monthly_usage=usage)
+    except Exception:  # pragma: no cover - defensive
+        return None
 
 
 def get_active_by_token(token: str) -> ApiKeyRecord | None:

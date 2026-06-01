@@ -2,6 +2,22 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: API scope catalog and credential introspection
+
+Enterprise procurement reviewers consistently block deals on a single question: show us, in one place, every permission your API can issue, what each one grants, what it does not, and which built-in roles include it. ShotClassify now exposes that catalog as a first-class endpoint. `GET /v1/scopes` returns the canonical list (id, title, description, mutating flag, default roles) backed by `shotclassify_store.scope_catalog`, which is also the single source of truth that `VALID_SCOPES` validates against at API-key creation time, so a new scope cannot ship without a documented entry. A companion `GET /v1/auth/introspect` returns RFC 7662 style data for the calling credential only: principal, tenant binding, role, raw scopes, scopes hydrated against the catalog (legacy or removed scopes are flagged `unknown: true`), credential type, key id, label, last-used and expiry timestamps, and the propagated request id. Introspection deliberately does not accept a token parameter, so the endpoint cannot be turned into a credential oracle. A new admin UI at `/settings/scopes` renders the catalog and the active credential side by side so reviewers and on-call engineers can answer "what can this key actually do" in one click. Coverage in `tests/test_scope_catalog.py` proves the catalog enumerates every scope the store accepts, requires auth, returns the calling key's tenant and scopes, hydrates unknown scopes for legacy keys, and refuses to leak tenant B when a tenant-A-bound key passes `X-Tenant: B`.
+
+Try it locally:
+
+```
+make api      # FastAPI on :7441
+make web      # Next.js dashboard on :3000
+# Public catalog (auth-gated, stable across tenants):
+curl -s http://127.0.0.1:7441/v1/scopes -H 'x-api-key: <any-key>' | jq
+# What can my current credential do?
+curl -s http://127.0.0.1:7441/v1/auth/introspect -H 'x-api-key: <any-key>' | jq
+# UI: http://localhost:3000/settings/scopes
+```
+
 ## What's new: per-tenant audit log SIEM sinks
 
 Enterprise procurement teams routinely block deals on one question: can we get your audit log into our SIEM. ShotClassify now ships per-workspace audit sinks. A workspace admin registers an HTTPS endpoint at `Settings -> Security -> Audit sinks` (or `POST /v1/audit/sinks`) and every audit row written by `AuditLogMiddleware` (actor, method, path, status, request id, client IP, user agent, target id, tenant) is fanned out to that endpoint with an `HMAC-SHA256(sha256(secret), body)` signature in `X-Shotclassify-Audit-Signature` so receivers can verify authenticity. The plaintext signing secret is returned exactly once at create time; only its SHA-256 hash is persisted, so a DB leak cannot be used to forge events. Dispatch runs on a small background pool with a hard per-attempt timeout, reuses the existing webhook egress allowlist and SSRF guardrails (private/loopback addresses blocked unless explicitly permitted), and never blocks or fails the originating request. Each sink row tracks `success_count`, `failure_count`, `last_status`, and `last_error` so operators can see at a glance whether their collector is healthy, and a `Test` button on the page synchronously fires a probe event and reports the HTTP response. Every CRUD call is admin-only, requires the `admin` scope, runs through MFA step-up, and the existing audit middleware records it. Cross-tenant isolation is enforced at the query layer; coverage in `tests/test_audit_sinks.py` proves tenant B cannot list, fetch, revoke, or test tenant A's sink (404, not 403, to avoid existence leaks) and that a mutation on tenant B never reaches tenant A's collector.

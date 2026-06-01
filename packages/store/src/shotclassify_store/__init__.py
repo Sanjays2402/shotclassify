@@ -25,6 +25,8 @@ from .db import (
 )
 from . import api_keys as api_keys_store
 from .api_keys import ApiKeyRecord
+from . import scope_catalog
+from .scope_catalog import SCOPE_CATALOG, ScopeDefinition, all_scope_ids, describe as describe_scopes, get_scope
 from . import memberships as memberships_store
 from .memberships import InvitationRecord, MembershipRecord, SeatLimitExceeded
 from . import scim as scim_store
@@ -240,6 +242,12 @@ __all__ = [
     "mfa_store",
     "api_keys_store",
     "ApiKeyRecord",
+    "SCOPE_CATALOG",
+    "ScopeDefinition",
+    "all_scope_ids",
+    "describe_scopes",
+    "get_scope",
+    "scope_catalog",
     "memberships_store",
     "MembershipRecord",
     "MembershipRow",
