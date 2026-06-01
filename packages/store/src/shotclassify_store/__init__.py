@@ -123,6 +123,17 @@ from .tenant_freeze import (
     is_frozen,
     lift_freeze,
 )
+from . import workspace_teardown as workspace_teardown_store
+from .workspace_teardown import (
+    DEFAULT_COOLOFF_HOURS,
+    MAX_COOLOFF_HOURS,
+    MIN_COOLOFF_HOURS,
+    TeardownState,
+    cancel_teardown,
+    execute_teardown,
+    get_teardown_state,
+    schedule_teardown,
+)
 from .tenant_settings import (
     API_KEY_MAX_TTL_DAYS,
     API_KEY_MIN_TTL_DAYS,
@@ -402,4 +413,13 @@ __all__ = [
     "DualControlIssuanceRequest",
     "DUAL_CONTROL_PROTECTED_SCOPES",
     "ApiKeyIssuanceRequestRow",
+    "workspace_teardown_store",
+    "TeardownState",
+    "DEFAULT_COOLOFF_HOURS",
+    "MAX_COOLOFF_HOURS",
+    "MIN_COOLOFF_HOURS",
+    "cancel_teardown",
+    "execute_teardown",
+    "get_teardown_state",
+    "schedule_teardown",
 ]

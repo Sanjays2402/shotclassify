@@ -2,6 +2,57 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
+## What's new: workspace teardown with cooling-off period
+
+Per-user DSAR (`/v1/me/data`) and the partial purge at `/v1/workspace/data`
+only delete pieces of a workspace; memberships, API keys, SSO config, and
+tenant settings survive both. Enterprise procurement and GDPR Article 17 want
+a real decommission path that destroys the whole workspace, audibly, with
+enough friction that it cannot fire on a single misclick. ShotClassify now
+ships that. An owner schedules a teardown with `POST /v1/workspace/teardown`
+(admin role + MFA step-up), echoing the workspace tenant id back as the
+confirmation phrase and picking a cooling-off period between 1 hour and 30
+days (default 7 days). The schedule is visible at `GET /v1/workspace/teardown`
+and can be cancelled any time before the cool-off elapses with
+`DELETE /v1/workspace/teardown`. Only after `execute_after` is in the past
+does `POST /v1/workspace/teardown/execute?confirm=<tenant>` succeed; early
+calls return `425 Too Early`, missing confirmation returns `400`, and active
+legal holds return `423`. Execute hard-deletes every tenant-scoped row across
+classifications, audit log, saved views, sessions, memberships, invitations,
+API keys (and their monthly usage), webhooks and deliveries, audit sinks,
+legal holds, subprocessor acks, legal acceptances, incident subscriptions,
+support-access grants, auth failures and lockouts, access reviews, DSAR rows,
+API-key issuance requests, and tenant settings, then returns a per-table
+receipt so the admin sees exactly what was removed. Cross-tenant tables (MFA
+credentials, which are keyed by principal) are intentionally left alone.
+`dry_run=true` is honoured on schedule and execute. Manage it interactively
+at `Settings -> Teardown`. Coverage in `tests/test_workspace_teardown.py`
+exercises RBAC on read, the confirmation-phrase guard, the cool-off
+enforcement, dry-run no-mutation, the cross-tenant isolation property (a
+teardown on workspace A leaves workspace B untouched), and the full purge
+receipt.
+
+Try it locally:
+
+```
+uvicorn services.api.app.main:create_app --factory --port 7441 &
+cd web && pnpm dev   # http://localhost:3000/settings/teardown
+
+# Schedule (1 hour cool-off for the demo)
+curl -s -X POST http://127.0.0.1:7441/v1/workspace/teardown \
+  -H "X-API-Key: $ADMIN_API_KEY" -H "X-Tenant: acme" \
+  -H "content-type: application/json" \
+  -d '{"confirm":"acme","cooloff_hours":1,"reason":"contract ended"}' | jq .
+
+# Inspect the schedule
+curl -s http://127.0.0.1:7441/v1/workspace/teardown \
+  -H "X-API-Key: $ADMIN_API_KEY" -H "X-Tenant: acme" | jq .
+
+# Cancel before the cool-off elapses
+curl -s -X DELETE http://127.0.0.1:7441/v1/workspace/teardown \
+  -H "X-API-Key: $ADMIN_API_KEY" -H "X-Tenant: acme" | jq .
+```
+
 ## What's new: per-API-key activity timeline
 
 Every API key now has a recent activity feed pulled straight from the

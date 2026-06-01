@@ -447,6 +447,24 @@ class TenantSettingsRow(Base):
     webhook_autodisable_threshold: Mapped[int | None] = mapped_column(
         nullable=True
     )
+    # Per-workspace scheduled teardown with cooling-off period (migration
+    # 0050). Set when an owner invokes ``POST /v1/workspace/teardown``;
+    # cleared by cancel or by the execute step itself (the whole
+    # tenant_settings row is dropped on execute). Enterprise procurement
+    # and GDPR Article 17 both ask for an auditable workspace decommission
+    # path that cannot fire on a single misclick.
+    teardown_scheduled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    teardown_scheduled_by: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    teardown_execute_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    teardown_reason: Mapped[str | None] = mapped_column(
+        String(256), nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -1390,6 +1408,23 @@ def init_db() -> None:
                 if "dual_control_enabled" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN dual_control_enabled BOOLEAN NOT NULL DEFAULT 0"
+                    ))
+                # 0050 workspace scheduled teardown columns.
+                if "teardown_scheduled_at" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN teardown_scheduled_at TIMESTAMP"
+                    ))
+                if "teardown_scheduled_by" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN teardown_scheduled_by VARCHAR(128)"
+                    ))
+                if "teardown_execute_after" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN teardown_execute_after TIMESTAMP"
+                    ))
+                if "teardown_reason" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN teardown_reason VARCHAR(256)"
                     ))
             # 0046 pending-issuance queue for dual-control approvals.
             if not insp.has_table("api_key_issuance_requests"):

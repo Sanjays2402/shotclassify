@@ -50,6 +50,7 @@ from .routes import key_issuance as key_issuance_routes
 from .routes import memberships as memberships_routes
 from .routes import access_reviews as access_reviews_routes
 from .routes import workspace_data as workspace_data_routes
+from .routes import workspace_teardown as workspace_teardown_routes
 from .routes import admin as admin_routes
 from .routes import webhooks as webhooks_routes
 from .routes import scim as scim_routes
@@ -177,6 +178,7 @@ def create_app() -> FastAPI:
     app.include_router(memberships_routes.router)
     app.include_router(access_reviews_routes.router)
     app.include_router(workspace_data_routes.router)
+    app.include_router(workspace_teardown_routes.router)
     app.include_router(admin_routes.router)
     app.include_router(webhooks_routes.router)
     app.include_router(scim_routes.router)
