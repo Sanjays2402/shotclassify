@@ -17,6 +17,7 @@ access log line.
 from __future__ import annotations
 
 from collections import Counter
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -129,4 +130,95 @@ def overview(request: Request) -> dict[str, Any]:
             "in_use": seat_usage,
             "available": seats_available,
         },
+    }
+
+
+def _period_start(now: datetime | None = None) -> datetime:
+    """Start of current UTC calendar month, matching the per-user meter."""
+    now = now or datetime.now(UTC)
+    return datetime(now.year, now.month, 1, tzinfo=UTC)
+
+
+@router.get("/seats/usage", dependencies=[require_role("admin")])
+def seats_usage(request: Request) -> dict[str, Any]:
+    """Per-seat usage breakdown for billing-by-seat.
+
+    Joins workspace membership against classification volume in the current
+    calendar month so a workspace owner can answer: how many seats am I
+    paying for, who has them, who is actually using the product, and which
+    seats are dormant. Strictly tenant-scoped: only the caller's workspace
+    is queried; cross-tenant principals are never enumerated.
+    """
+    tenant_id = _require_tenant(request)
+
+    members = memberships_store.list_members(tenant_id)
+    period_start = _period_start()
+    grouped = Repository().count_by_principal_grouped(
+        tenant_id=tenant_id, since=period_start
+    )
+    usage_by_principal: dict[str, dict[str, Any]] = {
+        row["principal"]: row for row in grouped if row.get("principal")
+    }
+
+    rows: list[dict[str, Any]] = []
+    active_seats = 0
+    total_used = 0
+    for m in members:
+        u = usage_by_principal.get(m.principal, {"count": 0, "last_at": None})
+        count = int(u.get("count") or 0)
+        if count > 0:
+            active_seats += 1
+        total_used += count
+        rows.append(
+            {
+                "principal": m.principal,
+                "role": m.role,
+                "member_since": m.created_at.isoformat(),
+                "usage_current_period": count,
+                "last_activity_at": u.get("last_at"),
+            }
+        )
+
+    # Surface usage from principals that are NOT current members (e.g. a
+    # removed teammate's historical rows still scoped to this tenant). These
+    # are not billable seats but matter for forensic and billing reviews.
+    member_principals = {m.principal for m in members}
+    orphan_rows = [
+        {
+            "principal": p,
+            "role": None,
+            "member_since": None,
+            "usage_current_period": int(u.get("count") or 0),
+            "last_activity_at": u.get("last_at"),
+        }
+        for p, u in usage_by_principal.items()
+        if p not in member_principals
+    ]
+
+    seat_limit = memberships_store.get_seat_limit(tenant_id)
+    seat_usage_counts = memberships_store.count_seats_in_use(tenant_id)
+    rows.sort(key=lambda r: (-int(r["usage_current_period"]), r["principal"] or ""))
+    orphan_rows.sort(
+        key=lambda r: (-int(r["usage_current_period"]), r["principal"] or "")
+    )
+
+    return {
+        "tenant_id": tenant_id,
+        "period": {
+            "start": period_start.isoformat(),
+            "granularity": "calendar_month_utc",
+        },
+        "seats": {
+            "limit": seat_limit,
+            "in_use": seat_usage_counts,
+            "active_this_period": active_seats,
+            "dormant_this_period": max(0, len(members) - active_seats),
+        },
+        "totals": {
+            "classifications": total_used,
+            "members": len(members),
+            "orphan_principals": len(orphan_rows),
+        },
+        "members": rows,
+        "orphans": orphan_rows,
     }

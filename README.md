@@ -2,6 +2,20 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: per-seat usage breakdown for billing-by-seat
+
+Workspace owners on enterprise plans get billed by seat, then asked to justify the renewal: how many seats am I paying for, who actually uses the product, and which seats sat dormant all month. ShotClassify now answers that in one screen. `GET /v1/admin/seats/usage` returns, for the caller's workspace only, every member with their role, member-since date, classification count for the current calendar month UTC, and last activity timestamp, plus a separate `orphans` list for principals that still have rows but were already removed from the workspace (forensic and offboarding signal). The endpoint requires the admin role through the same `require_role("admin")` dependency the rest of the admin console uses, and every read is scoped to `request.state.tenant_id` at the SQL layer via `Repository.count_by_principal_grouped(tenant_id=...)`, which raises if no tenant is supplied so it cannot accidentally be used to enumerate across tenants. The matching UI lives at `/admin/seats`: header tiles for seats in use vs limit, active vs dormant this period, total classifications, and former principals; a sortable table with per-seat usage bars and last-activity timestamps; an amber over-limit banner when in-use exceeds the purchased seat cap; loading skeletons, a denied state for non-admins, and an empty state for fresh workspaces. Cross-tenant isolation is proven by `tests/test_admin_seats_usage.py::test_seats_usage_shape_and_tenant_isolation`, which seeds rows under `tenant-b` directly through the repository and confirms the admin response for tenant A returns zero classifications and never surfaces the leaked principal in either list.
+
+### Try it
+
+Local API at `http://127.0.0.1:7441`, web dashboard at `http://localhost:3000/admin/seats`.
+
+```bash
+# Per-seat usage for this workspace (admin role required)
+curl -s http://127.0.0.1:7441/v1/admin/seats/usage \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" | jq '.seats, .totals, .members[0:3]'
+```
+
 ## What's new: mandatory accountable owner on every API key
 
 Procurement reviewers consistently ask the same question about machine credentials: who owns this key, and who do we call when it leaks. ShotClassify now answers that question as a first-class field. Every key minted through `POST /v1/api-keys` requires an `owner_email` (a syntactically valid mailbox, lower-cased domain on write so `Alice@ACME.com` and `alice@acme.com` cannot end up as two different owners). The owner is carried forward across `POST /{key_id}/rotate` so a rotation never silently orphans a credential, and admins can reassign it any time via `PATCH /{key_id}/owner` (MFA step-up required). Rows that existed before the migration land in `GET /v1/api-keys/unowned`, a tenant-scoped feed the admin console renders as an amber banner with the count of active credentials missing an owner, so a workspace owner can drive a quarterly access review from a single screen instead of joining the audit log by hand. Tenant isolation is proven by `tests/test_api_key_owner_email.py::test_tenant_isolation_for_owner_patch_and_unowned_list` (probing another workspace's key id returns 404, never 200 or 403). Field is also surfaced in the `to_dict()` payload everywhere keys are listed, so SCIM exports and the SIEM audit feed pick it up automatically.

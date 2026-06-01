@@ -23,6 +23,7 @@ import {
   Gavel,
   Scales,
   Gauge,
+  ChartBar,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -267,6 +268,13 @@ export default function AdminConsolePage() {
           value="Configure"
           href="/settings/security/rate-limits"
           sub="per workspace, per key"
+        />
+        <StatCard
+          icon={<ChartBar size={18} weight="duotone" />}
+          label="Seat usage"
+          value="Review"
+          href="/admin/seats"
+          sub="billing by seat"
         />
         <StatCard
           icon={<Gavel size={18} weight="duotone" />}

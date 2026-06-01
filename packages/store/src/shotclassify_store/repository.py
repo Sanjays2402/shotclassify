@@ -80,6 +80,50 @@ class Repository:
         with get_session() as s:
             return int(s.execute(stmt).scalar() or 0)
 
+    def count_by_principal_grouped(
+        self,
+        tenant_id: str,
+        since: datetime | None = None,
+    ) -> list[dict]:
+        """Per-principal classification counts and last-activity timestamps.
+
+        Returned rows are dicts with ``principal``, ``count``, and
+        ``last_at`` (ISO 8601 str or None). Strictly tenant-scoped: callers
+        must supply ``tenant_id`` so this can never be used to enumerate
+        rows across tenants. Used by the seat-usage admin endpoint to
+        render per-seat billing/usage breakdowns.
+        """
+        if not tenant_id:
+            raise ValueError("tenant_id is required for per-principal usage.")
+        stmt = (
+            select(
+                ClassificationRow.principal,
+                func.count(ClassificationRow.id).label("n"),
+                func.max(ClassificationRow.created_at).label("last_at"),
+            )
+            .where(ClassificationRow.principal.is_not(None))
+            .group_by(ClassificationRow.principal)
+        )
+        stmt = self._scope_tenant(stmt, tenant_id)
+        if since is not None:
+            stmt = stmt.where(ClassificationRow.created_at >= since)
+        out: list[dict] = []
+        with get_session() as s:
+            for principal, n, last_at in s.execute(stmt).all():
+                if isinstance(last_at, str):
+                    try:
+                        last_at = datetime.fromisoformat(last_at)
+                    except ValueError:
+                        last_at = None
+                out.append(
+                    {
+                        "principal": principal,
+                        "count": int(n or 0),
+                        "last_at": last_at.isoformat() if last_at else None,
+                    }
+                )
+        return out
+
     def list_by_principal(
         self, principal: str, tenant_id: str | None = None
     ) -> list[ClassificationRecord]:
