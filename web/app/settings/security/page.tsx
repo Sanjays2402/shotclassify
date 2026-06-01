@@ -19,6 +19,7 @@ import {
   Key as KeyIcon,
   CloudArrowUp,
   Vault,
+  UsersThree,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -294,6 +295,7 @@ export default function SecuritySettingsPage() {
       <ApiKeyTtlPolicySection />
       <ApiKeyInactivityPolicySection />
       <ApiKeyMaxAgePolicySection />
+      <SessionCapPolicySection />
       <ApiKeyMaxActivePolicySection />
       <UploadSizePolicySection />
       <CmekReferenceSection />
@@ -3434,6 +3436,231 @@ function ApiKeyMaxAgePolicySection() {
                     key={p.days}
                     type="button"
                     onClick={() => setValue(String(p.days))}
+                    className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900"
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <label className="mb-3 block text-sm">
+            <span className="mb-1 block text-zinc-600 dark:text-zinc-400">
+              MFA code (required to save)
+            </span>
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value)}
+              placeholder="123456"
+              className="w-full max-w-[12rem] rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 font-mono text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          </label>
+
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {busy ? "Saving..." : "Save policy"}
+            </button>
+            {flash ? (
+              <p
+                className={
+                  flash.kind === "ok"
+                    ? "text-sm text-emerald-700 dark:text-emerald-400"
+                    : "text-sm text-red-700 dark:text-red-400"
+                }
+                role="status"
+              >
+                {flash.msg}
+              </p>
+            ) : null}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+type SessionCapResponse = {
+  tenant_id: string;
+  max_sessions_per_user: number | null;
+  min_value: number;
+  max_value: number;
+};
+
+function SessionCapPolicySection() {
+  const { data, error, isLoading, mutate } = useSWR<SessionCapResponse>(
+    "/api/settings/security/session-cap",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+
+  const [enforce, setEnforce] = useState<boolean>(false);
+  const [value, setValue] = useState<string>("");
+  const [otp, setOtp] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!data) return;
+    if (data.max_sessions_per_user != null) {
+      setEnforce(true);
+      setValue(String(data.max_sessions_per_user));
+    } else {
+      setEnforce(false);
+      setValue("3");
+    }
+  }, [data?.max_sessions_per_user]);
+
+  const status = error as ApiError | undefined;
+  const unauth = status?.status === 401;
+  const forbidden = status?.status === 403;
+
+  const presets: Array<{ label: string; n: number }> = [
+    { label: "1 device", n: 1 },
+    { label: "3 devices", n: 3 },
+    { label: "5 devices", n: 5 },
+    { label: "10 devices", n: 10 },
+  ];
+
+  async function save() {
+    if (!data) return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      let body: { max_sessions_per_user: number | null };
+      if (!enforce) {
+        body = { max_sessions_per_user: null };
+      } else {
+        const parsed = Math.trunc(Number(value));
+        if (!Number.isFinite(parsed)) {
+          setFlash({ kind: "err", msg: "Enter a whole number." });
+          setBusy(false);
+          return;
+        }
+        if (parsed < data.min_value || parsed > data.max_value) {
+          setFlash({
+            kind: "err",
+            msg: `Value must be between ${data.min_value} and ${data.max_value}.`,
+          });
+          setBusy(false);
+          return;
+        }
+        body = { max_sessions_per_user: parsed };
+      }
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (otp.trim()) headers["x-mfa-otp"] = otp.trim();
+      const res = await fetch("/api/settings/security/session-cap", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setFlash({ kind: "err", msg: text || `Save failed (${res.status})` });
+        setBusy(false);
+        return;
+      }
+      const next: SessionCapResponse = await res.json();
+      setFlash({ kind: "ok", msg: "Saved." });
+      setOtp("");
+      await mutate(next, { revalidate: false });
+    } catch (e) {
+      setFlash({ kind: "err", msg: (e as Error).message || "Save failed" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-center gap-2 mb-2">
+        <UsersThree size={20} weight="duotone" className="text-sky-600" />
+        <h2 className="text-base font-semibold">Concurrent sessions per user</h2>
+        {data?.tenant_id ? (
+          <span className="ml-auto rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+            tenant: {data.tenant_id}
+          </span>
+        ) : null}
+      </div>
+      <p className="text-sm text-zinc-500 mb-4">
+        Cap how many simultaneous sessions a single user can hold inside
+        this workspace. When a new sign-in would exceed the cap, the
+        user&apos;s oldest active sessions in this tenant are revoked
+        first (oldest by last seen) so the most recently used device
+        survives. SOC 2 CC6.1 concurrent-session control, recorded in
+        the audit log on every change.
+      </p>
+
+      {isLoading ? (
+        <div className="space-y-2" aria-busy="true">
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+        </div>
+      ) : unauth ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Sign in to manage the concurrent session policy.
+        </div>
+      ) : forbidden ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Admin role required to change the concurrent session policy.
+        </div>
+      ) : !data ? (
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+          Could not load the concurrent session policy.
+        </div>
+      ) : (
+        <>
+          <div className="mb-4 flex flex-wrap items-center gap-3 text-sm">
+            <span className="text-zinc-500">Current:</span>
+            <span className="rounded-md bg-zinc-100 px-2 py-1 font-mono text-xs dark:bg-zinc-900">
+              {data.max_sessions_per_user == null
+                ? "no policy (unbounded)"
+                : `at most ${data.max_sessions_per_user} concurrent sessions per user`}
+            </span>
+          </div>
+
+          <label className="mb-3 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={enforce}
+              onChange={(e) => setEnforce(e.target.checked)}
+              className="h-4 w-4 rounded border-zinc-300 text-sky-600 focus:ring-sky-500"
+            />
+            <span>Enforce a per-user concurrent session cap</span>
+          </label>
+
+          {enforce ? (
+            <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block text-sm">
+                <span className="mb-1 block text-zinc-600 dark:text-zinc-400">
+                  Max sessions per user
+                </span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={data.min_value}
+                  max={data.max_value}
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  className="w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 font-mono text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:border-zinc-700 dark:bg-zinc-900"
+                />
+              </label>
+              <div className="flex flex-wrap items-end gap-1.5">
+                {presets.map((p) => (
+                  <button
+                    key={p.n}
+                    type="button"
+                    onClick={() => setValue(String(p.n))}
                     className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900"
                   >
                     {p.label}

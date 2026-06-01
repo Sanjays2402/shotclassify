@@ -20,6 +20,8 @@ from shotclassify_store import (
     SESSION_TTL_MIN_MINUTES,
     SESSION_IDLE_MAX_MINUTES,
     SESSION_IDLE_MIN_MINUTES,
+    SESSION_CAP_PER_USER_MAX,
+    SESSION_CAP_PER_USER_MIN,
     get_api_key_inactivity_policy,
     get_api_key_max_age_policy,
     get_api_key_max_active_policy,
@@ -30,6 +32,7 @@ from shotclassify_store import (
     get_privacy_settings,
     get_retention_days,
     get_audit_retention_days,
+    get_session_cap_policy,
     get_session_policy,
     get_sso_config,
     get_tenant_oidc,
@@ -48,6 +51,7 @@ from shotclassify_store import (
     purge_expired_audit_for_tenant,
     MAX_AUDIT_RETENTION_DAYS,
     set_session_policy,
+    set_session_cap_policy,
     set_session_idle_policy,
     set_sso_config,
     set_tenant_oidc,
@@ -1394,3 +1398,52 @@ def put_dual_control_route(request: Request, payload: dict = Body(...)) -> dict:
         "protected_scopes": sorted(_dual_control.PROTECTED_SCOPES),
         "request_ttl_hours": _dual_control.DEFAULT_TTL_HOURS,
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant concurrent session cap per user
+# ---------------------------------------------------------------------------
+
+
+@router.get("/session-cap", dependencies=[require_role("admin")])
+def get_session_cap_route(request: Request) -> dict:
+    """Return the per-tenant concurrent-session cap per user, or null."""
+    tenant_id = _tenant(request)
+    return get_session_cap_policy(tenant_id).to_dict()
+
+
+@router.put(
+    "/session-cap",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_session_cap_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Set or clear the per-tenant concurrent session cap per user.
+
+    Body: ``{"max_sessions_per_user": int|null}``. ``null`` clears the
+    policy. When set, the next login that would push a single user above
+    the cap evicts that user's oldest active sessions in this tenant
+    (oldest by ``last_seen_at``) until exactly ``cap`` remain. Existing
+    sessions are not retroactively evicted at policy set time; they are
+    pruned the next time the user signs in.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "JSON object body required.")
+    if "max_sessions_per_user" not in payload:
+        raise HTTPException(
+            422, "Field 'max_sessions_per_user' is required (int or null)."
+        )
+    raw = payload["max_sessions_per_user"]
+    if raw is not None and (isinstance(raw, bool) or not isinstance(raw, int)):
+        raise HTTPException(422, "max_sessions_per_user must be an integer or null.")
+    actor = getattr(request.state, "principal", None)
+    try:
+        cfg = set_session_cap_policy(
+            tenant_id, max_sessions_per_user=raw, updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return cfg.to_dict()

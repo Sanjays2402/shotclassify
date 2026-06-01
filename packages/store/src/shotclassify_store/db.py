@@ -298,6 +298,14 @@ class TenantSettingsRow(Base):
     # ``api_key_inactivity_days``: that one catches dormant keys, this
     # one catches actively used but stale keys. NULL = no policy.
     api_key_max_age_days: Mapped[int | None] = mapped_column(nullable=True)
+    # Per-tenant cap on the number of concurrent active (non-revoked,
+    # non-expired) sessions a single principal (login) may hold inside
+    # this tenant. When set, ``sessions_store.create`` evicts the oldest
+    # active sessions for the principal down to ``cap - 1`` before the
+    # new row is written. NULL = no policy (legacy unbounded). This is
+    # the SOC 2 CC6.1 concurrent-session control and is independent of
+    # the absolute and idle timeouts.
+    max_sessions_per_user: Mapped[int | None] = mapped_column(nullable=True)
     # Per-tenant cap on the number of active (non-revoked) DB-backed API
     # keys. When set, ``api_keys_store.create_key`` (and the rotation
     # path, which mints a successor) reject with ``ValueError`` once the
@@ -1293,6 +1301,11 @@ def init_db() -> None:
                 if "api_key_max_age_days" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN api_key_max_age_days INTEGER"
+                    ))
+                # 0047 per-tenant concurrent session cap per user.
+                if "max_sessions_per_user" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN max_sessions_per_user INTEGER"
                     ))
                 # 0031 per-tenant cap on active (non-revoked) API keys.
                 if "api_key_max_active" not in tcols:

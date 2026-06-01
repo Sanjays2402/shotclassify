@@ -810,6 +810,22 @@ curl -X PUT http://127.0.0.1:7441/v1/settings/security/api-key-max-active \
   -d '{"max_active": 10}'
 ```
 
+## What's new: per-tenant concurrent session cap per user
+
+SOC 2 CC6.1 and most enterprise security questionnaires ask, in some form, whether the platform limits how many simultaneous sessions a single user can hold. Absolute and idle session timeouts do not answer that: a single user can still accumulate dozens of long-lived cookies across shared devices. ShotClassify now lets workspace admins set a per-tenant `max_sessions_per_user` cap from `Settings -> Security -> Concurrent sessions per user` (or `PUT /v1/settings/security/session-cap`). When a cap is set, the next sign-in that would push that user above the cap evicts the user's oldest active sessions in this tenant first (oldest by `last_seen_at`, so the most recently used workstation survives) before the new session is minted. Enforcement lives in `services/api/app/middleware/auth.py::issue_session` which is the single chokepoint for both OAuth and OIDC SSO logins, so a new login path cannot bypass it. Eviction is strictly tenant-scoped: a cap on tenant A never touches the same user's sessions in tenant B. Policy reads and writes are admin only, writes require MFA step-up, and existing sessions are not retroactively evicted at policy set time so a tightened policy never logs everyone out at once. Coverage in `tests/test_session_cap_per_user.py` (default unset, range validation, eviction on overflow, tenant isolation).
+
+Try it locally:
+
+```bash
+make dev   # API on http://127.0.0.1:7441, dashboard on http://127.0.0.1:3000
+
+# Cap each user to 3 concurrent sessions (admin key + MFA step-up disabled in dev).
+curl -X PUT http://127.0.0.1:7441/v1/settings/security/session-cap \
+  -H "X-API-Key: $SHOTCLASSIFY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"max_sessions_per_user": 3}'
+```
+
 ## What's new: per-tenant API key mandatory rotation (max age) policy
 
 Inactivity caps catch credentials that have gone dormant. They do not catch a credential that is hammered every minute and has been alive for two years. SOC 2 CC6.1, PCI DSS 3.6.4, NIST SP 800-63B 5.1.1.2 and almost every enterprise security questionnaire ask for a documented maximum key age and proof of enforcement. ShotClassify now lets workspace admins set a per-tenant `api_key_max_age_days` cap from `Settings -> Security -> API key mandatory rotation` (or `PUT /v1/settings/security/api-key-max-age`). When a cap is set, any DB-backed API key whose `created_at` is older than the cap is auto-revoked on its next presentation and the request is rejected with `HTTP 401 api_key_rotation_required`, regardless of how recently it was used. Enforcement lives in `services/api/app/middleware/auth.py` next to the inactivity branch, so adding a new route cannot bypass it, and the auto-revocation is recorded in the tenant's tamper-evident audit log with the inbound request id, source IP, and key id. Existing keys are not retroactively shortened: a tightened policy only takes effect on the next request a stale key makes, so the change never breaks a live integration silently. Policy reads and writes are admin only, writes require MFA step-up, and the cap is tenant-scoped. Coverage in `tests/test_api_key_max_age_policy.py` (default unset, range validation, rotation-required auto-revoke on stale key, revoked-row follow-up request, cross-tenant isolation).

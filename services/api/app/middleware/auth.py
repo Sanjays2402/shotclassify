@@ -12,7 +12,7 @@ from datetime import timedelta
 from itsdangerous import BadSignature, URLSafeSerializer
 from shotclassify_common import get_settings
 from shotclassify_store import api_keys_store, auth_lockouts_store, memberships_store, scim_store, session_store
-from shotclassify_store import get_session_policy
+from shotclassify_store import get_session_cap_policy, get_session_policy
 from shotclassify_store.sessions import SESSION_TTL
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -124,6 +124,25 @@ def _resolve_session_ttl(tenant_id: str | None) -> timedelta:
         return SESSION_TTL
 
 
+def _resolve_session_cap(tenant_id: str | None) -> int | None:
+    """Return the per-tenant concurrent session cap per user, or None.
+
+    A missing tenant, missing policy, or corrupt settings row all read
+    as "no policy" so the historical unbounded behaviour is preserved
+    on misconfig. Bounds are enforced at write time, not read time.
+    """
+    try:
+        if not tenant_id:
+            return None
+        policy = get_session_cap_policy(tenant_id)
+        cap = policy.max_sessions_per_user
+        if cap is None or cap < 1:
+            return None
+        return int(cap)
+    except Exception:
+        return None
+
+
 def _resolve_session_idle(tenant_id: str | None) -> timedelta | None:
     """Return the per-tenant session idle (inactivity) timeout.
 
@@ -167,6 +186,7 @@ def issue_session(
         user_agent=user_agent,
         auth_method=auth_method,
         ttl=_resolve_session_ttl(tenant_id),
+        max_sessions_per_user=_resolve_session_cap(tenant_id),
     )
     cookie = _signer().dumps({"sid": info.id})
     return cookie, info.id

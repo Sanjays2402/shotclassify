@@ -82,8 +82,40 @@ def create(
     user_agent: str | None,
     ttl: timedelta = SESSION_TTL,
     auth_method: str = "oauth",
+    max_sessions_per_user: int | None = None,
 ) -> SessionInfo:
+    """Mint a new session row.
+
+    When ``max_sessions_per_user`` is set (per-tenant policy), the oldest
+    active sessions for the same ``principal`` inside ``tenant_id`` are
+    revoked first so the new row plus surviving active rows never
+    exceeds the cap. Oldest is computed by ``last_seen_at`` so the most
+    recently used device (typically the active workstation) survives.
+    The eviction is bounded to the same tenant: a user's sessions in
+    other workspaces are never touched by another workspace's policy.
+    """
     now = datetime.now(UTC)
+    if (
+        max_sessions_per_user is not None
+        and max_sessions_per_user >= 1
+        and tenant_id
+    ):
+        keep = max_sessions_per_user - 1
+        with get_session() as s:
+            active = list(
+                s.scalars(
+                    select(SessionRow)
+                    .where(SessionRow.principal == principal)
+                    .where(SessionRow.tenant_id == tenant_id)
+                    .where(SessionRow.revoked_at.is_(None))
+                    .where(SessionRow.expires_at > now)
+                    .order_by(SessionRow.last_seen_at.desc())
+                ).all()
+            )
+            if len(active) > keep:
+                for victim in active[keep:]:
+                    victim.revoked_at = now
+                s.commit()
     row = SessionRow(
         id=secrets.token_urlsafe(24),
         principal=principal,

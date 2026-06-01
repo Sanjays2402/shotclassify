@@ -2462,3 +2462,95 @@ def scopes_within_allowed(scopes: list[str], allowed: list[str]) -> bool:
         return True
     allowed_set = {s for s in allowed if isinstance(s, str)}
     return all(isinstance(s, str) and s in allowed_set for s in scopes)
+
+
+# --- Per-tenant concurrent session cap per user --------------------------
+
+# Bounds: at least one (you cannot effectively disable a user by setting
+# zero; clear the policy instead), at most 50 so a typo cannot defeat
+# the purpose of the cap. Procurement reviewers typically expect 3 to 5.
+SESSION_CAP_PER_USER_MIN = 1
+SESSION_CAP_PER_USER_MAX = 50
+
+
+@dataclass(frozen=True)
+class SessionCapPolicy:
+    tenant_id: str
+    max_sessions_per_user: int | None  # None = no policy (legacy)
+
+    def to_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "max_sessions_per_user": self.max_sessions_per_user,
+            "min_value": SESSION_CAP_PER_USER_MIN,
+            "max_value": SESSION_CAP_PER_USER_MAX,
+        }
+
+
+def get_session_cap_policy(tenant_id: str | None) -> SessionCapPolicy:
+    """Return the per-tenant concurrent-session cap for a single user."""
+    if not tenant_id:
+        return SessionCapPolicy(tenant_id="", max_sessions_per_user=None)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return SessionCapPolicy(tenant_id=tenant_id, max_sessions_per_user=None)
+        return SessionCapPolicy(
+            tenant_id=tenant_id,
+            max_sessions_per_user=getattr(row, "max_sessions_per_user", None),
+        )
+
+
+def set_session_cap_policy(
+    tenant_id: str,
+    *,
+    max_sessions_per_user: int | None,
+    updated_by: str | None,
+) -> SessionCapPolicy:
+    """Persist (or clear) the per-tenant concurrent session cap per user.
+
+    ``None`` clears the policy. Raises :class:`ValueError` for non-integer
+    or out-of-range values so the API layer can return 422.
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    norm: int | None
+    if max_sessions_per_user is None:
+        norm = None
+    else:
+        if isinstance(max_sessions_per_user, bool) or not isinstance(
+            max_sessions_per_user, int
+        ):
+            raise ValueError("max_sessions_per_user must be an integer or null")
+        if (
+            max_sessions_per_user < SESSION_CAP_PER_USER_MIN
+            or max_sessions_per_user > SESSION_CAP_PER_USER_MAX
+        ):
+            raise ValueError(
+                f"max_sessions_per_user must be between {SESSION_CAP_PER_USER_MIN} "
+                f"and {SESSION_CAP_PER_USER_MAX}"
+            )
+        norm = max_sessions_per_user
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                max_sessions_per_user=norm,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.max_sessions_per_user = norm
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return SessionCapPolicy(tenant_id=tenant_id, max_sessions_per_user=norm)
