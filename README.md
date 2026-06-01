@@ -2,6 +2,39 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
+## What's new: per-tenant allowed email domains for invites, SCIM, and SSO auto-join
+
+Every enterprise security questionnaire eventually asks: "can your platform refuse to let one of our admins invite a personal gmail address into our regulated workspace." shotclassify now exposes a per-tenant allowed-email-domains policy that gates every membership entry path. A workspace admin sets the list with `PUT /v1/settings/security/invite-domains` (admin role + fresh MFA step-up), and once it is non-empty the store layer refuses to create an invitation, accept an SSO auto-join, or honour a SCIM `Users` POST whose email domain is not on the list. Entries support both the bare domain (`acme.com`) and the leading-dot wildcard (`.acme.com`) which also matches every sub-domain, so a workspace can permit `acme.com` and `.corp.acme.com` without enumerating every team. The check lives in `tenant_settings.email_matches_allowed_domains` and is wired into `memberships_store.create_invitation` (REST invitations), `services/api/app/routes/sso.py` (SSO callback + test issue), and `services/api/app/routes/scim.py` (IdP provisioning) so a future caller cannot bypass the policy by skipping the route. Out-of-policy invitations return HTTP 422 `invite_domain_not_allowed` with the offending email and the allowed list so the dashboard can point the admin at the exact rule that blocked them; SCIM returns `400 invalidValue`; SSO auto-join silently no-ops to avoid breaking sign-in. The policy is strictly tenant-scoped: a lockdown on `acme` never affects an invitation in `globex`, and the test suite asserts this with two parallel admin keys. Empty list = no policy (legacy behaviour); maximum 64 domains per tenant; every change goes through the audit middleware with actor, IP, request id and tenant. Coverage lives in `tests/test_allowed_invite_domains.py` (read default, normalize + dedupe, invalid domain rejected, REST invite blocked + structured payload, sub-domain wildcard accepted, cross-tenant isolation, SCIM provision blocked, direct store-layer enforcement).
+
+Try it (local):
+
+```bash
+# API: http://127.0.0.1:7441
+make api  # in another shell
+
+# Read current policy (empty = no enforcement)
+curl -s -H "X-API-Key: $ADMIN_KEY" \
+  http://127.0.0.1:7441/v1/settings/security/invite-domains
+
+# Lock invitations to the acme.com domain and every acme.com sub-domain
+curl -s -X PUT -H "X-API-Key: $ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"allowed_domains":["acme.com",".corp.acme.com"]}' \
+  http://127.0.0.1:7441/v1/settings/security/invite-domains
+
+# Personal address is refused with a structured error payload
+curl -i -X POST -H "X-API-Key: $ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"email":"someone@gmail.com","role":"viewer"}' \
+  http://127.0.0.1:7441/v1/invitations
+
+# Disable the policy by sending an empty list
+curl -s -X PUT -H "X-API-Key: $ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"allowed_domains":[]}' \
+  http://127.0.0.1:7441/v1/settings/security/invite-domains
+```
+
 ## What's new: emergency freeze (workspace-wide write lockdown)
 
 Every enterprise security questionnaire eventually asks: "if one of our admins is suspected of compromise at 02:00, can your platform stop accepting writes from that workspace before we finish the incident call." shotclassify now exposes a one-switch tenant-wide freeze that does exactly that. A workspace admin engages it with `POST /v1/settings/security/freeze` (admin role + fresh MFA step-up) with a required `reason`. While engaged, a new `FreezeMiddleware` rejects every `POST`, `PUT`, `PATCH` and `DELETE` request scoped to that tenant with HTTP 423 `tenant_frozen` *before* the route handler runs, so a leaked session cookie or stolen API key cannot create, modify or delete anything in the workspace. Reads stay open on purpose so investigators, auditors, exporters and the audit-log UI keep working. A narrow allowlist of mutation paths is exempt from the lockdown so the owner can lift the freeze, satisfy MFA, and sign out without being trapped: `/v1/settings/security/freeze` itself, `/v1/mfa/...`, `/auth/logout`, `/v1/sessions/...`, and the healthchecks. `DELETE /v1/settings/security/freeze` clears the state. Cross-tenant isolation is enforced at the middleware layer: a freeze on workspace `acme` does not affect workspace `globex` even though both run in the same API process, and the test suite asserts this with two parallel admin keys. The engaged reason, timestamp and engaging principal are persisted on `tenant_settings` so the dashboard banner names who is currently holding the lockdown and when, and both engage/lift go through the existing audit middleware with actor, IP, request id and tenant. Manage it interactively at `Settings -> Security -> Emergency freeze`. Coverage lives in `tests/test_tenant_freeze.py` (RBAC on read, reason validation on engage, blocked-write 423 plus cross-tenant isolation, and the exempt-lift recovery path).
