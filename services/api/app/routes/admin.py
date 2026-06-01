@@ -63,6 +63,7 @@ def overview(request: Request) -> dict[str, Any]:
 
     keys = api_keys_store.list_keys(tenant_id=tenant_id, include_revoked=False)
     unowned_keys = api_keys_store.list_unowned(tenant_id=tenant_id)
+    expiring_keys = api_keys_store.list_expiring(tenant_id=tenant_id, within_days=30)
     key_summaries = [
         {
             "id": k.id,
@@ -117,6 +118,7 @@ def overview(request: Request) -> dict[str, Any]:
         "api_keys": {
             "active": len(keys),
             "unowned": len(unowned_keys),
+            "expiring_30d": len(expiring_keys),
             "list": key_summaries,
         },
         "audit": {

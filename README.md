@@ -2,6 +2,22 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
+## What's new: expiring-credentials report for proactive API key rotation
+
+Enterprise security teams want one number on the admin dashboard: how many credentials will silently die in the next 30 days, and which ones. ShotClassify now answers that question as a first-class report. `GET /v1/api-keys/expiring?within_days=30` returns every active (non-revoked) key whose `expires_at` falls inside a rolling window, soonest-first, so the rotation queue is already sorted. Already-expired but not-yet-revoked keys are always included so an overdue rotation cannot be hidden by a short window. Keys with no `expires_at` (never-expire) are excluded so the dashboard only surfaces actionable work. The report is strictly tenant-scoped (a workspace admin cannot enumerate another workspace's lifecycle) and admin-role + admin-scope gated, matching the rest of the keys surface. The admin console at `/admin` renders an amber banner above the API keys section whenever any active key is expiring inside 30 days, linking straight to `/keys` so an operator can rotate before any production traffic 401s. Coverage in `tests/test_api_key_expiring.py` proves soonest-first ordering, the never-expire and revoked exclusions, cross-tenant isolation between two admin keys, and that an already-overdue key still surfaces.
+
+Try it (local):
+
+```bash
+make api          # FastAPI on http://127.0.0.1:7441
+make web          # Next.js admin on http://localhost:3000
+
+curl -s "http://127.0.0.1:7441/v1/api-keys/expiring?within_days=30" \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" | jq
+
+# UI: http://localhost:3000/admin -> amber banner shows expiring count
+```
+
 ## What's new: per-tenant allowed email domains for invites, SCIM, and SSO auto-join
 
 Every enterprise security questionnaire eventually asks: "can your platform refuse to let one of our admins invite a personal gmail address into our regulated workspace." shotclassify now exposes a per-tenant allowed-email-domains policy that gates every membership entry path. A workspace admin sets the list with `PUT /v1/settings/security/invite-domains` (admin role + fresh MFA step-up), and once it is non-empty the store layer refuses to create an invitation, accept an SSO auto-join, or honour a SCIM `Users` POST whose email domain is not on the list. Entries support both the bare domain (`acme.com`) and the leading-dot wildcard (`.acme.com`) which also matches every sub-domain, so a workspace can permit `acme.com` and `.corp.acme.com` without enumerating every team. The check lives in `tenant_settings.email_matches_allowed_domains` and is wired into `memberships_store.create_invitation` (REST invitations), `services/api/app/routes/sso.py` (SSO callback + test issue), and `services/api/app/routes/scim.py` (IdP provisioning) so a future caller cannot bypass the policy by skipping the route. Out-of-policy invitations return HTTP 422 `invite_domain_not_allowed` with the offending email and the allowed list so the dashboard can point the admin at the exact rule that blocked them; SCIM returns `400 invalidValue`; SSO auto-join silently no-ops to avoid breaking sign-in. The policy is strictly tenant-scoped: a lockdown on `acme` never affects an invitation in `globex`, and the test suite asserts this with two parallel admin keys. Empty list = no policy (legacy behaviour); maximum 64 domains per tenant; every change goes through the audit middleware with actor, IP, request id and tenant. Coverage lives in `tests/test_allowed_invite_domains.py` (read default, normalize + dedupe, invalid domain rejected, REST invite blocked + structured payload, sub-domain wildcard accepted, cross-tenant isolation, SCIM provision blocked, direct store-layer enforcement).

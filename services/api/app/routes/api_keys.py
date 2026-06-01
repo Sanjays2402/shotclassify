@@ -521,6 +521,44 @@ def set_key_owner(
     return {"key": record.to_dict()}
 
 
+@router.get("/expiring", dependencies=[require_scope("admin")])
+def list_expiring_keys(
+    request: Request,
+    within_days: int = Query(
+        30,
+        ge=0,
+        le=365,
+        description=(
+            "Window in days. Active keys whose ``expires_at`` is on or "
+            "before ``now + within_days`` are returned, soonest-first. "
+            "Already-expired (but not yet revoked) keys are always "
+            "included so an overdue rotation cannot be hidden by a "
+            "short window."
+        ),
+    ),
+    _: str = require_role("admin"),
+):
+    """List active keys expiring inside a rolling window.
+
+    Drives the admin console "expiring credentials" widget so security
+    teams can plan rotations before a key silently dies in production.
+    Tenant-scoped: a workspace admin can never enumerate another
+    workspace's credential lifecycle, and a cross-tenant admin
+    (``X-Tenant: *``) sees every tenant's expiring keys for the global
+    rotation queue.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    records = api_keys_store.list_expiring(
+        tenant_id=tenant_id, within_days=within_days
+    )
+    return {
+        "tenant_id": tenant_id,
+        "within_days": within_days,
+        "count": len(records),
+        "keys": [r.to_dict() for r in records],
+    }
+
+
 @router.get("/unowned", dependencies=[require_scope("admin")])
 def list_unowned_keys(
     request: Request,

@@ -815,6 +815,43 @@ def set_owner_email(
     return _row_to_record(row)
 
 
+def list_expiring(
+    *,
+    tenant_id: str | None,
+    within_days: int = 30,
+    now: datetime | None = None,
+) -> list[ApiKeyRecord]:
+    """List active (non-revoked) keys whose ``expires_at`` falls inside a window.
+
+    Drives the admin console "expiring credentials" widget that lets
+    security teams plan rotations *before* a key silently dies and
+    pages an on-call engineer at 3am. Keys that have already expired
+    (``expires_at <= now``) are included so a long-overdue rotation is
+    not invisible. Keys without an ``expires_at`` (never-expire) are
+    excluded because they cannot be "expiring soon" by definition.
+
+    Tenant-scoped so one workspace cannot enumerate another workspace's
+    credential lifecycle. Ordering is soonest-first so the UI can render
+    the most urgent rotations at the top without re-sorting.
+    """
+    if within_days < 0:
+        raise ValueError("within_days must be >= 0")
+    cutoff_now = now or _now()
+    cutoff = cutoff_now + timedelta(days=within_days)
+    with get_session() as ses:
+        stmt = (
+            select(ApiKeyRow)
+            .where(ApiKeyRow.revoked_at.is_(None))
+            .where(ApiKeyRow.expires_at.is_not(None))
+            .where(ApiKeyRow.expires_at <= cutoff)
+            .order_by(ApiKeyRow.expires_at.asc())
+        )
+        if tenant_id is not None:
+            stmt = stmt.where(ApiKeyRow.tenant_id == tenant_id)
+        rows = ses.scalars(stmt).all()
+    return [_row_to_record(r) for r in rows]
+
+
 def list_unowned(*, tenant_id: str | None) -> list[ApiKeyRecord]:
     """List active (non-revoked) keys missing an accountable owner.
 
