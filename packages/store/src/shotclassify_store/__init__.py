@@ -34,6 +34,13 @@ from .scim import ScimConfig
 from . import webhooks as webhooks_store
 from . import audit_sinks as audit_sinks_store
 from .audit_sinks import SinkRecord as AuditSinkRecord
+from . import dual_control as dual_control_store
+from .dual_control import (
+    DualControlError,
+    IssuanceRequest as DualControlIssuanceRequest,
+    PROTECTED_SCOPES as DUAL_CONTROL_PROTECTED_SCOPES,
+)
+from .db import ApiKeyIssuanceRequestRow
 from .repository import Repository
 from .saved_views import SavedViewRepository
 from . import sessions as session_store
@@ -390,4 +397,9 @@ __all__ = [
     "get_freeze_state",
     "is_frozen",
     "lift_freeze",
+    "dual_control_store",
+    "DualControlError",
+    "DualControlIssuanceRequest",
+    "DUAL_CONTROL_PROTECTED_SCOPES",
+    "ApiKeyIssuanceRequestRow",
 ]

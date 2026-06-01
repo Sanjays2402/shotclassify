@@ -432,6 +432,15 @@ class TenantSettingsRow(Base):
     allowed_api_key_scopes: Mapped[list[str] | None] = mapped_column(
         JSON, nullable=True
     )
+    # Per-tenant dual-control (two-person rule) for high-privilege API key
+    # issuance. When True, a request that includes the ``admin`` scope is
+    # not minted directly; it lands in ``api_key_issuance_requests`` and a
+    # *different* admin must approve before the key is issued. SoC2 CC6.1
+    # and most bank security questionnaires require this for production
+    # credentials. Disabled by default to preserve existing behaviour.
+    dual_control_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     # Per-tenant webhook auto-disable threshold (migration 0042). NULL
     # means no policy; a positive integer trips the circuit breaker after
     # that many consecutive failed deliveries on a single subscription.
@@ -1065,6 +1074,48 @@ class DataSubjectRequestRow(Base):
     state_history: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
 
 
+class ApiKeyIssuanceRequestRow(Base):
+    """Pending API key issuance request awaiting peer approval.
+
+    Created when a workspace has dual-control enabled and an admin
+    requests a key that falls under the policy (today: any request that
+    includes the ``admin`` scope). The request must be approved by a
+    *different* admin before the key is minted, enforcing SoD
+    (separation of duties) per SOC2 CC6.1 and most bank procurement
+    questionnaires. Self-approval is rejected at the route layer.
+
+    Rows are tenant-scoped via ``tenant_id`` so cross-tenant enumeration
+    is impossible. Pending rows older than ``expires_at`` are treated as
+    expired and ignored by the list endpoint.
+    """
+
+    __tablename__ = "api_key_issuance_requests"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    requested_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    ttl_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    owner_email: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    justification: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    decided_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    minted_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()
@@ -1335,6 +1386,14 @@ def init_db() -> None:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN allowed_api_key_scopes JSON"
                     ))
+                # 0046 dual-control policy for high-privilege API key issuance.
+                if "dual_control_enabled" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN dual_control_enabled BOOLEAN NOT NULL DEFAULT 0"
+                    ))
+            # 0046 pending-issuance queue for dual-control approvals.
+            if not insp.has_table("api_key_issuance_requests"):
+                Base.metadata.tables["api_key_issuance_requests"].create(bind=conn)
             if insp.has_table("webhook_subscriptions"):
                 wcols = {c["name"] for c in insp.get_columns("webhook_subscriptions")}
                 if "consecutive_failure_count" not in wcols:

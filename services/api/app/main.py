@@ -46,6 +46,7 @@ from .routes import settings as settings_routes
 from .routes import sso as sso_routes
 from .routes import mfa as mfa_routes
 from .routes import api_keys as api_keys_routes
+from .routes import key_issuance as key_issuance_routes
 from .routes import memberships as memberships_routes
 from .routes import access_reviews as access_reviews_routes
 from .routes import workspace_data as workspace_data_routes
@@ -172,6 +173,7 @@ def create_app() -> FastAPI:
     app.include_router(sso_routes.router)
     app.include_router(mfa_routes.router)
     app.include_router(api_keys_routes.router)
+    app.include_router(key_issuance_routes.router)
     app.include_router(memberships_routes.router)
     app.include_router(access_reviews_routes.router)
     app.include_router(workspace_data_routes.router)

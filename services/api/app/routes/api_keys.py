@@ -14,8 +14,10 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from shotclassify_store import api_keys_store, get_api_key_ttl_policy, get_api_key_max_active_policy
+from shotclassify_store import api_keys_store, get_api_key_ttl_policy, get_api_key_max_active_policy, dual_control_store
+from shotclassify_store.dual_control import DualControlError
 from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
 from ..middleware.rbac import require_role, require_scope
@@ -71,6 +73,16 @@ class CreateKeyRequest(BaseModel):
             "tz:'IANA/Zone'}. Mon=0..Sun=6, end strictly after start, "
             "no overnight wrap. When set, requests outside every "
             "window are rejected with HTTP 403."
+        ),
+    )
+    justification: str | None = Field(
+        default=None,
+        max_length=2000,
+        description=(
+            "Free-text business justification surfaced to the second "
+            "reviewer when the workspace has dual-control enabled. "
+            "Required (>=20 chars) for keys that include the admin "
+            "scope on a dual-control tenant; ignored otherwise."
         ),
     )
 
@@ -133,9 +145,48 @@ def create_my_key(
     request: Request,
     _: str = require_role("admin"),
 ):
-    """Mint a new key. The plaintext ``token`` field is returned exactly once."""
+    """Mint a new key. The plaintext ``token`` field is returned exactly once.
+
+    When the workspace has dual-control enabled (see
+    ``/v1/settings/security/dual-control``) and the request includes a
+    protected scope, the route does *not* mint a key. It records a
+    pending issuance request in the queue and returns HTTP 202 with the
+    request id. A different admin must then approve via
+    ``/v1/key-issuance-requests/{id}/approve`` to actually mint the key.
+    """
     tenant_id = _effective_tenant(request, payload.tenant_id)
     created_by = getattr(request.state, "principal", None)
+    if (
+        tenant_id
+        and dual_control_store.get_policy(tenant_id)
+        and dual_control_store.scopes_require_dual_control(payload.scopes)
+    ):
+        justification = (payload.justification or "").strip()
+        try:
+            req = dual_control_store.create_request(
+                tenant_id=tenant_id,
+                requested_by=created_by or "unknown",
+                label=payload.label,
+                scopes=list(payload.scopes),
+                ttl_days=payload.ttl_days,
+                owner_email=payload.owner_email,
+                justification=justification,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        request.state.audit_target_id = req.id
+        return JSONResponse(
+            status_code=202,
+            content={
+                "pending_approval": True,
+                "request": req.to_dict(),
+                "message": (
+                    "This workspace requires two-person approval for keys "
+                    "with the admin scope. A second admin must approve in "
+                    "the admin console before the key is minted."
+                ),
+            },
+        )
     try:
         record, token = api_keys_store.create_key(
             label=payload.label,

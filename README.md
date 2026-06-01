@@ -2,6 +2,39 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
+## What's new: two-person rule for high-privilege API keys
+
+SOC2 CC6.1 and most bank security questionnaires require separation of duties on credentials with write or admin authority: no single person should be able to mint a production-grade machine credential without a peer signing off. ShotClassify now ships that as a per-workspace policy. An owner enables it in `/settings/security/dual-control`; from that moment, any `POST /v1/api-keys` request that includes the `admin` scope no longer returns a plaintext token. It returns `HTTP 202` and a pending row in `api_key_issuance_requests` carrying the requester, the requested scopes, an accountable owner email, and a >=20-char business justification surfaced to the second reviewer. The new admin queue at `/settings/security/dual-control` lists every pending and recently decided request; a different admin (self-approval is rejected at the route layer with `409`) approves through `POST /v1/key-issuance-requests/{id}/approve` and the key is minted in the same transaction, with the plaintext token returned exactly once to the approver and `minted_key_id` linked back to the original request id for audit lineage. Pending rows expire after 72 hours so a forgotten ask cannot become a long-lived stale gate. Existing keys, rotation, and non-admin scopes are unaffected; the new column `tenant_settings.dual_control_enabled` is `false` by default so no live workspace changes behaviour without an owner opt-in. Strictly tenant-scoped at the query layer (the list, get, approve, and deny routes all filter by `tenant_id` so cross-tenant enumeration is impossible). Coverage in `tests/test_dual_control_issuance.py` proves the queue path, the self-approval block, that disabling the policy leaves admin minting direct, that non-admin scopes never gate, that short justifications are rejected, and that enabling the policy on workspace A does not affect workspace B.
+
+### Try it
+
+Local dashboard: <http://localhost:3000/settings/security/dual-control>
+
+```bash
+# Turn the policy on (admin + MFA step-up).
+curl -sS -X PUT http://localhost:7441/v1/settings/security/dual-control \
+  -H 'x-api-key: YOUR_ADMIN_KEY' \
+  -H 'content-type: application/json' \
+  -d '{"enabled": true}'
+
+# Request an admin-scoped key. Returns HTTP 202 with a pending request id.
+curl -sS -X POST http://localhost:7441/v1/api-keys \
+  -H 'x-api-key: YOUR_ADMIN_KEY' \
+  -H 'content-type: application/json' \
+  -d '{
+        "label": "prod-admin",
+        "scopes": ["admin"],
+        "owner_email": "oncall@example.com",
+        "justification": "Backfill audit pipeline through Q4 budget cycle."
+      }'
+
+# A different admin approves and the key is minted (plaintext shown once).
+curl -sS -X POST http://localhost:7441/v1/key-issuance-requests/REQ_ID/approve \
+  -H 'x-api-key: PEER_ADMIN_KEY' \
+  -H 'content-type: application/json' \
+  -d '{"note": "ticket SEC-1042"}'
+```
+
 ## What's new: per-API-key time-of-day access windows
 
 Procurement reviews under PCI-DSS 7 and SOX change-management routinely ask whether a long-lived machine credential can be bound to a business-hours or maintenance window without revoking and re-issuing it. ShotClassify now ships that as a first-class control on every `sk_live_*` key. Each key carries an optional `access_windows` list. Each entry is an object `{weekdays:[0..6], start:"HH:MM", end:"HH:MM", tz:"IANA/Zone"}` (Mon=0..Sun=6, end strictly after start, no overnight wrap; split into two windows if you need that). Empty or NULL means "accept at any time" (legacy default, fully backward compatible). When set, the same authentication boundary that already enforces the per-key source-IP allowlist evaluates the wall-clock in the window's own zone and rejects requests that fall outside every window with `HTTP 403 api_key_outside_window`, echoing the configured windows back so an operator can see exactly which schedule blocked them. Evaluating each window in its declared IANA zone is what makes "US business hours" follow daylight savings without operator intervention. Enforcement lives in `services/api/app/middleware/auth.py` alongside the CIDR check so no new route can bypass it. Admin only with MFA step-up on writes; tenant-scoped so a workspace admin cannot probe key ids in another workspace. The new settings page at `/settings/security/api-key-access-windows` lists every active key, summarises its current schedule, and lets admins toggle weekdays, pick start and end with native time inputs, and choose a timezone from a datalist of common zones. Empty / loading / error states are real, not placeholders. Coverage in `tests/test_api_key_access_windows.py` proves an out-of-window request is blocked, clearing the windows restores access, an overnight-wrap window is rejected with 422, and `GET /v1/api-keys/{id}/access-windows` returns 404 (not 403) for unknown ids so cross-tenant id probing is impossible.

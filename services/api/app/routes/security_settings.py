@@ -1295,3 +1295,50 @@ def put_api_key_scopes_policy_route(
         "available_scopes": sorted(VALID_SCOPES),
         "max_entries": ALLOWED_API_KEY_SCOPES_MAX,
     }
+
+
+# ---------------------------------------------------------------- dual control
+
+from shotclassify_store import dual_control_store as _dual_control
+
+
+@router.get("/dual-control", dependencies=[require_role("admin")])
+def get_dual_control_route(request: Request) -> dict:
+    """Return the dual-control (two-person rule) policy for the caller's tenant."""
+    tenant_id = _tenant(request)
+    return {
+        "tenant_id": tenant_id,
+        "enabled": _dual_control.get_policy(tenant_id),
+        "protected_scopes": sorted(_dual_control.PROTECTED_SCOPES),
+        "request_ttl_hours": _dual_control.DEFAULT_TTL_HOURS,
+    }
+
+
+@router.put(
+    "/dual-control",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_dual_control_route(request: Request, payload: dict = Body(...)) -> dict:
+    """Toggle the dual-control policy.
+
+    Body: ``{"enabled": bool}``. When enabled, every new API key request
+    that includes a protected scope (today: ``admin``) lands in the
+    issuance queue and must be approved by a different admin before the
+    plaintext token is minted. Existing keys are unaffected; rotation
+    flows through the same gate.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "Body must be a JSON object.")
+    if "enabled" not in payload or not isinstance(payload["enabled"], bool):
+        raise HTTPException(422, "Field 'enabled' must be a boolean.")
+    tenant_id = _tenant(request)
+    actor = getattr(request.state, "principal", None)
+    new_value = _dual_control.set_policy(
+        tenant_id, enabled=payload["enabled"], updated_by=actor
+    )
+    return {
+        "tenant_id": tenant_id,
+        "enabled": new_value,
+        "protected_scopes": sorted(_dual_control.PROTECTED_SCOPES),
+        "request_ttl_hours": _dual_control.DEFAULT_TTL_HOURS,
+    }
