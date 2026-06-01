@@ -84,7 +84,30 @@ curl -s -X DELETE -H "X-API-Key: $ADMIN_KEY" \
 
 UI: open <http://127.0.0.1:3000/settings/security/freeze>.
 
-## What's new: send a signed test ping to any webhook subscription
+## What's new: per-tenant webhook circuit breaker
+
+A failing receiver should not pull the rest of the integration down with it. The new per-tenant policy `webhook_autodisable_threshold` is an opt-in circuit breaker on outbound webhooks. When set to a positive integer N, the dispatcher tracks consecutive failed deliveries per subscription and pauses the subscription the moment the count reaches N. A successful delivery resets the counter, so only sustained failure trips the breaker. Pausing (rather than revoking) preserves the signing secret, event filters, and delivery history, and a manual resume clears `auto_disabled_at`, `auto_disabled_reason`, and the consecutive-failure counter so the next trip starts from a clean state. The threshold is bounded 2 to 10000, NULL means no policy and existing behaviour, and the breaker only ever acts within a single tenant: workspace B's failing subscription cannot affect workspace A's, and B cannot read or set A's policy. The `GET` and `PUT` routes live at `/v1/settings/security/webhook-autodisable`, require the `admin` role, and the `PUT` requires MFA step-up; every change is captured by the standard audit middleware. Coverage in `tests/test_webhook_autodisable.py` proves the threshold fires after exactly N consecutive failures, a success between failures resets the counter, resume clears the auto-disable metadata, cross-tenant policy reads return the caller's empty policy (not the other tenant's), and out-of-range thresholds return `422`.
+
+Try it (local):
+
+```bash
+# 1. Configure the breaker for this workspace (pause after 5 consecutive failures).
+curl -sS -X PUT http://127.0.0.1:7441/v1/settings/security/webhook-autodisable \
+  -H "X-API-Key: $API_KEY" -H 'content-type: application/json' \
+  -d '{"threshold": 5}'
+
+# 2. Inspect the resolved policy.
+curl -sS http://127.0.0.1:7441/v1/settings/security/webhook-autodisable \
+  -H "X-API-Key: $API_KEY"
+
+# 3. Read a subscription back; the new fields ride alongside success_count.
+curl -sS http://127.0.0.1:7441/v1/webhooks -H "X-API-Key: $API_KEY" \
+  | jq '.webhooks[] | {id, status, consecutive_failure_count, auto_disabled_at, auto_disabled_reason}'
+```
+
+UI: open <http://127.0.0.1:3000/settings/security/webhook-autodisable>.
+
+## Previously: send a signed test ping to any webhook subscription
 
 Enterprise integrators always ask the same question before they wire shotclassify into their production receiver: "can we fire a synthetic event at our endpoint so we can confirm TLS, signature verification, our IP allowlist, and our handler code before any real classification flows." `POST /v1/webhooks/{id}/test` is that endpoint. It signs and delivers a one-shot `webhook.test` payload to the targeted subscription, regardless of the subscription's event filter, so operators do not have to first add a wildcard subscription just to verify the receiver. The ping carries the standard `X-Shotclassify-Signature`, `X-Shotclassify-Delivery`, and `X-Shotclassify-Subscription` headers plus an `X-Shotclassify-Test: true` marker so receivers can route it to a no-op handler in production. Every gate that protects real dispatch is enforced here too: the subscription must belong to the caller's tenant (cross-tenant requests get `404`, not `403`, so the existence of another tenant's id never leaks), the subscription must be active (paused or revoked returns `409`), the per-tenant webhook egress host allowlist still applies (blocked hosts produce a failed delivery row with the reason), and during a secret rotation overlap the request is dual-signed with `X-Shotclassify-Signature-Next` so receivers can roll the new secret in. The route is `admin` role and scope, requires MFA step-up, accepts `?dry_run=true` for a preview, and is recorded by the standard audit middleware against the targeted subscription id. The dispatch attempt is persisted as a normal `webhook_deliveries` row so the test shows up in the delivery feed, the SIEM export, and the audit trail, and it can be replayed through the existing `/v1/webhooks/deliveries/{id}/replay` path. Coverage in `tests/test_webhooks_api.py` exercises a real signed delivery to a local listener (signature verified with the plaintext secret), cross-tenant isolation, the operator-role denial, the dry-run preview, and the paused-subscription `409`.
 

@@ -51,6 +51,10 @@ from shotclassify_store import (
     set_tenant_oidc,
     set_webhook_egress_allowed_hosts,
     WEBHOOK_EGRESS_HOSTS_MAX,
+    get_webhook_autodisable_policy,
+    set_webhook_autodisable_policy,
+    WEBHOOK_AUTODISABLE_THRESHOLD_MIN,
+    WEBHOOK_AUTODISABLE_THRESHOLD_MAX,
     UPLOAD_BYTES_MIN,
     UPLOAD_BYTES_MAX,
     get_upload_size_policy,
@@ -1105,3 +1109,63 @@ def put_invite_domains_route(
         "allowed_domains": normalized,
         "max_entries": ALLOWED_INVITE_DOMAINS_MAX,
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant webhook auto-disable threshold (circuit breaker)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/webhook-autodisable",
+    dependencies=[require_role("admin")],
+)
+def get_webhook_autodisable_route(request: Request) -> dict:
+    """Return the tenant's webhook auto-disable threshold.
+
+    ``threshold = null`` means no policy: the dispatcher will keep
+    retrying a failing subscription forever (legacy behaviour). When
+    set, the dispatcher pauses any subscription whose consecutive
+    failed deliveries reach the threshold.
+    """
+    tenant_id = _tenant(request)
+    return get_webhook_autodisable_policy(tenant_id).to_dict()
+
+
+@router.put(
+    "/webhook-autodisable",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_webhook_autodisable_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Set or clear the tenant's webhook auto-disable threshold.
+
+    Send ``{"threshold": null}`` to disable the breaker entirely.
+    A positive integer enables it: after that many consecutive failed
+    deliveries on the same subscription, the dispatcher pauses the
+    subscription so it stops hammering a downstream receiver that is
+    clearly down. Operators resume manually once the receiver is back.
+    Bounds are enforced server-side; out-of-range values return 422.
+    """
+    tenant_id = _tenant(request)
+    raw = payload.get("threshold", "__missing__")
+    if raw == "__missing__":
+        raise HTTPException(
+            422,
+            "Field 'threshold' is required (integer or null).",
+        )
+    if raw is not None and (isinstance(raw, bool) or not isinstance(raw, int)):
+        raise HTTPException(
+            422,
+            "Field 'threshold' must be an integer or null.",
+        )
+    actor = getattr(request.state, "principal", None)
+    try:
+        policy = set_webhook_autodisable_policy(
+            tenant_id, threshold=raw, updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return policy.to_dict()

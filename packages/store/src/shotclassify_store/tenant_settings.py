@@ -2007,3 +2007,109 @@ def email_matches_allowed_domains(email: str, allowed: list[str]) -> bool:
         elif domain == entry:
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant webhook auto-disable threshold (circuit breaker, migration 0042)
+# ---------------------------------------------------------------------------
+
+# Bounds keep the policy useful without being foot-guns. Below 2 every
+# transient blip pauses the subscription; above ~10_000 the breaker
+# effectively never trips. These match what enterprise integration
+# reviews (SOC 2 CC7.2, AWS Well-Architected REL05) recommend for
+# back-pressure on outbound integrations.
+WEBHOOK_AUTODISABLE_THRESHOLD_MIN: int = 2
+WEBHOOK_AUTODISABLE_THRESHOLD_MAX: int = 10_000
+
+
+@dataclass(frozen=True)
+class WebhookAutoDisablePolicy:
+    """Resolved circuit-breaker policy for outbound webhooks.
+
+    ``threshold = None`` means "no policy" and the dispatcher never
+    auto-pauses a subscription. A positive integer enables the breaker:
+    after that many *consecutive* failed deliveries on a single
+    subscription, the dispatcher pauses the subscription so it stops
+    pounding a downstream receiver that is clearly down. Operators
+    resume manually once the receiver is healthy.
+    """
+
+    tenant_id: str
+    threshold: int | None
+
+    def to_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "threshold": self.threshold,
+            "min_threshold": WEBHOOK_AUTODISABLE_THRESHOLD_MIN,
+            "max_threshold": WEBHOOK_AUTODISABLE_THRESHOLD_MAX,
+        }
+
+
+def get_webhook_autodisable_policy(tenant_id: str | None) -> WebhookAutoDisablePolicy:
+    """Return the per-tenant webhook auto-disable threshold (or None)."""
+    if not tenant_id:
+        return WebhookAutoDisablePolicy(tenant_id="", threshold=None)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return WebhookAutoDisablePolicy(tenant_id=tenant_id, threshold=None)
+        return WebhookAutoDisablePolicy(
+            tenant_id=tenant_id,
+            threshold=getattr(row, "webhook_autodisable_threshold", None),
+        )
+
+
+def set_webhook_autodisable_policy(
+    tenant_id: str,
+    *,
+    threshold: int | None,
+    updated_by: str | None,
+) -> WebhookAutoDisablePolicy:
+    """Persist (or clear) the tenant's webhook auto-disable threshold.
+
+    ``None`` clears the policy and disables the breaker. Raises
+    ``ValueError`` on non-integer or out-of-range input so the API
+    layer can return 422.
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    norm: int | None
+    if threshold is None:
+        norm = None
+    else:
+        if isinstance(threshold, bool) or not isinstance(threshold, int):
+            raise ValueError("threshold must be an integer or null")
+        if (
+            threshold < WEBHOOK_AUTODISABLE_THRESHOLD_MIN
+            or threshold > WEBHOOK_AUTODISABLE_THRESHOLD_MAX
+        ):
+            raise ValueError(
+                "threshold must be between "
+                f"{WEBHOOK_AUTODISABLE_THRESHOLD_MIN} and "
+                f"{WEBHOOK_AUTODISABLE_THRESHOLD_MAX}"
+            )
+        norm = threshold
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                webhook_autodisable_threshold=norm,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.webhook_autodisable_threshold = norm
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return WebhookAutoDisablePolicy(tenant_id=tenant_id, threshold=norm)

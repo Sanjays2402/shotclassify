@@ -406,6 +406,12 @@ class TenantSettingsRow(Base):
     allowed_invite_domains: Mapped[list[str] | None] = mapped_column(
         JSON, nullable=True
     )
+    # Per-tenant webhook auto-disable threshold (migration 0042). NULL
+    # means no policy; a positive integer trips the circuit breaker after
+    # that many consecutive failed deliveries on a single subscription.
+    webhook_autodisable_threshold: Mapped[int | None] = mapped_column(
+        nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -611,6 +617,23 @@ class WebhookSubscriptionRow(Base):
     )
     secret_rotated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # Circuit-breaker bookkeeping (migration 0042). The dispatcher resets
+    # ``consecutive_failure_count`` to 0 on the next successful delivery and
+    # increments it on each failed delivery. When the count reaches the
+    # per-tenant ``webhook_autodisable_threshold`` the subscription is paused
+    # (``active = False``) and the trip is recorded for the admin UI / audit
+    # log. ``auto_disabled_at`` and ``auto_disabled_reason`` are cleared the
+    # next time an operator resumes the subscription so the next trip starts
+    # from a clean state.
+    consecutive_failure_count: Mapped[int] = mapped_column(
+        default=0, nullable=False
+    )
+    auto_disabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    auto_disabled_reason: Mapped[str | None] = mapped_column(
+        String(256), nullable=True
     )
 
 
@@ -1275,6 +1298,25 @@ def init_db() -> None:
                 if "allowed_invite_domains" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN allowed_invite_domains JSON"
+                    ))
+                # 0042 webhook auto-disable threshold (circuit breaker).
+                if "webhook_autodisable_threshold" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN webhook_autodisable_threshold INTEGER"
+                    ))
+            if insp.has_table("webhook_subscriptions"):
+                wcols = {c["name"] for c in insp.get_columns("webhook_subscriptions")}
+                if "consecutive_failure_count" not in wcols:
+                    conn.execute(text(
+                        "ALTER TABLE webhook_subscriptions ADD COLUMN consecutive_failure_count INTEGER NOT NULL DEFAULT 0"
+                    ))
+                if "auto_disabled_at" not in wcols:
+                    conn.execute(text(
+                        "ALTER TABLE webhook_subscriptions ADD COLUMN auto_disabled_at TIMESTAMP"
+                    ))
+                if "auto_disabled_reason" not in wcols:
+                    conn.execute(text(
+                        "ALTER TABLE webhook_subscriptions ADD COLUMN auto_disabled_reason VARCHAR(256)"
                     ))
     except Exception:
         # Best-effort. Real schema management lives in alembic.

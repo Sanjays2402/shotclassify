@@ -72,6 +72,9 @@ class SubscriptionRecord:
     last_delivery_at: datetime | None
     success_count: int
     failure_count: int
+    consecutive_failure_count: int = 0
+    auto_disabled_at: datetime | None = None
+    auto_disabled_reason: str | None = None
     secret_rotation_pending: bool = False
     secret_rotated_at: datetime | None = None
 
@@ -90,6 +93,11 @@ class SubscriptionRecord:
             last_delivery_at=row.last_delivery_at,
             success_count=int(row.success_count or 0),
             failure_count=int(row.failure_count or 0),
+            consecutive_failure_count=int(
+                getattr(row, "consecutive_failure_count", 0) or 0
+            ),
+            auto_disabled_at=getattr(row, "auto_disabled_at", None),
+            auto_disabled_reason=getattr(row, "auto_disabled_reason", None),
             secret_rotation_pending=bool(
                 getattr(row, "secret_hash_next", None)
             ),
@@ -125,6 +133,13 @@ class SubscriptionRecord:
             ),
             "success_count": self.success_count,
             "failure_count": self.failure_count,
+            "consecutive_failure_count": self.consecutive_failure_count,
+            "auto_disabled_at": (
+                self.auto_disabled_at.isoformat()
+                if self.auto_disabled_at
+                else None
+            ),
+            "auto_disabled_reason": self.auto_disabled_reason,
             "secret_rotation_pending": self.secret_rotation_pending,
             "secret_rotated_at": (
                 self.secret_rotated_at.isoformat()
@@ -415,6 +430,15 @@ def set_subscription_active(
                 ),
             )
         row.active = bool(active)
+        if bool(active):
+            # Resuming after a circuit-breaker trip clears the
+            # auto-disable metadata and the consecutive-failure counter
+            # so the next trip starts from a clean state. Lifetime
+            # ``failure_count`` is intentionally preserved as a long-run
+            # health indicator for the admin UI.
+            row.auto_disabled_at = None
+            row.auto_disabled_reason = None
+            row.consecutive_failure_count = 0
         session.commit()
         session.refresh(row)
         return SubscriptionRecord.from_row(row)
@@ -533,8 +557,51 @@ def _record_delivery(
             sub.last_delivery_at = now
             if status == "success":
                 sub.success_count = int(sub.success_count or 0) + 1
+                # Successful delivery resets the circuit-breaker counter so
+                # only *consecutive* failures count toward auto-disable.
+                if int(getattr(sub, "consecutive_failure_count", 0) or 0) != 0:
+                    sub.consecutive_failure_count = 0
             elif status == "failed":
                 sub.failure_count = int(sub.failure_count or 0) + 1
+                sub.consecutive_failure_count = int(
+                    getattr(sub, "consecutive_failure_count", 0) or 0
+                ) + 1
+                # Circuit-breaker: pause the subscription when the tenant's
+                # configured threshold is reached. We pause (not revoke) so
+                # the signing secret and delivery history survive and an
+                # operator can resume once the receiver is healthy again.
+                # Only consider tripping while the subscription is still
+                # active and not already revoked; idempotent if already
+                # paused.
+                from . import tenant_settings as _ts
+                policy = _ts.get_webhook_autodisable_policy(tenant_id)
+                threshold = policy.threshold
+                if (
+                    threshold is not None
+                    and threshold > 0
+                    and bool(sub.active)
+                    and sub.revoked_at is None
+                    and int(sub.consecutive_failure_count) >= int(threshold)
+                ):
+                    reason = (
+                        f"{int(sub.consecutive_failure_count)} consecutive "
+                        f"failed deliveries"
+                    )
+                    if error:
+                        reason = f"{reason} (last error: {error[:120]})"
+                    elif http_status is not None:
+                        reason = f"{reason} (last status: HTTP {http_status})"
+                    sub.active = False
+                    sub.auto_disabled_at = now
+                    sub.auto_disabled_reason = reason[:256]
+                    log.warning(
+                        "webhook_auto_disabled",
+                        subscription_id=sub.id,
+                        tenant_id=sub.tenant_id,
+                        consecutive_failures=int(sub.consecutive_failure_count),
+                        threshold=int(threshold),
+                        reason=sub.auto_disabled_reason,
+                    )
         session.commit()
         return delivery_id
     finally:

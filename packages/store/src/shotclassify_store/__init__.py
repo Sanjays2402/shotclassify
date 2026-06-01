@@ -191,6 +191,11 @@ from .tenant_settings import (
     get_allowed_invite_domains,
     set_allowed_invite_domains,
     email_matches_allowed_domains,
+    WEBHOOK_AUTODISABLE_THRESHOLD_MIN,
+    WEBHOOK_AUTODISABLE_THRESHOLD_MAX,
+    WebhookAutoDisablePolicy,
+    get_webhook_autodisable_policy,
+    set_webhook_autodisable_policy,
 )
 
 __all__ = [
@@ -236,6 +241,11 @@ __all__ = [
     "get_allowed_invite_domains",
     "set_allowed_invite_domains",
     "email_matches_allowed_domains",
+    "WEBHOOK_AUTODISABLE_THRESHOLD_MIN",
+    "WEBHOOK_AUTODISABLE_THRESHOLD_MAX",
+    "WebhookAutoDisablePolicy",
+    "get_webhook_autodisable_policy",
+    "set_webhook_autodisable_policy",
     "AuthLockoutPolicy",
     "AUTH_LOCKOUT_THRESHOLD_MIN",
     "AUTH_LOCKOUT_THRESHOLD_MAX",
