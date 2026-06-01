@@ -2,6 +2,32 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: streaming audit export for SIEM ingestion
+
+The audit log already records every authenticated mutation with a tamper-evident hash chain, but procurement teams routinely ask for one more thing before signing: "give us a file we can drop into Splunk." ShotClassify now ships a tenant-scoped streaming export at `POST /v1/audit/export` that emits the workspace audit trail as CSV or JSON Lines with a signed manifest. The endpoint supports `since` / `until` / `principal` / `path_prefix` / `status_min` / `status_max` filters, pages through the database in 500-row chunks so multi-million-row exports do not exhaust the worker, and caps a single call at 250k rows so a runaway filter cannot. The response carries an `X-Audit-Manifest` header with the current chain tip plus filters applied, and the body itself ends with a manifest record (a `_manifest` JSONL row or a `# {...}` CSV trailer) containing exported_by, exported_at, request id, row count, truncation flag, and the verified hash-chain tip, so consumers can prove the file is intact without a second round trip. The export is a `POST`, which means the export action itself is captured by `AuditLogMiddleware` and lands in the workspace's own chain. Admin only, `read:audit` scope required, tenant-scoped at the query layer (an acme admin cannot export globex's rows). The audit page (`/settings/audit`) now has a real Export dialog with format toggle and date pickers; downloads happen via the browser and the manifest tip is surfaced in the success toast so a workspace owner can pin it off-platform. Coverage in `tests/test_audit_export.py` proves CSV and JSONL formats round-trip correctly, the manifest is present, viewers are denied, inverted date windows are rejected, and tenant A's export never contains tenant B's rows.
+
+### Try it
+
+Local API at `http://127.0.0.1:7441`, web dashboard at `http://localhost:3000`.
+
+```bash
+# JSONL export (default)
+curl -s -X POST http://127.0.0.1:7441/v1/audit/export \
+  -H 'content-type: application/json' \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -d '{"format":"jsonl","since":"2025-01-01T00:00:00Z"}' \
+  -o audit.jsonl
+
+# CSV export with a path filter
+curl -s -X POST http://127.0.0.1:7441/v1/audit/export \
+  -H 'content-type: application/json' \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -d '{"format":"csv","path_prefix":"/v1/history"}' \
+  -o audit.csv
+
+# UI: http://localhost:3000/settings/audit -> Export
+```
+
 ## What's new: per-API-key source-IP allowlist
 
 Security questionnaires from regulated buyers almost always include the question "can you pin a long-lived programmatic credential to a specific egress range so a leaked token alone is not enough to drive the API." ShotClassify now ships that as a first-class control. Every `sk_live_*` key has an `allowed_cidrs` field, an optional list of bare IPs or CIDR ranges (IPv4 and IPv6). An empty list, the default for legacy keys, preserves the existing "accept from any IP" behaviour; once one or more entries are set, the same authentication boundary that validates the key compares the resolved client IP (honouring `X-Forwarded-For` and `X-Real-IP`) and rejects with `403 ip_not_allowed` when the request does not match. Enforcement is wired into both the shared `authenticate()` helper used by `/v1/usage`, `/v1/shots`, and `/v1/webhooks`, and the standalone `/v1/classify` handler, so there is no `/v1/*` route that an out-of-range request can slip through. Workspace admins manage the list per key under `/keys/<id>` with add, remove, save, and clear actions; the panel surfaces the current restriction at a glance and shows a friendly empty state when the key is unrestricted. Inputs are normalized (lower-cased, prefix-validated, deduplicated, capped at 64 entries) and bad entries are rejected with a 422 that names the offending value. Coverage in `web/lib/key-cidr-allowlist.test.mts` proves IPv4 and IPv6 normalization, dedupe, prefix matching, that a verified key from an out-of-range IP is denied at the choke point, and that an invalid input leaves the persisted allowlist untouched.

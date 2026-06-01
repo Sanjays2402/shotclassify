@@ -299,6 +299,101 @@ class AuditRepository:
         with get_session() as s:
             return int(s.execute(select(func.count(AuditLogRow.id))).scalar() or 0)
 
+    def iter_for_export(
+        self,
+        *,
+        tenant_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        principal: str | None = None,
+        path_prefix: str | None = None,
+        status_min: int | None = None,
+        status_max: int | None = None,
+        max_rows: int = 1_000_000,
+        chunk_size: int = 500,
+    ):
+        """Yield audit rows in chronological order for streaming export.
+
+        Tenant-scoped when ``tenant_id`` is provided. ``since`` and ``until``
+        bound the inclusive/exclusive window on ``created_at``. The iterator
+        is memory-bounded: it pulls ``chunk_size`` rows at a time and stops
+        once ``max_rows`` have been yielded (defensive cap so a single export
+        cannot blow up the worker).
+        """
+        from sqlalchemy import or_
+
+        if since is not None and since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
+        if until is not None and until.tzinfo is None:
+            until = until.replace(tzinfo=UTC)
+
+        emitted = 0
+        # Use keyset pagination on (created_at, id) so we stream without
+        # holding a long-lived cursor open across the whole export.
+        cursor_ts: datetime | None = since
+        cursor_id: str | None = None
+        while emitted < max_rows:
+            with get_session() as s:
+                stmt = select(AuditLogRow).order_by(
+                    AuditLogRow.created_at.asc(), AuditLogRow.id.asc()
+                )
+                if tenant_id is not None:
+                    stmt = stmt.where(
+                        or_(
+                            AuditLogRow.tenant_id == tenant_id,
+                            AuditLogRow.tenant_id.is_(None),
+                        )
+                    )
+                if cursor_ts is not None and cursor_id is not None:
+                    stmt = stmt.where(
+                        or_(
+                            AuditLogRow.created_at > cursor_ts,
+                            (AuditLogRow.created_at == cursor_ts)
+                            & (AuditLogRow.id > cursor_id),
+                        )
+                    )
+                elif cursor_ts is not None:
+                    stmt = stmt.where(AuditLogRow.created_at >= cursor_ts)
+                if until is not None:
+                    stmt = stmt.where(AuditLogRow.created_at < until)
+                if principal:
+                    stmt = stmt.where(AuditLogRow.principal == principal)
+                if path_prefix:
+                    stmt = stmt.where(AuditLogRow.path.like(f"{path_prefix}%"))
+                if status_min is not None:
+                    stmt = stmt.where(AuditLogRow.status_code >= status_min)
+                if status_max is not None:
+                    stmt = stmt.where(AuditLogRow.status_code <= status_max)
+                stmt = stmt.limit(chunk_size)
+                rows = list(s.execute(stmt).scalars())
+            if not rows:
+                return
+            for r in rows:
+                if emitted >= max_rows:
+                    return
+                yield {
+                    "id": r.id,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "principal": r.principal,
+                    "method": r.method,
+                    "path": r.path,
+                    "status_code": r.status_code,
+                    "request_id": r.request_id,
+                    "client_ip": r.client_ip,
+                    "user_agent": r.user_agent,
+                    "elapsed_ms": r.elapsed_ms,
+                    "target_id": r.target_id,
+                    "tenant_id": r.tenant_id,
+                    "extra": r.extra or {},
+                    "prev_hash": r.prev_hash,
+                    "entry_hash": r.entry_hash,
+                }
+                emitted += 1
+                cursor_ts = r.created_at
+                cursor_id = r.id
+            if len(rows) < chunk_size:
+                return
+
     def list_for_principal(
         self, principal: str, limit: int = 10000, tenant_id: str | None = None
     ) -> list[dict[str, Any]]:

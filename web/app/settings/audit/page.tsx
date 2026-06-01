@@ -96,6 +96,71 @@ export default function AuditLogPage() {
     reason: string | null;
     tip_hash: string | null;
   };
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState<"jsonl" | "csv">("jsonl");
+  const [exportSince, setExportSince] = useState("");
+  const [exportUntil, setExportUntil] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportErr, setExportErr] = useState<string | null>(null);
+  const [exportInfo, setExportInfo] = useState<string | null>(null);
+
+  const runExport = useCallback(async () => {
+    setExporting(true);
+    setExportErr(null);
+    setExportInfo(null);
+    try {
+      const body: Record<string, unknown> = { format: exportFormat };
+      if (exportSince) body.since = new Date(exportSince).toISOString();
+      if (exportUntil) body.until = new Date(exportUntil).toISOString();
+      if (principal.trim()) body.principal = principal.trim();
+      if (pathPrefix.trim()) body.path_prefix = pathPrefix.trim();
+      const r = await fetch("/api/audit/export", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const cd = r.headers.get("content-disposition") || "";
+      const m = /filename="([^"]+)"/.exec(cd);
+      const fname =
+        m?.[1] ||
+        `shotclassify-audit-${new Date().toISOString().slice(0, 10)}.${exportFormat}`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      const manifest = r.headers.get("x-audit-manifest");
+      if (manifest) {
+        try {
+          const parsed = JSON.parse(manifest) as {
+            tip_hash: string | null;
+            chain_ok: boolean;
+          };
+          const tip = parsed.tip_hash ? `${parsed.tip_hash.slice(0, 12)}\u2026` : "(empty)";
+          setExportInfo(
+            `Saved ${fname}. Chain ${parsed.chain_ok ? "verified" : "broken"}. Tip ${tip}.`,
+          );
+        } catch {
+          setExportInfo(`Saved ${fname}.`);
+        }
+      } else {
+        setExportInfo(`Saved ${fname}.`);
+      }
+    } catch (e) {
+      setExportErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(false);
+    }
+  }, [exportFormat, exportSince, exportUntil, principal, pathPrefix]);
+
   const [verify, setVerify] = useState<VerifyResult | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyErr, setVerifyErr] = useState<string | null>(null);
@@ -138,13 +203,14 @@ export default function AuditLogPage() {
             <ArrowsClockwise size={16} weight="duotone" aria-hidden />
             Refresh
           </button>
-          <a
-            href={`/api/audit?${qs}&format=csv`}
+          <button
+            type="button"
+            onClick={() => setExportOpen(true)}
             className="inline-flex items-center gap-1.5 rounded-md border border-slate-900 bg-slate-900 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
           >
             <Download size={16} weight="duotone" aria-hidden />
-            Export CSV
-          </a>
+            Export
+          </button>
         </div>
       </header>
 
@@ -404,8 +470,109 @@ export default function AuditLogPage() {
       )}
 
       <p className="mt-4 text-xs text-slate-500">
-        Showing the most recent {events.length} of up to {limit} events. Filters apply server side. CSV exports respect the current filters.
+        Showing the most recent {events.length} of up to {limit} events. Filters apply server side. Exports respect the same filters and ship with a signed manifest.
       </p>
+
+      {exportOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Export audit log"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 px-4 py-6 sm:items-center"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setExportOpen(false);
+          }}
+        >
+          <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-base font-semibold text-slate-900">Export audit log</h2>
+              <button
+                type="button"
+                onClick={() => setExportOpen(false)}
+                className="rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-slate-100"
+                aria-label="Close export dialog"
+              >
+                Close
+              </button>
+            </div>
+            <p className="mb-4 text-xs text-slate-600">
+              Streams the workspace audit trail for SIEM ingestion. The download is signed with the current hash chain tip so consumers can verify the file independently.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Format</span>
+                <div className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-0.5">
+                  {(["jsonl", "csv"] as const).map((f) => (
+                    <button
+                      key={f}
+                      type="button"
+                      onClick={() => setExportFormat(f)}
+                      className={`rounded px-3 py-1 text-xs font-medium ${
+                        exportFormat === f
+                          ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      {f === "jsonl" ? "JSON Lines" : "CSV"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label>
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Since</span>
+                  <input
+                    type="datetime-local"
+                    value={exportSince}
+                    onChange={(e) => setExportSince(e.target.value)}
+                    className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  />
+                </label>
+                <label>
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Until</span>
+                  <input
+                    type="datetime-local"
+                    value={exportUntil}
+                    onChange={(e) => setExportUntil(e.target.value)}
+                    className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  />
+                </label>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Current principal and path filters are also applied. Leave date fields empty for the full history.
+              </p>
+              {exportErr && (
+                <p role="alert" className="rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-700 ring-1 ring-rose-200 break-all">
+                  {exportErr}
+                </p>
+              )}
+              {exportInfo && (
+                <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-800 ring-1 ring-emerald-200 break-all">
+                  {exportInfo}
+                </p>
+              )}
+            </div>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setExportOpen(false)}
+                className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={runExport}
+                disabled={exporting}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-900 bg-slate-900 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Download size={16} weight="duotone" aria-hidden />
+                {exporting ? "Preparing\u2026" : "Download"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
