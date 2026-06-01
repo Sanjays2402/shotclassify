@@ -14,16 +14,24 @@ import {
   Clock,
   XCircle,
   Seat,
+  Prohibit,
+  ArrowCounterClockwise,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
 type Role = "admin" | "operator" | "viewer";
+
+type MemberStatus = "active" | "suspended";
 
 type Member = {
   id: string;
   principal: string;
   role: Role;
   created_at: string;
+  status?: MemberStatus;
+  suspended_at?: string | null;
+  suspended_by?: string | null;
+  suspension_reason?: string | null;
 };
 
 type Invitation = {
@@ -183,6 +191,50 @@ export default function MembersSettingsPage() {
       setFlash({ kind: "err", msg: body?.detail || `${res.status} ${res.statusText}` });
       return;
     }
+    members.mutate();
+  };
+
+  const suspendMember = async (principal: string) => {
+    const reason = window.prompt(
+      `Suspend ${principal}? They will be blocked from this workspace immediately. ` +
+        `The membership row is kept so existing audit log entries still resolve to a name.\n\n` +
+        `Reason (optional, shown in audit log):`,
+      "",
+    );
+    if (reason === null) return;
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (otp) headers["x-mfa-otp"] = otp;
+    const res = await fetch(
+      `/api/workspace/members/${encodeURIComponent(principal)}/suspension`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ reason: reason.trim() || null }),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setFlash({ kind: "err", msg: body?.detail || `${res.status} ${res.statusText}` });
+      return;
+    }
+    setFlash({ kind: "ok", msg: `Suspended ${principal}.` });
+    members.mutate();
+  };
+
+  const reinstateMember = async (principal: string) => {
+    if (!confirm(`Reinstate ${principal} and restore their workspace access?`)) return;
+    const headers: Record<string, string> = {};
+    if (otp) headers["x-mfa-otp"] = otp;
+    const res = await fetch(
+      `/api/workspace/members/${encodeURIComponent(principal)}/suspension`,
+      { method: "DELETE", headers },
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setFlash({ kind: "err", msg: body?.detail || `${res.status} ${res.statusText}` });
+      return;
+    }
+    setFlash({ kind: "ok", msg: `Reinstated ${principal}.` });
     members.mutate();
   };
 
@@ -379,11 +431,31 @@ export default function MembersSettingsPage() {
                     className="flex flex-col gap-2 px-5 py-3 sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-slate-900">
-                        {m.principal}
+                      <div className="flex items-center gap-2">
+                        <div className="truncate text-sm font-medium text-slate-900">
+                          {m.principal}
+                        </div>
+                        {m.status === "suspended" && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200"
+                            title={
+                              m.suspension_reason
+                                ? `Suspended: ${m.suspension_reason}`
+                                : "Suspended"
+                            }
+                          >
+                            <Prohibit size={12} weight="duotone" />
+                            suspended
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs text-slate-500">
                         added {fmtDate(m.created_at)}
+                        {m.status === "suspended" && m.suspended_at
+                          ? ` \u00b7 suspended ${fmtDate(m.suspended_at)}${
+                              m.suspended_by ? ` by ${m.suspended_by}` : ""
+                            }`
+                          : ""}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -392,7 +464,8 @@ export default function MembersSettingsPage() {
                         value={m.role}
                         onChange={(e) => changeRole(m.principal, e.target.value as Role)}
                         aria-label={`Change role for ${m.principal}`}
-                        className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                        disabled={m.status === "suspended"}
+                        className="rounded-md border border-slate-300 px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                       >
                         {ROLES.map((r) => (
                           <option key={r} value={r}>
@@ -400,6 +473,25 @@ export default function MembersSettingsPage() {
                           </option>
                         ))}
                       </select>
+                      {m.status === "suspended" ? (
+                        <button
+                          onClick={() => reinstateMember(m.principal)}
+                          aria-label={`Reinstate ${m.principal}`}
+                          title="Reinstate access"
+                          className="inline-flex items-center justify-center rounded-md p-1.5 text-slate-500 hover:bg-emerald-50 hover:text-emerald-700"
+                        >
+                          <ArrowCounterClockwise size={16} weight="duotone" />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => suspendMember(m.principal)}
+                          aria-label={`Suspend ${m.principal}`}
+                          title="Suspend access (keep audit trail)"
+                          className="inline-flex items-center justify-center rounded-md p-1.5 text-slate-500 hover:bg-amber-50 hover:text-amber-700"
+                        >
+                          <Prohibit size={16} weight="duotone" />
+                        </button>
+                      )}
                       <button
                         onClick={() => removeMember(m.principal)}
                         aria-label={`Remove ${m.principal}`}

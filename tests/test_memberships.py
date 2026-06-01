@@ -173,3 +173,97 @@ def test_invitation_accept_is_single_use(monkeypatch, tmp_path):
 
     # Replay must fail.
     assert memberships_store.accept_invitation(token, principal="mallory@x.com") is None
+
+
+def test_suspend_and_reinstate_member_via_api(monkeypatch, tmp_path):
+    """Admin can suspend, the row stays for audit, reinstate restores access."""
+    client = _client(monkeypatch, tmp_path)
+    from shotclassify_store import memberships_store
+
+    memberships_store.upsert_member(
+        tenant_id="acme", principal="bob@example.com", role="operator"
+    )
+    # Suspend.
+    r = client.post(
+        "/v1/members/bob@example.com/suspension",
+        headers=ACME,
+        json={"reason": "Left the company"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()["member"]
+    assert body["status"] == "suspended"
+    assert body["suspended_at"] is not None
+    assert body["suspension_reason"] == "Left the company"
+
+    # Row still listed (so audit log entries still resolve to a name).
+    r = client.get("/v1/members", headers=ACME)
+    principals = {m["principal"]: m for m in r.json()["members"]}
+    assert "bob@example.com" in principals
+    assert principals["bob@example.com"]["status"] == "suspended"
+
+    # Role check fails closed: store says no active role for suspended user.
+    assert memberships_store.role_for_member("acme", "bob@example.com") is None
+    assert memberships_store.membership_status("acme", "bob@example.com") == "suspended"
+
+    # Reinstate.
+    r = client.delete("/v1/members/bob@example.com/suspension", headers=ACME)
+    assert r.status_code == 200, r.text
+    assert r.json()["member"]["status"] == "active"
+    assert memberships_store.role_for_member("acme", "bob@example.com") == "operator"
+
+
+def test_suspend_member_is_tenant_scoped(monkeypatch, tmp_path):
+    """Globex admin cannot suspend an Acme member: 404 (no enumeration)."""
+    client = _client(monkeypatch, tmp_path)
+    from shotclassify_store import memberships_store
+
+    memberships_store.upsert_member(
+        tenant_id="acme", principal="bob@example.com", role="operator"
+    )
+    r = client.post(
+        "/v1/members/bob@example.com/suspension",
+        headers=GLOBEX,
+        json={"reason": "x"},
+    )
+    assert r.status_code == 404, r.text
+    # Acme row untouched.
+    assert memberships_store.membership_status("acme", "bob@example.com") == "active"
+
+
+def test_cannot_suspend_last_active_admin(monkeypatch, tmp_path):
+    """If suspending would leave zero active admins, refuse with 409."""
+    client = _client(monkeypatch, tmp_path)
+    from shotclassify_store import memberships_store
+
+    memberships_store.upsert_member(
+        tenant_id="acme", principal="only-admin@example.com", role="admin"
+    )
+    # The API-caller identity is the API key, not 'only-admin', so the
+    # self-suspension check does not fire. The last-admin check must.
+    r = client.post(
+        "/v1/members/only-admin@example.com/suspension",
+        headers=ACME,
+        json={"reason": "test"},
+    )
+    assert r.status_code == 409, r.text
+    assert memberships_store.membership_status("acme", "only-admin@example.com") == "active"
+
+
+def test_suspend_dry_run_does_not_mutate(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    from shotclassify_store import memberships_store
+
+    memberships_store.upsert_member(
+        tenant_id="acme", principal="bob@example.com", role="operator"
+    )
+    r = client.post(
+        "/v1/members/bob@example.com/suspension?dry_run=true",
+        headers=ACME,
+        json={"reason": "rehearsal"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body.get("dry_run") is True
+    assert body["would_suspend"]["principal"] == "bob@example.com"
+    # No mutation happened.
+    assert memberships_store.membership_status("acme", "bob@example.com") == "active"

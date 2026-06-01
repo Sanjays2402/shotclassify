@@ -393,6 +393,22 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
                         )
                 request.state.principal = info.principal
                 request.state.session_id = info.id
+                if info.tenant_id:
+                    status = memberships_store.membership_status(
+                        info.tenant_id, info.principal
+                    )
+                    if status == "suspended":
+                        return JSONResponse(
+                            {
+                                "error": "membership_suspended",
+                                "detail": (
+                                    "This account has been suspended in this "
+                                    "workspace. Contact a workspace admin to "
+                                    "reinstate access."
+                                ),
+                            },
+                            status_code=403,
+                        )
                 member_role = memberships_store.role_for_member(
                     info.tenant_id, info.principal
                 )

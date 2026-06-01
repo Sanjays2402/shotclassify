@@ -70,6 +70,13 @@ class MembershipRecord:
     invited_by: str | None
     created_at: datetime
     updated_at: datetime
+    suspended_at: datetime | None = None
+    suspended_by: str | None = None
+    suspension_reason: str | None = None
+
+    @property
+    def status(self) -> str:
+        return "suspended" if self.suspended_at is not None else "active"
 
     def to_dict(self) -> dict:
         return {
@@ -80,6 +87,10 @@ class MembershipRecord:
             "invited_by": self.invited_by,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            "status": self.status,
+            "suspended_at": self.suspended_at.isoformat() if self.suspended_at else None,
+            "suspended_by": self.suspended_by,
+            "suspension_reason": self.suspension_reason,
         }
 
 
@@ -135,6 +146,9 @@ def _to_membership(row: MembershipRow) -> MembershipRecord:
         invited_by=row.invited_by,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        suspended_at=getattr(row, "suspended_at", None),
+        suspended_by=getattr(row, "suspended_by", None),
+        suspension_reason=getattr(row, "suspension_reason", None),
     )
 
 
@@ -156,11 +170,12 @@ def _to_invitation(row: InvitationRow) -> InvitationRecord:
 
 
 def role_for_member(tenant_id: str | None, principal: str | None) -> str | None:
-    """Return the role for ``(tenant_id, principal)`` or ``None`` if no row.
+    """Return the active role for ``(tenant_id, principal)`` or ``None``.
 
-    Used by the auth middleware to override the env-var role map. Returns
-    ``None`` when either argument is missing or no membership exists so
-    the caller can fall back to legacy behaviour.
+    Suspended memberships return ``None`` so role-based checks fail
+    closed. Callers that need to distinguish "no row" from "suspended"
+    (the auth middleware does, to surface a clear error) should use
+    :func:`membership_status` instead.
     """
     if not tenant_id or not principal:
         return None
@@ -170,7 +185,115 @@ def role_for_member(tenant_id: str | None, principal: str | None) -> str | None:
             .where(MembershipRow.tenant_id == tenant_id)
             .where(MembershipRow.principal == principal)
         ).scalar_one_or_none()
-        return row.role if row else None
+        if row is None:
+            return None
+        if getattr(row, "suspended_at", None) is not None:
+            return None
+        return row.role
+
+
+def membership_status(tenant_id: str | None, principal: str | None) -> str:
+    """Return ``"active"``, ``"suspended"``, or ``"none"``.
+
+    The auth middleware uses this to fail an entire tenant-scoped
+    request with 403 ``membership_suspended`` when the row exists but
+    the principal has been offboarded. ``"none"`` preserves the legacy
+    fallback path (env-var role map / first-touch behaviour) so adding
+    suspension does not change behaviour for tenants that never used
+    the feature.
+    """
+    if not tenant_id or not principal:
+        return "none"
+    with get_session() as session:
+        row = session.execute(
+            select(MembershipRow)
+            .where(MembershipRow.tenant_id == tenant_id)
+            .where(MembershipRow.principal == principal)
+        ).scalar_one_or_none()
+        if row is None:
+            return "none"
+        return "suspended" if getattr(row, "suspended_at", None) is not None else "active"
+
+
+def suspend_member(
+    tenant_id: str,
+    principal: str,
+    *,
+    suspended_by: str | None,
+    reason: str | None = None,
+) -> MembershipRecord | None:
+    """Mark a membership suspended. Returns the updated record or None.
+
+    Idempotent: suspending an already-suspended member keeps the original
+    ``suspended_at`` and ``suspended_by`` so the audit trail of who
+    first offboarded the user is preserved. The caller is responsible
+    for ensuring at least one admin remains active (use
+    :func:`count_active_admins`).
+    """
+    if not tenant_id or not principal:
+        return None
+    if reason is not None:
+        reason = reason.strip() or None
+        if reason and len(reason) > 512:
+            raise ValueError("suspension reason must be 512 characters or fewer.")
+    now = datetime.now(UTC)
+    with get_session() as session:
+        row = session.execute(
+            select(MembershipRow)
+            .where(MembershipRow.tenant_id == tenant_id)
+            .where(MembershipRow.principal == principal)
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        if getattr(row, "suspended_at", None) is None:
+            row.suspended_at = now
+            row.suspended_by = suspended_by
+            row.suspension_reason = reason
+            row.updated_at = now
+            session.commit()
+            session.refresh(row)
+        return _to_membership(row)
+
+
+def reinstate_member(tenant_id: str, principal: str) -> MembershipRecord | None:
+    """Clear a suspension. Returns the refreshed record or None."""
+    if not tenant_id or not principal:
+        return None
+    now = datetime.now(UTC)
+    with get_session() as session:
+        row = session.execute(
+            select(MembershipRow)
+            .where(MembershipRow.tenant_id == tenant_id)
+            .where(MembershipRow.principal == principal)
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        row.suspended_at = None
+        row.suspended_by = None
+        row.suspension_reason = None
+        row.updated_at = now
+        session.commit()
+        session.refresh(row)
+        return _to_membership(row)
+
+
+def count_active_admins(
+    tenant_id: str, *, exclude_principal: str | None = None
+) -> int:
+    """Count admins that are NOT suspended. Use this before suspending or
+    demoting the last admin so the workspace cannot lock itself out."""
+    if not tenant_id:
+        return 0
+    with get_session() as session:
+        q = (
+            select(MembershipRow)
+            .where(MembershipRow.tenant_id == tenant_id)
+            .where(MembershipRow.role == "admin")
+            .where(MembershipRow.suspended_at.is_(None))
+        )
+        if exclude_principal:
+            q = q.where(MembershipRow.principal != exclude_principal)
+        return len(session.execute(q).scalars().all())
 
 
 def list_members(tenant_id: str) -> list[MembershipRecord]:
@@ -263,22 +386,13 @@ def remove_member(tenant_id: str, principal: str) -> bool:
 
 
 def count_admins(tenant_id: str, *, exclude_principal: str | None = None) -> int:
-    """How many admin members the tenant has, optionally excluding one.
+    """How many ACTIVE admin members the tenant has, optionally excluding one.
 
     Used to prevent the last admin from demoting or removing themselves
-    and locking the workspace out of role management.
+    and locking the workspace out of role management. Suspended
+    memberships are excluded because they cannot administer anything.
     """
-    if not tenant_id:
-        return 0
-    with get_session() as session:
-        q = (
-            select(MembershipRow)
-            .where(MembershipRow.tenant_id == tenant_id)
-            .where(MembershipRow.role == "admin")
-        )
-        if exclude_principal:
-            q = q.where(MembershipRow.principal != exclude_principal)
-        return len(session.execute(q).scalars().all())
+    return count_active_admins(tenant_id, exclude_principal=exclude_principal)
 
 
 # ---------------------------------------------------------------- invitations

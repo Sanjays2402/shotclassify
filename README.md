@@ -1,5 +1,37 @@
 # shotclassify
 
+Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
+
+## What's new: suspend members without losing audit history
+
+Offboard a teammate from a workspace immediately while keeping their membership row so existing audit log entries still resolve to a recognized name. Suspended principals are blocked at the auth middleware with `403 membership_suspended` for every tenant-scoped request. Reinstating clears the suspension.
+
+Try it (local):
+
+```bash
+# API: http://127.0.0.1:7441   UI: http://localhost:3000/settings/members
+
+# Suspend a member (admin role + MFA step-up required)
+curl -X POST http://127.0.0.1:7441/v1/members/bob@example.com/suspension \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -H "x-tenant: acme" \
+  -H "x-mfa-otp: 123456" \
+  -H "content-type: application/json" \
+  -d '{"reason": "Left the company"}'
+
+# Preview without mutating
+curl -X POST 'http://127.0.0.1:7441/v1/members/bob@example.com/suspension?dry_run=true' \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" -H "x-tenant: acme" -H "x-mfa-otp: 123456" \
+  -H "content-type: application/json" -d '{"reason": "rehearsal"}'
+
+# Reinstate
+curl -X DELETE http://127.0.0.1:7441/v1/members/bob@example.com/suspension \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" -H "x-tenant: acme" -H "x-mfa-otp: 123456"
+```
+
+Guards: tenant-scoped (cross-tenant attempts get `404`), refuses to suspend the last active admin (`409`), refuses self-suspension (`409`), and respects `dry_run=true`.
+
+
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
 ## What's new: per-seat usage breakdown for billing-by-seat

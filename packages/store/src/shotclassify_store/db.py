@@ -491,6 +491,15 @@ class MembershipRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+    # Offboarding without deleting the row: a non-null ``suspended_at``
+    # tells the auth middleware to actively deny every tenant-scoped
+    # request from this principal with 403 ``membership_suspended``.
+    # See ``memberships_store.membership_status`` for the contract.
+    suspended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    suspended_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    suspension_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
 
 class InvitationRow(Base):

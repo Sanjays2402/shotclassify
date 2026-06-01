@@ -306,3 +306,102 @@ def set_seats(payload: SeatLimitUpdate, request: Request) -> dict:
         "seats_in_use": in_use,
         "seats_available": None if new_limit is None else max(0, new_limit - in_use["total"]),
     }
+
+
+# ---------------------------------------------------------------- suspension
+
+
+class SuspendMemberRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=512)
+
+
+@router.post(
+    "/members/{principal}/suspension",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def suspend_member_route(
+    principal: str,
+    payload: SuspendMemberRequest,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+):
+    """Offboard a member without deleting the row.
+
+    The membership row is preserved so the audit log still resolves
+    historical actions to a recognized name; the auth middleware
+    blocks any new tenant-scoped request from the principal with 403
+    ``membership_suspended``. Last-active-admin protection prevents
+    locking the workspace out of administration.
+    """
+    tenant_id = _require_tenant(request)
+    caller = getattr(request.state, "principal", None)
+    if principal == caller:
+        raise HTTPException(
+            status_code=409,
+            detail="Suspending yourself would lock you out of this workspace.",
+        )
+    existing_role = memberships_store.role_for_member(tenant_id, principal)
+    current_status = memberships_store.membership_status(tenant_id, principal)
+    if current_status == "none":
+        raise HTTPException(404, "Member not found.")
+    if existing_role == "admin" and current_status == "active":
+        remaining = memberships_store.count_active_admins(
+            tenant_id, exclude_principal=principal
+        )
+        if remaining == 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot suspend the last active admin of this workspace.",
+            )
+    if dry_run:
+        request.state.audit_target_id = principal
+        return mark_dry_run(
+            request,
+            would_suspend={
+                "principal": principal,
+                "role": existing_role,
+                "reason": payload.reason,
+            },
+        )
+    record = memberships_store.suspend_member(
+        tenant_id,
+        principal,
+        suspended_by=caller,
+        reason=payload.reason,
+    )
+    if record is None:
+        raise HTTPException(404, "Member not found.")
+    request.state.audit_target_id = record.id
+    return {"member": record.to_dict()}
+
+
+@router.delete(
+    "/members/{principal}/suspension",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def reinstate_member_route(
+    principal: str, request: Request, dry_run: bool = dry_run_query()
+):
+    """Reinstate a previously-suspended member.
+
+    Idempotent: calling this on an already-active member is a no-op
+    that returns the current record.
+    """
+    tenant_id = _require_tenant(request)
+    current_status = memberships_store.membership_status(tenant_id, principal)
+    if current_status == "none":
+        raise HTTPException(404, "Member not found.")
+    if dry_run:
+        request.state.audit_target_id = principal
+        return mark_dry_run(
+            request,
+            would_reinstate={
+                "principal": principal,
+                "was_suspended": current_status == "suspended",
+            },
+        )
+    record = memberships_store.reinstate_member(tenant_id, principal)
+    if record is None:
+        raise HTTPException(404, "Member not found.")
+    request.state.audit_target_id = record.id
+    return {"member": record.to_dict()}
