@@ -2,6 +2,40 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: mandatory accountable owner on every API key
+
+Procurement reviewers consistently ask the same question about machine credentials: who owns this key, and who do we call when it leaks. ShotClassify now answers that question as a first-class field. Every key minted through `POST /v1/api-keys` requires an `owner_email` (a syntactically valid mailbox, lower-cased domain on write so `Alice@ACME.com` and `alice@acme.com` cannot end up as two different owners). The owner is carried forward across `POST /{key_id}/rotate` so a rotation never silently orphans a credential, and admins can reassign it any time via `PATCH /{key_id}/owner` (MFA step-up required). Rows that existed before the migration land in `GET /v1/api-keys/unowned`, a tenant-scoped feed the admin console renders as an amber banner with the count of active credentials missing an owner, so a workspace owner can drive a quarterly access review from a single screen instead of joining the audit log by hand. Tenant isolation is proven by `tests/test_api_key_owner_email.py::test_tenant_isolation_for_owner_patch_and_unowned_list` (probing another workspace's key id returns 404, never 200 or 403). Field is also surfaced in the `to_dict()` payload everywhere keys are listed, so SCIM exports and the SIEM audit feed pick it up automatically.
+
+### Try it
+
+Local API at `http://127.0.0.1:7441`, web dashboard at `http://localhost:3000`.
+
+```bash
+# Mint a new API key with an accountable owner
+curl -s -X POST http://127.0.0.1:7441/v1/api-keys \
+  -H 'content-type: application/json' \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -H 'x-mfa-otp: 123456' \
+  -d '{
+        "label": "prod-ingest",
+        "scopes": ["write:classifications"],
+        "owner_email": "platform-oncall@acme.com"
+      }'
+
+# List keys that still need an owner assigned
+curl -s http://127.0.0.1:7441/v1/api-keys/unowned \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY"
+
+# Reassign a key's owner
+curl -s -X PATCH http://127.0.0.1:7441/v1/api-keys/$KEY_ID/owner \
+  -H 'content-type: application/json' \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -H 'x-mfa-otp: 123456' \
+  -d '{"owner_email": "data-platform@acme.com"}'
+
+# UI: http://localhost:3000/admin -> banner shows unowned-key count and links to /keys
+```
+
 ## What's new: per-workspace customer-managed encryption key reference
 
 Large enterprise buyers (financial services, healthcare, government) routinely require the vendor to encrypt their data at rest with a key the customer controls in their own KMS so they can revoke access by rotating the key. ShotClassify now records that declaration as a first-class per-workspace setting: provider (AWS KMS, GCP KMS, Azure Key Vault, HashiCorp Vault), fully qualified key URI, and an enforcement mode (`disabled`, `advisory`, `required`). The URI shape is sanity-checked against the provider (`arn:aws:kms:...` for `aws-kms`, `projects/...` for `gcp-kms`, and so on) so a pasted-from-the-wrong-tab value is refused at write time instead of bricking the storage adapter at decrypt time. Mode `required` is the production stance: when set, the operator-side CMEK adapter refuses to write a new object whenever your KMS is unreachable, instead of silently falling back to a deployment-managed key. The control surface lives at `/v1/settings/security/cmek` (admin role and a fresh MFA step-up on `PUT`), the change lands in the workspace's tamper-evident audit log with the actor, IP, request id, and user agent, and the declaration is strictly tenant-scoped (one workspace's CMEK reference is never visible to or shared with another, proven by `tests/test_tenant_cmek_reference.py::test_cmek_is_strictly_tenant_scoped`). Manage it interactively at `Settings -> Security -> Customer-managed encryption key` in the web console.

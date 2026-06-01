@@ -164,6 +164,7 @@ class ApiKeyRecord:
     allowed_cidrs: list[str]
     monthly_quota: int | None
     monthly_usage: int = 0
+    owner_email: str | None = None
 
     @property
     def is_active(self) -> bool:
@@ -197,6 +198,7 @@ class ApiKeyRecord:
             "allowed_cidrs": list(self.allowed_cidrs),
             "monthly_quota": self.monthly_quota,
             "monthly_usage": self.monthly_usage,
+            "owner_email": self.owner_email,
         }
 
 
@@ -239,7 +241,39 @@ def _row_to_record(row: ApiKeyRow, *, monthly_usage: int = 0) -> ApiKeyRecord:
         allowed_cidrs=list(row.allowed_cidrs or []),
         monthly_quota=row.monthly_quota,
         monthly_usage=monthly_usage,
+        owner_email=row.owner_email,
     )
+
+
+_EMAIL_MAX_LEN = 254
+
+
+def normalize_owner_email(value: str | None, *, required: bool = True) -> str | None:
+    """Validate and canonicalise an API-key owner email.
+
+    Procurement-grade: a key without a named human owner is a finding.
+    We accept any syntactically plausible mailbox (RFC 5321 is permissive;
+    we keep this lightweight on purpose so internal mailing-list owners
+    like ``platform-oncall@acme.com`` are accepted) and lowercase the
+    domain so two keys cannot end up owned by ``Alice@ACME.com`` and
+    ``alice@acme.com``. Raises :class:`ValueError` when ``required`` and
+    the value is missing or unparseable so the route returns 422.
+    """
+    if value is None or not str(value).strip():
+        if required:
+            raise ValueError("owner_email is required")
+        return None
+    s = str(value).strip()
+    if len(s) > _EMAIL_MAX_LEN:
+        raise ValueError(f"owner_email exceeds {_EMAIL_MAX_LEN} characters")
+    if s.count("@") != 1:
+        raise ValueError("owner_email must contain exactly one '@'")
+    local, _, domain = s.partition("@")
+    if not local or not domain or "." not in domain:
+        raise ValueError("owner_email is not a valid mailbox")
+    if any(ch.isspace() for ch in s):
+        raise ValueError("owner_email may not contain whitespace")
+    return f"{local}@{domain.lower()}"
 
 
 def create_key(
@@ -251,6 +285,7 @@ def create_key(
     ttl_days: int | None = None,
     allowed_cidrs: Iterable[str] | None = None,
     monthly_quota: int | None = None,
+    owner_email: str | None = None,
 ) -> tuple[ApiKeyRecord, str]:
     """Mint a new key. Returns ``(record, plaintext_token)``.
 
@@ -312,6 +347,12 @@ def create_key(
             raise ValueError(
                 f"monthly_quota must be between 1 and {_MAX_MONTHLY_QUOTA}"
             )
+    # Owner email: required for net-new keys minted via the public route.
+    # Internal callers (tests, retention seeders) can pass ``required=False``
+    # by sending ``owner_email=None`` and we will store NULL so they show
+    # up in the unowned bucket for an admin to assign. The route layer is
+    # the choke point that enforces "new keys must have an owner."
+    normalized_owner = normalize_owner_email(owner_email, required=False)
     token = _new_token()
     cidrs = normalize_cidrs(allowed_cidrs)
     row = ApiKeyRow(
@@ -324,6 +365,7 @@ def create_key(
         expires_at=(_now() + timedelta(days=ttl_days)) if ttl_days else None,
         allowed_cidrs=cidrs or None,
         monthly_quota=monthly_quota,
+        owner_email=normalized_owner,
     )
     with get_session() as ses:
         ses.add(row)
@@ -536,6 +578,7 @@ def rotate(
             rpm_override=row.rpm_override,
             allowed_cidrs=list(row.allowed_cidrs) if row.allowed_cidrs else None,
             monthly_quota=row.monthly_quota,
+            owner_email=row.owner_email,
         )
         ses.add(new_row)
         # Shorten (never extend) the old key's TTL. SQLite strips tzinfo on
@@ -743,3 +786,51 @@ def try_consume_monthly_quota(
             remaining=quota,
             reset_seconds=reset,
         )
+
+
+def set_owner_email(
+    key_id: str,
+    *,
+    tenant_id: str | None,
+    owner_email: str | None,
+) -> ApiKeyRecord | None:
+    """Set or clear the accountable-owner email for a key.
+
+    ``owner_email=None`` clears the value back to NULL so the key shows
+    up in the unowned bucket again. Returns ``None`` when the key is
+    missing or belongs to another tenant so a tenant-scoped admin can't
+    probe ids across workspaces. Raises :class:`ValueError` when the
+    email is not a syntactically valid mailbox.
+    """
+    normalized = normalize_owner_email(owner_email, required=False)
+    with get_session() as ses:
+        row = ses.scalar(select(ApiKeyRow).where(ApiKeyRow.id == key_id))
+        if row is None:
+            return None
+        if tenant_id is not None and row.tenant_id != tenant_id:
+            return None
+        row.owner_email = normalized
+        ses.commit()
+        ses.refresh(row)
+    return _row_to_record(row)
+
+
+def list_unowned(*, tenant_id: str | None) -> list[ApiKeyRecord]:
+    """List active (non-revoked) keys missing an accountable owner.
+
+    Used by the admin console to drive an access-review workflow: every
+    active key must have a named human owner; rows created before the
+    ``owner_email`` migration land here for assignment. Tenant-scoped so
+    one workspace cannot enumerate another workspace's grandfathered keys.
+    """
+    with get_session() as ses:
+        stmt = (
+            select(ApiKeyRow)
+            .where(ApiKeyRow.revoked_at.is_(None))
+            .where(ApiKeyRow.owner_email.is_(None))
+            .order_by(ApiKeyRow.created_at.desc())
+        )
+        if tenant_id is not None:
+            stmt = stmt.where(ApiKeyRow.tenant_id == tenant_id)
+        rows = ses.scalars(stmt).all()
+    return [_row_to_record(r) for r in rows]

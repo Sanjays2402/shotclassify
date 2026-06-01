@@ -81,6 +81,12 @@ class ApiKeyRow(Base):
     # by at least one range. Enforced in the auth middleware so adding
     # a new route cannot accidentally bypass it.
     allowed_cidrs: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Mandatory accountable owner email for new keys. NULL is allowed for
+    # rows created before migration 0036 so this is a safe additive change
+    # for live deployments; the routes refuse to mint a fresh key without
+    # one, and the admin console surfaces NULL rows via
+    # ``GET /v1/api-keys/unowned`` for assignment during access review.
+    owner_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
     # Optional per-key monthly call quota. NULL means unlimited (the legacy
     # default). When set, the rate limit middleware atomically increments a
     # row in ``api_key_monthly_usage`` keyed on (key_id, YYYY-MM in UTC) and

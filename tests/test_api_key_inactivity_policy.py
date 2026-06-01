@@ -65,7 +65,7 @@ def _mint_key(client: TestClient, *, tenant: str, label: str) -> str:
     r = client.post(
         "/v1/api-keys",
         headers=_admin({"content-type": "application/json", "x-tenant": tenant}),
-        json={"label": label, "scopes": ["write:classifications"]},
+        json={"label": label, "scopes": ["write:classifications"], "owner_email": "ci-bot@example.com"},
     )
     assert r.status_code in (200, 201), r.text
     body = r.json()

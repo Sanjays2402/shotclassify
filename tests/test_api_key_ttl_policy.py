@@ -84,7 +84,7 @@ def test_create_rejects_ttl_longer_than_policy(monkeypatch, tmp_path):
     r = c.post(
         "/v1/api-keys",
         headers=_admin({"content-type": "application/json"}),
-        json={"label": "long", "scopes": ["read:classifications"], "ttl_days": 90},
+        json={"label": "long", "scopes": ["read:classifications"], "ttl_days": 90, "owner_email": "ci-bot@example.com"},
     )
     assert r.status_code == 422, r.text
     assert "30" in r.text
@@ -93,7 +93,7 @@ def test_create_rejects_ttl_longer_than_policy(monkeypatch, tmp_path):
     r = c.post(
         "/v1/api-keys",
         headers=_admin({"content-type": "application/json"}),
-        json={"label": "ok", "scopes": ["read:classifications"], "ttl_days": 14},
+        json={"label": "ok", "scopes": ["read:classifications"], "ttl_days": 14, "owner_email": "ci-bot@example.com"},
     )
     assert r.status_code == 201, r.text
     body = r.json()
@@ -119,7 +119,7 @@ def test_create_without_ttl_defaults_to_policy_cap(monkeypatch, tmp_path):
     r = c.post(
         "/v1/api-keys",
         headers=_admin({"content-type": "application/json"}),
-        json={"label": "default", "scopes": ["read:classifications"]},
+        json={"label": "default", "scopes": ["read:classifications"], "owner_email": "ci-bot@example.com"},
     )
     assert r.status_code == 201, r.text
     body = r.json()
@@ -144,7 +144,7 @@ def test_rotation_clamps_successor_to_policy(monkeypatch, tmp_path):
     r = c.post(
         "/v1/api-keys",
         headers=_admin({"content-type": "application/json"}),
-        json={"label": "rot", "scopes": ["read:classifications"], "ttl_days": 60},
+        json={"label": "rot", "scopes": ["read:classifications"], "ttl_days": 60, "owner_email": "ci-bot@example.com"},
     )
     assert r.status_code == 201, r.text
     key_id = r.json()["id"]

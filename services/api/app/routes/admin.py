@@ -61,6 +61,7 @@ def overview(request: Request) -> dict[str, Any]:
     active_sessions = [s for s in sessions if s.revoked_at is None]
 
     keys = api_keys_store.list_keys(tenant_id=tenant_id, include_revoked=False)
+    unowned_keys = api_keys_store.list_unowned(tenant_id=tenant_id)
     key_summaries = [
         {
             "id": k.id,
@@ -114,6 +115,7 @@ def overview(request: Request) -> dict[str, Any]:
         },
         "api_keys": {
             "active": len(keys),
+            "unowned": len(unowned_keys),
             "list": key_summaries,
         },
         "audit": {

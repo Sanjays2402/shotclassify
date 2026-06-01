@@ -40,6 +40,7 @@ type Overview = {
   sessions: { active: number; total: number };
   api_keys: {
     active: number;
+    unowned?: number;
     list: Array<{
       id: string;
       name: string;
@@ -366,6 +367,29 @@ export default function AdminConsolePage() {
         </Section>
 
         <Section title="API keys">
+          {typeof data.api_keys.unowned === "number" && data.api_keys.unowned > 0 ? (
+            <div
+              role="alert"
+              className="mx-4 mt-4 mb-2 flex items-start gap-2 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200"
+            >
+              <ShieldWarning weight="duotone" className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="flex-1">
+                <span className="font-medium">
+                  {data.api_keys.unowned} active{" "}
+                  {data.api_keys.unowned === 1 ? "key has" : "keys have"}{" "}
+                  no accountable owner.
+                </span>{" "}
+                Assign an owner email so quarterly access reviews can complete.{" "}
+                <Link
+                  href="/keys"
+                  className="underline underline-offset-2 font-medium"
+                >
+                  Review in API keys
+                </Link>
+                .
+              </div>
+            </div>
+          ) : null}
           {data.api_keys.list.length === 0 ? (
             <div className="p-4 text-neutral-500 dark:text-neutral-400">
               No active keys. Create one from{" "}

@@ -71,7 +71,7 @@ def test_introspect_reports_credential_tenant_and_scopes(monkeypatch, tmp_path):
     minted = c.post(
         "/v1/api-keys",
         headers={"X-API-Key": "admin-key"},
-        json={"label": "introspect-test", "scopes": ["read:classifications"]},
+        json={"label": "introspect-test", "scopes": ["read:classifications"], "owner_email": "ci-bot@example.com"},
     )
     assert minted.status_code == 201, minted.text
     token = minted.json()["token"]
@@ -101,7 +101,7 @@ def test_introspect_does_not_leak_other_tenants(monkeypatch, tmp_path):
     minted = c.post(
         "/v1/api-keys",
         headers={"X-API-Key": "admin-key"},
-        json={"label": "k", "scopes": ["read:classifications"]},
+        json={"label": "k", "scopes": ["read:classifications"], "owner_email": "ci-bot@example.com"},
     )
     token = minted.json()["token"]
     # The cross-tenant header is admin-only; for a scoped key it is

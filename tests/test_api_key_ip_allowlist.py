@@ -44,6 +44,7 @@ def _client(monkeypatch, tmp_path: Path) -> TestClient:
 def _mint(client: TestClient, **body) -> dict:
     body.setdefault("label", "ci")
     body.setdefault("scopes", ["read:classifications"])
+    body.setdefault("owner_email", "ci-bot@example.com")
     r = client.post("/v1/api-keys", headers={"X-API-Key": "admin-key"}, json=body)
     assert r.status_code == 201, r.text
     return r.json()
@@ -150,8 +151,7 @@ def test_create_rejects_garbage_cidr(monkeypatch, tmp_path):
         json={
             "label": "bad",
             "scopes": ["read:classifications"],
-            "allowed_cidrs": ["999.0.0.1"],
-        },
+            "allowed_cidrs": ["999.0.0.1"], "owner_email": "ci-bot@example.com"},
     )
     assert r.status_code == 422, r.text
 

@@ -51,6 +51,17 @@ class CreateKeyRequest(BaseModel):
             "reaches this many calls in the current UTC month."
         ),
     )
+    owner_email: str = Field(
+        min_length=3,
+        max_length=254,
+        description=(
+            "Accountable owner mailbox for this credential. Required so "
+            "every active API key has a named human (or distribution "
+            "list) the security team can contact when the key leaks, "
+            "and so quarterly access reviews can be driven from a "
+            "single field instead of a join against the audit log."
+        ),
+    )
 
 
 def _effective_tenant(request: Request, requested: str | None) -> str | None:
@@ -123,6 +134,7 @@ def create_my_key(
             ttl_days=payload.ttl_days,
             allowed_cidrs=payload.allowed_cidrs,
             monthly_quota=payload.monthly_quota,
+            owner_email=payload.owner_email,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -442,4 +454,90 @@ def get_key_monthly_usage(
         "monthly_quota": record.monthly_quota,
         "monthly_usage": usage,
         "remaining": remaining,
+    }
+
+
+class OwnerEmailRequest(BaseModel):
+    owner_email: str | None = Field(
+        default=None,
+        max_length=254,
+        description=(
+            "Accountable owner mailbox for this credential. Pass null to "
+            "clear the owner (which sends the key back to the unowned "
+            "bucket and into the next access review). The store rejects "
+            "anything that does not parse as a single mailbox."
+        ),
+    )
+
+
+@router.patch(
+    "/{key_id}/owner",
+    dependencies=[require_mfa_step_up(), require_scope("admin")],
+)
+def set_key_owner(
+    key_id: str,
+    payload: OwnerEmailRequest,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+    _: str = require_role("admin"),
+):
+    """Set or clear the accountable owner mailbox for an API key.
+
+    Returns 404 for unknown ids or keys belonging to another tenant so
+    admins cannot probe ids across workspaces. Returns 422 when the
+    submitted email is not a syntactically valid mailbox.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if dry_run:
+        try:
+            preview = api_keys_store.normalize_owner_email(
+                payload.owner_email, required=False
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        keys = api_keys_store.list_keys(tenant_id=tenant_id, include_revoked=True)
+        record = next((k for k in keys if k.id == key_id), None)
+        if record is None:
+            return mark_dry_run(request, would_set=None)
+        request.state.audit_target_id = record.id
+        return mark_dry_run(
+            request,
+            would_set={
+                "id": record.id,
+                "label": record.label,
+                "current_owner_email": record.owner_email,
+                "new_owner_email": preview,
+            },
+        )
+    try:
+        record = api_keys_store.set_owner_email(
+            key_id, tenant_id=tenant_id, owner_email=payload.owner_email
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if record is None:
+        raise HTTPException(404, "API key not found.")
+    request.state.audit_target_id = record.id
+    return {"key": record.to_dict()}
+
+
+@router.get("/unowned", dependencies=[require_scope("admin")])
+def list_unowned_keys(
+    request: Request,
+    _: str = require_role("admin"),
+):
+    """List active keys missing an accountable owner.
+
+    Drives the admin console "unowned credentials" widget that surfaces
+    keys created before the ``owner_email`` migration plus any newer
+    keys whose owner was explicitly cleared. Tenant-scoped so one
+    workspace can never enumerate another workspace's grandfathered
+    keys.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    records = api_keys_store.list_unowned(tenant_id=tenant_id)
+    return {
+        "tenant_id": tenant_id,
+        "count": len(records),
+        "keys": [r.to_dict() for r in records],
     }

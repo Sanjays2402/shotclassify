@@ -42,6 +42,7 @@ def _client(monkeypatch, tmp_path: Path):
 def _mint(client: TestClient, **body) -> dict:
     body.setdefault("label", "ci")
     body.setdefault("scopes", ["write:classifications"])
+    body.setdefault("owner_email", "ci-bot@example.com")
     r = client.post("/v1/api-keys", headers={"X-API-Key": "admin-key"}, json=body)
     assert r.status_code == 201, r.text
     return r.json()
@@ -220,7 +221,7 @@ def test_non_admin_scope_cannot_manage_api_keys(monkeypatch, tmp_path):
     r = c.post(
         "/v1/api-keys",
         headers={"X-API-Key": token},
-        json={"label": "nope", "scopes": ["read:classifications"]},
+        json={"label": "nope", "scopes": ["read:classifications"], "owner_email": "ci-bot@example.com"},
     )
     assert r.status_code == 403
 

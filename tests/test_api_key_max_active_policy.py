@@ -73,7 +73,7 @@ def _mint(client: TestClient, *, tenant: str, label: str):
     return client.post(
         "/v1/api-keys",
         headers=_admin({"content-type": "application/json", "x-tenant": tenant}),
-        json={"label": label, "scopes": ["write:classifications"]},
+        json={"label": label, "scopes": ["write:classifications"], "owner_email": "ci-bot@example.com"},
     )
 
 
