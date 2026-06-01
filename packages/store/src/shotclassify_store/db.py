@@ -926,6 +926,59 @@ class AccessReviewItemRow(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class DataSubjectRequestRow(Base):
+    """GDPR / CCPA data-subject request (DSAR) ticket.
+
+    Intake can be public (an EU/CA data subject who is not a workspace
+    member uses the published form) or internal (an admin files on their
+    behalf). Every row is bound to the target workspace via ``tenant_id``
+    so cross-tenant enumeration is impossible at the query layer.
+
+    ``subject_identifier`` is the value used to locate matching rows in
+    other tables (today: the ``principal`` column on classifications,
+    audit log, and api keys). It is the email or login the data subject
+    provided, normalized lowercase.
+
+    The lifecycle is intentionally narrow:
+
+        received -> verified -> fulfilled -> closed
+                              -> rejected -> closed
+
+    Each transition appends to ``state_history`` (JSON list of
+    ``{at, actor, from, to, note}`` dicts) so the full chain of custody
+    survives even if the audit log is exported separately. ``request_type``
+    is one of ``access`` (Article 15), ``erasure`` (Article 17), or
+    ``rectification`` (Article 16). Statutory clocks (30 days for GDPR
+    Article 12 §3) are derived from ``received_at`` so callers do not
+    have to record them twice.
+    """
+
+    __tablename__ = "data_subject_requests"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    request_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    subject_identifier: Mapped[str] = mapped_column(String(256), index=True, nullable=False)
+    subject_email: Mapped[str] = mapped_column(String(256), nullable=False)
+    subject_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_via: Mapped[str] = mapped_column(String(16), nullable=False, default="public")
+    submitted_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="received", index=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    assigned_to: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fulfillment_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    state_history: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()

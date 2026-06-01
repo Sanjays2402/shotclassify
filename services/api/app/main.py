@@ -54,6 +54,7 @@ from .routes import scim as scim_routes
 from .routes import scim_admin as scim_admin_routes
 from .routes import subprocessors as subprocessors_routes
 from .routes import incidents as incidents_routes
+from .routes import dsar as dsar_routes
 from .routes import legal as legal_routes
 from .routes import support_access as support_access_routes
 from .routes import well_known as well_known_routes
@@ -173,6 +174,7 @@ def create_app() -> FastAPI:
     app.include_router(scim_admin_routes.router)
     app.include_router(subprocessors_routes.router)
     app.include_router(incidents_routes.router)
+    app.include_router(dsar_routes.router)
     app.include_router(legal_routes.router)
     app.include_router(support_access_routes.router)
     app.include_router(support_access_routes.admin_router)

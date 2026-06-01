@@ -94,6 +94,7 @@ PUBLIC_PATHS = {
     "/v1/trust/subprocessors",
     "/v1/trust/incidents",
     "/v1/trust/legal",
+    "/v1/trust/dsar",
     "/.well-known/security.txt",
     "/security.txt",
 }

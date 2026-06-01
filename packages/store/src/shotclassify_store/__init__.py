@@ -66,6 +66,17 @@ from .incidents import (
     Subscription as IncidentSubscription,
 )
 from .db import IncidentSubscriptionRow
+from . import dsar as dsar_store
+from .dsar import (
+    DsarNotFound,
+    DsarStateError,
+    DsarValidationError,
+    FootprintMatch as DsarFootprintMatch,
+    STATUTORY_DEADLINE_DAYS as DSAR_STATUTORY_DEADLINE_DAYS,
+    VALID_REQUEST_TYPES as DSAR_REQUEST_TYPES,
+    VALID_STATUSES as DSAR_STATUSES,
+)
+from .db import DataSubjectRequestRow
 from . import support_access as support_access_store
 from .support_access import (
     GrantValidationError as SupportAccessValidationError,
@@ -302,4 +313,13 @@ __all__ = [
     "LegalEnforcementPolicy",
     "LegalAgreementAcceptanceRow",
     "LegalEnforcementRow",
+    "dsar_store",
+    "DsarNotFound",
+    "DsarStateError",
+    "DsarValidationError",
+    "DsarFootprintMatch",
+    "DSAR_STATUTORY_DEADLINE_DAYS",
+    "DSAR_REQUEST_TYPES",
+    "DSAR_STATUSES",
+    "DataSubjectRequestRow",
 ]

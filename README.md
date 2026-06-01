@@ -2,7 +2,39 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
-## What's new: pause and resume webhook subscriptions
+## What's new: data subject access requests (DSAR) for GDPR and CCPA
+
+When an EU or California data subject emails a buyer's privacy desk asking "what data does your shot-classifier vendor hold on me, and please delete it," the buyer needs a documented, auditable place to forward that request. shotclassify now ships one. A public `POST /v1/trust/dsar` lets the data subject (or their authorized agent) file a request without an account by naming the target `tenant_id`, picking `access`, `erasure`, or `rectification`, and supplying their email. The endpoint is exempt from auth, the per-tenant IP allowlist, and origin gating, the same way `/v1/trust/incidents` and `/v1/trust/subprocessors` already are, so a stranger on any network can submit. Submitters see only their ticket id, the receipt timestamp, and the statutory deadline (30 days, GDPR Article 12 §3); the full record is visible only to admins of the named tenant so prior requests cannot be enumerated. Admins of the workspace get `GET /v1/dsar` with status filters and per-status counts plus an `overdue` counter, `GET /v1/dsar/{id}` for the full record (state history, IP at intake, fulfillment summary), `PATCH /v1/dsar/{id}` to transition along `received -> verified -> fulfilled -> closed` (with `rejected` as a terminal branch), `GET /v1/dsar/{id}/footprint` to preview how many classifications and audit rows match the subject inside this tenant, and `POST /v1/dsar/{id}/fulfill` to either generate the Article 15 access export or perform the Article 17 erasure. Erasure hard-deletes matching classifications and intentionally retains audit-log rows under Article 17(3)(b) for legal-claims and our own SOC2 CC7.2 obligations; the fulfillment summary records both numbers. Every admin mutation requires the `admin` role and MFA step-up, flows through `AuditLogMiddleware` so the actor, IP, request id, and timestamp land in the tamper-evident audit chain, and supports `?dry_run=true` for preview. The state machine refuses out-of-order transitions (received -> closed returns 409). Cross-tenant isolation is enforced at the query layer: tenant B asking to read, mutate, or fulfill tenant A's ticket gets 404, not 403, so the existence of the id never leaks. Coverage in `tests/test_dsar.py` exercises public intake, cross-tenant 404 on read/patch/fulfill, the state machine guard, the access-fulfillment lifecycle, and input validation (5 tests).
+
+Try it (local):
+
+```bash
+# API: http://127.0.0.1:7441
+make api  # in another shell
+
+# Public intake (no auth) -- a data subject files a request
+curl -sS -X POST http://127.0.0.1:7441/v1/trust/dsar \
+  -H "content-type: application/json" \
+  -d '{"tenant_id":"acme","request_type":"access","subject_email":"jane@example.com","description":"Article 15 access request"}'
+
+# Admin: list open tickets with per-status counts and overdue counter
+curl -sS http://127.0.0.1:7441/v1/dsar \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY"
+
+# Admin: preview the subject's footprint before fulfillment
+curl -sS "http://127.0.0.1:7441/v1/dsar/$RID/footprint" \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY"
+
+# Admin: verify identity, then fulfill (access -> export, erasure -> delete)
+curl -sS -X PATCH "http://127.0.0.1:7441/v1/dsar/$RID" \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"status":"verified","note":"ID confirmed via signed PDF"}'
+curl -sS -X POST "http://127.0.0.1:7441/v1/dsar/$RID/fulfill?dry_run=true" \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY"
+```
+
+## Previously: pause and resume webhook subscriptions
 
 Webhook subscriptions now have a third lifecycle state between `active` and the terminal `revoked`: `paused`. Operators hit `POST /v1/webhooks/{id}/pause` during a downstream incident to stop deliveries without throwing away the signing secret, event filters, or delivery history; `POST /v1/webhooks/{id}/resume` brings the subscription back online. The dispatcher and the replay path both skip paused subscriptions, so a paused webhook receives nothing even if events keep flowing for other subscribers in the tenant. Revoked subscriptions stay terminal: resume on a revoked id returns `410`, by design, so an operator who really did mean to delete can never get it back by accident. Both routes require the `admin` role and scope, MFA step-up, and accept `?dry_run=true` so a preview shows the `from_status` -> `to_status` transition without mutating anything. Every transition is written through the normal audit middleware with the actor, request id, and target subscription id. Tenant isolation is enforced at the query layer: tenant B asking to pause tenant A's subscription gets `404`, not `403`, so the existence of the id never leaks. Coverage in `tests/test_webhook_pause_resume.py` exercises the round trip, double-pause and double-resume `409`s, the revoked-is-terminal `410`, the dry-run preview, cross-tenant isolation, and the operator-role denial.
 

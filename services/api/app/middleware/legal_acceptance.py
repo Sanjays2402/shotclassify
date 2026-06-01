@@ -36,6 +36,7 @@ EXEMPT_PREFIXES = (
     "/auth/",
     "/v1/trust/legal",  # accept + enforcement endpoints themselves
     "/v1/trust/subprocessors",  # sub-processor acks are policy-adjacent
+    "/v1/trust/dsar",  # public data-subject request intake
     "/.well-known/",
     "/docs",
     "/redoc",
