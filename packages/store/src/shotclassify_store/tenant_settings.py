@@ -2266,3 +2266,108 @@ def set_webhook_autodisable_policy(
             row.updated_by = updated_by
         s.commit()
     return WebhookAutoDisablePolicy(tenant_id=tenant_id, threshold=norm)
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant allowed API key scopes (migration 0044)
+# ---------------------------------------------------------------------------
+
+ALLOWED_API_KEY_SCOPES_MAX = 64
+
+
+def _normalize_api_key_scopes(raw: list[str] | None) -> list[str]:
+    """Lower-case, strip, dedupe, and validate against the canonical catalog.
+
+    Unknown scopes raise ValueError so an admin cannot persist a typo
+    that would silently match no future request. Order is preserved
+    against the canonical catalog so the read-back is stable.
+    """
+    if not raw:
+        return []
+    from .api_keys import VALID_SCOPES
+
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            raise ValueError("each allowed API key scope must be a string")
+        norm = item.strip().lower()
+        if not norm:
+            continue
+        if norm not in VALID_SCOPES:
+            raise ValueError(f"unknown scope: {item!r}")
+        if norm in seen:
+            continue
+        seen.add(norm)
+        cleaned.append(norm)
+    # Stable order: sorted by canonical name for deterministic read-back.
+    return sorted(cleaned)
+
+
+def get_allowed_api_key_scopes(tenant_id: str) -> list[str]:
+    """Return the allowed-scopes policy for ``tenant_id``.
+
+    Empty list means no policy: any valid scope may be granted.
+    """
+    if not tenant_id:
+        return []
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return []
+        raw = getattr(row, "allowed_api_key_scopes", None)
+        if not raw:
+            return []
+        return list(raw)
+
+
+def set_allowed_api_key_scopes(
+    tenant_id: str, scopes: list[str], updated_by: str | None
+) -> list[str]:
+    """Persist the allowed-scopes policy and return it normalized."""
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    normalized = _normalize_api_key_scopes(scopes)
+    if len(normalized) > ALLOWED_API_KEY_SCOPES_MAX:
+        raise ValueError(
+            f"at most {ALLOWED_API_KEY_SCOPES_MAX} allowed API key scopes are supported per tenant"
+        )
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                allowed_api_key_scopes=normalized,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.allowed_api_key_scopes = normalized
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return normalized
+
+
+def scopes_within_allowed(scopes: list[str], allowed: list[str]) -> bool:
+    """Return True when ``scopes`` is a subset of the policy ``allowed``.
+
+    An empty allowlist means "no policy" and returns True so callers can
+    enforce uniformly without a None check.
+    """
+    if not allowed:
+        return True
+    if not scopes:
+        # An empty scope set is always within policy (the key just has
+        # nothing it can do).
+        return True
+    allowed_set = {s for s in allowed if isinstance(s, str)}
+    return all(isinstance(s, str) and s in allowed_set for s in scopes)

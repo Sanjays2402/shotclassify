@@ -71,6 +71,9 @@ from shotclassify_store import (
     ALLOWED_INVITE_DOMAINS_MAX,
     get_allowed_invite_domains,
     set_allowed_invite_domains,
+    ALLOWED_API_KEY_SCOPES_MAX,
+    get_allowed_api_key_scopes,
+    set_allowed_api_key_scopes,
 )
 from datetime import timedelta
 from shotclassify_store.sessions import SESSION_TTL, clip_active_for_tenant
@@ -1227,3 +1230,68 @@ def put_webhook_autodisable_route(
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return policy.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant allowed API key scopes (migration 0044)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api-key-scopes", dependencies=[require_role("admin")])
+def get_api_key_scopes_policy_route(request: Request) -> dict:
+    """Return the per-tenant allowed API key scopes policy.
+
+    Empty list means no policy: every catalog-valid scope may be granted.
+    When non-empty, ``POST /v1/api-keys`` and the rotate endpoint reject
+    any request whose scope set is not a subset of the policy.
+    """
+    from shotclassify_store.api_keys import VALID_SCOPES
+
+    tenant_id = _tenant(request)
+    return {
+        "tenant_id": tenant_id,
+        "allowed_scopes": get_allowed_api_key_scopes(tenant_id),
+        "available_scopes": sorted(VALID_SCOPES),
+        "max_entries": ALLOWED_API_KEY_SCOPES_MAX,
+    }
+
+
+@router.put(
+    "/api-key-scopes",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_api_key_scopes_policy_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Replace the allowed API key scopes policy for the caller's tenant.
+
+    Send ``{"allowed_scopes": []}`` to disable enforcement and accept any
+    catalog-valid scope again. Unknown scope strings are rejected with
+    HTTP 422 so an admin cannot persist a typo.
+    """
+    from shotclassify_store.api_keys import VALID_SCOPES
+
+    tenant_id = _tenant(request)
+    raw = payload.get("allowed_scopes")
+    if not isinstance(raw, list):
+        raise HTTPException(
+            422,
+            "Field 'allowed_scopes' must be a list of scope id strings.",
+        )
+    if len(raw) > ALLOWED_API_KEY_SCOPES_MAX:
+        raise HTTPException(
+            422,
+            f"At most {ALLOWED_API_KEY_SCOPES_MAX} allowed scopes are supported per tenant.",
+        )
+    actor = getattr(request.state, "principal", None)
+    try:
+        normalized = set_allowed_api_key_scopes(tenant_id, raw, updated_by=actor)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {
+        "tenant_id": tenant_id,
+        "allowed_scopes": normalized,
+        "available_scopes": sorted(VALID_SCOPES),
+        "max_entries": ALLOWED_API_KEY_SCOPES_MAX,
+    }

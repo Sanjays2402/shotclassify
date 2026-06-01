@@ -417,6 +417,16 @@ class TenantSettingsRow(Base):
     allowed_invite_domains: Mapped[list[str] | None] = mapped_column(
         JSON, nullable=True
     )
+    # Per-tenant allowed-scopes policy for API key issuance (migration
+    # 0044). When non-empty, ``api_keys_store.create_key`` and ``rotate``
+    # reject any request whose scope set is not a subset of the policy.
+    # NULL or empty list = no policy (legacy ``any valid scope`` behaviour).
+    # Least-privilege control (SOC 2 CC6.1) that prevents a workspace
+    # admin from minting an ``admin``-scoped key in a tenant that only
+    # permits read-only credentials.
+    allowed_api_key_scopes: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
     # Per-tenant webhook auto-disable threshold (migration 0042). NULL
     # means no policy; a positive integer trips the circuit breaker after
     # that many consecutive failed deliveries on a single subscription.
@@ -1314,6 +1324,11 @@ def init_db() -> None:
                 if "webhook_autodisable_threshold" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN webhook_autodisable_threshold INTEGER"
+                    ))
+                # 0044 allowed API key scopes (least-privilege policy).
+                if "allowed_api_key_scopes" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN allowed_api_key_scopes JSON"
                     ))
             if insp.has_table("webhook_subscriptions"):
                 wcols = {c["name"] for c in insp.get_columns("webhook_subscriptions")}

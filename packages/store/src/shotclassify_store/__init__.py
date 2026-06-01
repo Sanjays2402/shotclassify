@@ -201,6 +201,10 @@ from .tenant_settings import (
     WebhookAutoDisablePolicy,
     get_webhook_autodisable_policy,
     set_webhook_autodisable_policy,
+    ALLOWED_API_KEY_SCOPES_MAX,
+    get_allowed_api_key_scopes,
+    set_allowed_api_key_scopes,
+    scopes_within_allowed,
 )
 
 __all__ = [
@@ -256,6 +260,10 @@ __all__ = [
     "WebhookAutoDisablePolicy",
     "get_webhook_autodisable_policy",
     "set_webhook_autodisable_policy",
+    "ALLOWED_API_KEY_SCOPES_MAX",
+    "get_allowed_api_key_scopes",
+    "set_allowed_api_key_scopes",
+    "scopes_within_allowed",
     "AuthLockoutPolicy",
     "AUTH_LOCKOUT_THRESHOLD_MIN",
     "AUTH_LOCKOUT_THRESHOLD_MAX",

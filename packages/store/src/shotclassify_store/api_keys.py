@@ -299,6 +299,16 @@ def create_key(
     normalized = normalize_scopes(scopes)
     if not normalized:
         raise ValueError("at least one valid scope is required")
+    # Enforce per-tenant allowed-scopes policy (0044). NULL/empty policy
+    # leaves the legacy behaviour where any catalog-valid scope is fine.
+    if tenant_id:
+        allowed = _tenant_settings.get_allowed_api_key_scopes(tenant_id)
+        if not _tenant_settings.scopes_within_allowed(normalized, allowed):
+            disallowed = sorted(set(normalized) - set(allowed))
+            raise ValueError(
+                "scopes not permitted by tenant policy: "
+                + ", ".join(disallowed)
+            )
     # Enforce per-tenant max-TTL policy. NULL policy = legacy behaviour.
     # When the caller omits ttl_days but a policy exists, default to the
     # policy cap so we never silently mint an unbounded key under a
@@ -545,6 +555,19 @@ def rotate(
         # Mint the successor first so the source is never left without
         # a replacement on the off chance of a partial failure.
         scopes = list(row.scopes or [])
+        # Enforce per-tenant allowed-scopes policy (0044) on rotate too,
+        # so tightening the policy after issuance blocks the next
+        # rotation just like it blocks a fresh create_key.
+        if row.tenant_id:
+            allowed_scopes = _tenant_settings.get_allowed_api_key_scopes(
+                row.tenant_id
+            )
+            if not _tenant_settings.scopes_within_allowed(scopes, allowed_scopes):
+                disallowed = sorted(set(scopes) - set(allowed_scopes))
+                raise ValueError(
+                    "scopes not permitted by tenant policy: "
+                    + ", ".join(disallowed)
+                )
         new_label = row.label
         if not new_label.endswith("(rotated)"):
             new_label = f"{row.label} (rotated)"[:128]

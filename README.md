@@ -65,6 +65,39 @@ curl -s "http://127.0.0.1:7441/v1/api-keys/expiring?within_days=30" \
 # UI: http://localhost:3000/admin -> amber banner shows expiring count
 ```
 
+## What's new: per-tenant allowed API key scopes (least-privilege policy)
+
+Every enterprise security questionnaire eventually asks: "can your platform stop one of our workspace admins from ever minting an admin-scoped key in this tenant." shotclassify now exposes a per-tenant allowed-scopes policy that gates every API key entry path. A workspace admin sets the list with `PUT /v1/settings/security/api-key-scopes` (admin role + fresh MFA step-up), and once it is non-empty `api_keys_store.create_key` and `api_keys_store.rotate` refuse to issue any key whose scope set is not a subset of the policy. The check lives in `tenant_settings.scopes_within_allowed` and is wired into the store layer so a future caller cannot bypass the policy by skipping the REST route; both fresh `POST /v1/api-keys` and `POST /v1/api-keys/{id}/rotate` are gated, so tightening the policy after issuance blocks the next rotation even on a pre-existing admin-scoped key. Unknown scope strings are rejected with HTTP 422 at the settings endpoint so an admin cannot persist a typo that would silently match no future request. The policy is strictly tenant-scoped: a lockdown on `acme` never affects key issuance in `globex`, and the test suite asserts this with two parallel admin keys. Empty list = no policy (legacy behaviour where any catalog-valid scope is fine); maximum 64 scopes per tenant; every change goes through the audit middleware with actor, IP, request id and tenant. Coverage lives in `tests/test_allowed_api_key_scopes.py` (read default, normalize + dedupe, unknown scope rejected, REST create blocked, cross-tenant isolation, rotate blocked when policy tightens).
+
+Try it (local):
+
+```bash
+# API: http://127.0.0.1:7441
+make api  # in another shell
+
+# Read current policy (empty = no enforcement)
+curl -s -H "X-API-Key: $ADMIN_KEY" \
+  http://127.0.0.1:7441/v1/settings/security/api-key-scopes
+
+# Lock this workspace to read-only API keys
+curl -s -X PUT -H "X-API-Key: $ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"allowed_scopes":["read:classifications"]}' \
+  http://127.0.0.1:7441/v1/settings/security/api-key-scopes
+
+# An admin-scoped create is now refused with a structured error
+curl -i -X POST -H "X-API-Key: $ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"label":"powerful","scopes":["admin"],"owner_email":"ops@acme.example"}' \
+  http://127.0.0.1:7441/v1/api-keys
+
+# Disable the policy by sending an empty list
+curl -s -X PUT -H "X-API-Key: $ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"allowed_scopes":[]}' \
+  http://127.0.0.1:7441/v1/settings/security/api-key-scopes
+```
+
 ## What's new: per-tenant allowed email domains for invites, SCIM, and SSO auto-join
 
 Every enterprise security questionnaire eventually asks: "can your platform refuse to let one of our admins invite a personal gmail address into our regulated workspace." shotclassify now exposes a per-tenant allowed-email-domains policy that gates every membership entry path. A workspace admin sets the list with `PUT /v1/settings/security/invite-domains` (admin role + fresh MFA step-up), and once it is non-empty the store layer refuses to create an invitation, accept an SSO auto-join, or honour a SCIM `Users` POST whose email domain is not on the list. Entries support both the bare domain (`acme.com`) and the leading-dot wildcard (`.acme.com`) which also matches every sub-domain, so a workspace can permit `acme.com` and `.corp.acme.com` without enumerating every team. The check lives in `tenant_settings.email_matches_allowed_domains` and is wired into `memberships_store.create_invitation` (REST invitations), `services/api/app/routes/sso.py` (SSO callback + test issue), and `services/api/app/routes/scim.py` (IdP provisioning) so a future caller cannot bypass the policy by skipping the route. Out-of-policy invitations return HTTP 422 `invite_domain_not_allowed` with the offending email and the allowed list so the dashboard can point the admin at the exact rule that blocked them; SCIM returns `400 invalidValue`; SSO auto-join silently no-ops to avoid breaking sign-in. The policy is strictly tenant-scoped: a lockdown on `acme` never affects an invitation in `globex`, and the test suite asserts this with two parallel admin keys. Empty list = no policy (legacy behaviour); maximum 64 domains per tenant; every change goes through the audit middleware with actor, IP, request id and tenant. Coverage lives in `tests/test_allowed_invite_domains.py` (read default, normalize + dedupe, invalid domain rejected, REST invite blocked + structured payload, sub-domain wildcard accepted, cross-tenant isolation, SCIM provision blocked, direct store-layer enforcement).
