@@ -277,6 +277,13 @@ export default function AdminConsolePage() {
           sub="billing by seat"
         />
         <StatCard
+          icon={<ShieldCheck size={18} weight="duotone" />}
+          label="Access reviews"
+          value="Certify"
+          href="/admin/access-reviews"
+          sub="SOC2 CC6.3 recertification"
+        />
+        <StatCard
           icon={<Gavel size={18} weight="duotone" />}
           label="Legal holds"
           value="Manage"
