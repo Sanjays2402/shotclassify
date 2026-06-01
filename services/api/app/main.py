@@ -54,6 +54,7 @@ from .routes import webhooks as webhooks_routes
 from .routes import scim as scim_routes
 from .routes import scim_admin as scim_admin_routes
 from .routes import subprocessors as subprocessors_routes
+from .routes import trust_pack as trust_pack_routes
 from .routes import incidents as incidents_routes
 from .routes import dsar as dsar_routes
 from .routes import legal as legal_routes
@@ -179,6 +180,7 @@ def create_app() -> FastAPI:
     app.include_router(scim_routes.router)
     app.include_router(scim_admin_routes.router)
     app.include_router(subprocessors_routes.router)
+    app.include_router(trust_pack_routes.router)
     app.include_router(incidents_routes.router)
     app.include_router(dsar_routes.router)
     app.include_router(legal_routes.router)

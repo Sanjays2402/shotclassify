@@ -2,6 +2,23 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
+## What's new: signed Trust Pack for procurement reviewers
+
+Enterprise procurement asks the same question at the end of every deal: "send us your security policy, sub-processor list, SSO/MFA/IP/retention settings for our workspace, and prove the bundle wasn't edited in transit." ShotClassify now answers in one call. `GET /v1/trust/pack` streams a deterministic ZIP containing this workspace's `SECURITY.md`, full policy snapshot (`policy.json` with SSO, OIDC, MFA, session, IP allowlist, CORS origins, API key TTL/inactivity/max-active policies, audit and history retention, privacy settings), the current sub-processor catalog, and this workspace's acknowledgement state. Every file is hashed (SHA-256) into a `manifest.json` and the manifest itself is signed with HMAC-SHA256 using the deployment's `app_secret_key`. The signature is also returned in the `X-Trust-Pack-Signature` response header so an automated procurement pipeline can verify without unzipping. `GET /v1/trust/pack/manifest` returns the same per-file hashes and signature without the ZIP bytes, so a reviewer can audit the shape first. Both endpoints are admin-role and strictly tenant-scoped: an `acme` admin can never enumerate `globex`'s policies. Coverage in `tests/test_trust_pack.py` proves member denial, unauthenticated denial, that the in-header signature matches the in-zip manifest, that per-file SHA-256s match the bytes actually written, and that two tenants get distinct bundles.
+
+Try it (local):
+
+```bash
+make api          # FastAPI on http://127.0.0.1:7441
+
+curl -s -OJ "http://127.0.0.1:7441/v1/trust/pack" \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY"
+# -> shotclassify-trust-pack-<workspace>.zip with signed manifest.json
+
+curl -s "http://127.0.0.1:7441/v1/trust/pack/manifest" \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" | jq
+```
+
 ## What's new: expiring-credentials report for proactive API key rotation
 
 Enterprise security teams want one number on the admin dashboard: how many credentials will silently die in the next 30 days, and which ones. ShotClassify now answers that question as a first-class report. `GET /v1/api-keys/expiring?within_days=30` returns every active (non-revoked) key whose `expires_at` falls inside a rolling window, soonest-first, so the rotation queue is already sorted. Already-expired but not-yet-revoked keys are always included so an overdue rotation cannot be hidden by a short window. Keys with no `expires_at` (never-expire) are excluded so the dashboard only surfaces actionable work. The report is strictly tenant-scoped (a workspace admin cannot enumerate another workspace's lifecycle) and admin-role + admin-scope gated, matching the rest of the keys surface. The admin console at `/admin` renders an amber banner above the API keys section whenever any active key is expiring inside 30 days, linking straight to `/keys` so an operator can rotate before any production traffic 401s. Coverage in `tests/test_api_key_expiring.py` proves soonest-first ordering, the never-expire and revoked exclusions, cross-tenant isolation between two admin keys, and that an already-overdue key still surfaces.
