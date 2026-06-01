@@ -17,6 +17,8 @@ import {
   Terminal,
   Trash,
   Warning,
+  ListMagnifyingGlass,
+  CircleNotch,
 } from "@phosphor-icons/react/dist/ssr";
 
 type KeyScope = "read" | "write" | "admin";
@@ -141,6 +143,32 @@ export default function KeyDetailPage() {
   const [cidrError, setCidrError] = useState<string | null>(null);
   const [cidrFlash, setCidrFlash] = useState<string | null>(null);
 
+  // Activity feed: per-key audit timeline pulled from the API. Mutating
+  // calls only (the audit log does not record GETs by design). Tenant
+  // scoping and admin/read:audit enforcement happen in FastAPI.
+  type ActivityEvent = {
+    id: string;
+    created_at: string | null;
+    principal: string;
+    method: string;
+    path: string;
+    status_code: number;
+    client_ip: string | null;
+    request_id: string | null;
+    elapsed_ms: number;
+  };
+  type ActivityResponse = {
+    key_id: string;
+    label: string;
+    tenant_id: string | null;
+    limit: number;
+    count: number;
+    events: ActivityEvent[];
+  };
+  const [activity, setActivity] = useState<ActivityResponse | null>(null);
+  const [activityErr, setActivityErr] = useState<string | null>(null);
+  const [activityLoading, setActivityLoading] = useState(false);
+
   const load = useCallback(async () => {
     if (!id) return;
     try {
@@ -168,6 +196,39 @@ export default function KeyDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const loadActivity = useCallback(async () => {
+    if (!id) return;
+    setActivityLoading(true);
+    setActivityErr(null);
+    try {
+      const r = await fetch(
+        `/api/keys/${encodeURIComponent(id)}/activity?limit=50`,
+        { credentials: "same-origin", cache: "no-store" },
+      );
+      if (r.status === 401 || r.status === 403) {
+        setActivityErr("You need the admin role to view this key's activity.");
+        setActivity(null);
+        return;
+      }
+      if (r.status === 404) {
+        setActivityErr("Activity is not available for this key.");
+        setActivity(null);
+        return;
+      }
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      const j: ActivityResponse = await r.json();
+      setActivity(j);
+    } catch (e: any) {
+      setActivityErr(e?.message || "Failed to load activity.");
+    } finally {
+      setActivityLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    loadActivity();
+  }, [loadActivity]);
 
   const cidrCommitted = useMemo(
     () => data?.key.allowed_cidrs ?? [],
@@ -754,6 +815,144 @@ export default function KeyDetailPage() {
                 style={{ color: "var(--color-ink-mute)" }}
               >
                 {cidrFlash}
+              </p>
+            ) : null}
+          </section>
+
+          {/* Activity */}
+          <section
+            className="rounded border p-5"
+            style={{ borderColor: "var(--color-rule)" }}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="eyebrow flex items-center gap-1.5">
+                  <ListMagnifyingGlass size={12} weight="duotone" />
+                  <span>Recent activity</span>
+                </div>
+                <p
+                  className="mt-1 text-[12px]"
+                  style={{ color: "var(--color-ink-mute)" }}
+                >
+                  State changing calls signed by this key, from the
+                  tamper evident audit log. Read only calls are not recorded.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={loadActivity}
+                disabled={activityLoading}
+                className="text-[12px] inline-flex items-center gap-1.5 px-2 py-1 rounded border"
+                style={{
+                  borderColor: "var(--color-rule)",
+                  color: "var(--color-ink-mute)",
+                }}
+                aria-label="Refresh activity"
+              >
+                {activityLoading ? (
+                  <CircleNotch size={12} weight="duotone" className="animate-spin" />
+                ) : (
+                  <ArrowsClockwise size={12} weight="duotone" />
+                )}
+                <span>Refresh</span>
+              </button>
+            </div>
+
+            <div className="mt-4">
+              {activityErr ? (
+                <div
+                  className="text-[12px] rounded border p-3"
+                  style={{
+                    borderColor: "var(--color-rule)",
+                    color: "#b91c1c",
+                  }}
+                  role="alert"
+                >
+                  {activityErr}
+                </div>
+              ) : activityLoading && !activity ? (
+                <div className="space-y-2" aria-hidden="true">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div
+                      key={i}
+                      className="h-9 rounded animate-pulse"
+                      style={{ background: "var(--color-rule)" }}
+                    />
+                  ))}
+                </div>
+              ) : activity && activity.events.length > 0 ? (
+                <div
+                  className="overflow-x-auto rounded border"
+                  style={{ borderColor: "var(--color-rule)" }}
+                >
+                  <table className="w-full text-[12px]">
+                    <thead>
+                      <tr style={{ color: "var(--color-ink-mute)" }}>
+                        <th className="text-left font-normal px-3 py-2">When</th>
+                        <th className="text-left font-normal px-3 py-2">Method</th>
+                        <th className="text-left font-normal px-3 py-2">Path</th>
+                        <th className="text-left font-normal px-3 py-2">Status</th>
+                        <th className="text-left font-normal px-3 py-2 hidden sm:table-cell">IP</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activity.events.map((e) => (
+                        <tr
+                          key={e.id}
+                          className="border-t"
+                          style={{ borderColor: "var(--color-rule)" }}
+                        >
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            {fmtDate(e.created_at)}
+                          </td>
+                          <td className="px-3 py-2 font-mono">{e.method}</td>
+                          <td
+                            className="px-3 py-2 font-mono break-all"
+                            title={e.request_id ?? undefined}
+                          >
+                            {e.path}
+                          </td>
+                          <td
+                            className="px-3 py-2 font-mono"
+                            style={{
+                              color:
+                                e.status_code >= 500
+                                  ? "#b91c1c"
+                                  : e.status_code >= 400
+                                    ? "#a16207"
+                                    : "inherit",
+                            }}
+                          >
+                            {e.status_code}
+                          </td>
+                          <td className="px-3 py-2 font-mono hidden sm:table-cell">
+                            {e.client_ip ?? "\u2014"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div
+                  className="text-[12px] rounded border p-4 text-center"
+                  style={{
+                    borderColor: "var(--color-rule)",
+                    color: "var(--color-ink-mute)",
+                  }}
+                >
+                  No activity yet. Once this key makes a state changing call
+                  it will appear here within seconds.
+                </div>
+              )}
+            </div>
+            {activity ? (
+              <p
+                className="mt-3 text-[11px]"
+                style={{ color: "var(--color-ink-mute)" }}
+              >
+                Showing the {activity.count} most recent of up to {activity.limit}
+                . Full history is available via the workspace audit log.
               </p>
             ) : null}
           </section>

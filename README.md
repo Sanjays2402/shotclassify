@@ -2,6 +2,26 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
+## What's new: per-API-key activity timeline
+
+Every API key now has a recent activity feed pulled straight from the
+tamper-evident audit log, scoped to its workspace. Workspace admins can
+open the key detail page (or call `GET /v1/api-keys/{key_id}/activity`)
+to see who did what with the key (method, path, status, source IP,
+timestamp) without exporting the full audit log. Cross-tenant lookups
+return 404, and the route requires the `admin` role plus the
+`read:audit` scope.
+
+Try it locally:
+
+```
+uvicorn services.api.app.main:create_app --factory --port 7441 &
+cd web && pnpm dev   # http://localhost:3000/keys/<key_id>
+
+curl -s http://127.0.0.1:7441/v1/api-keys/<key_id>/activity?limit=50 \
+  -H "X-API-Key: $ADMIN_API_KEY" | jq .
+```
+
 ## What's new: two-person rule for high-privilege API keys
 
 SOC2 CC6.1 and most bank security questionnaires require separation of duties on credentials with write or admin authority: no single person should be able to mint a production-grade machine credential without a peer signing off. ShotClassify now ships that as a per-workspace policy. An owner enables it in `/settings/security/dual-control`; from that moment, any `POST /v1/api-keys` request that includes the `admin` scope no longer returns a plaintext token. It returns `HTTP 202` and a pending row in `api_key_issuance_requests` carrying the requester, the requested scopes, an accountable owner email, and a >=20-char business justification surfaced to the second reviewer. The new admin queue at `/settings/security/dual-control` lists every pending and recently decided request; a different admin (self-approval is rejected at the route layer with `409`) approves through `POST /v1/key-issuance-requests/{id}/approve` and the key is minted in the same transaction, with the plaintext token returned exactly once to the approver and `minted_key_id` linked back to the original request id for audit lineage. Pending rows expire after 72 hours so a forgotten ask cannot become a long-lived stale gate. Existing keys, rotation, and non-admin scopes are unaffected; the new column `tenant_settings.dual_control_enabled` is `false` by default so no live workspace changes behaviour without an owner opt-in. Strictly tenant-scoped at the query layer (the list, get, approve, and deny routes all filter by `tenant_id` so cross-tenant enumeration is impossible). Coverage in `tests/test_dual_control_issuance.py` proves the queue path, the self-approval block, that disabling the policy leaves admin minting direct, that non-admin scopes never gate, that short justifications are rejected, and that enabling the policy on workspace A does not affect workspace B.

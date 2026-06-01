@@ -16,7 +16,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from shotclassify_store import api_keys_store, get_api_key_ttl_policy, get_api_key_max_active_policy, dual_control_store
+from shotclassify_store import api_keys_store, get_api_key_ttl_policy, get_api_key_max_active_policy, dual_control_store, AuditRepository
 from shotclassify_store.dual_control import DualControlError
 from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
@@ -517,6 +517,47 @@ def get_key_monthly_usage(
         "monthly_quota": record.monthly_quota,
         "monthly_usage": usage,
         "remaining": remaining,
+    }
+
+
+@router.get(
+    "/{key_id}/activity",
+    dependencies=[require_scope("read:audit")],
+)
+def get_key_activity(
+    key_id: str,
+    request: Request,
+    limit: int = Query(50, ge=1, le=500),
+    _: str = require_role("admin"),
+):
+    """Return the recent audited mutating calls made with this API key.
+
+    Pulls from the existing tamper-evident audit log filtered to the synthetic
+    ``api-key:<id>`` principal that the auth middleware stamps on every keyed
+    request. Tenant-scoped: the key is first resolved within the caller's
+    tenant, so guessing a key id from another workspace returns 404 instead
+    of leaking its activity. Read-only GETs are not in the audit log by
+    design; this surface reports state-changing calls (POST/PUT/PATCH/DELETE)
+    which is what security and procurement reviewers actually ask for during
+    a key forensics drill.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    keys = api_keys_store.list_keys(tenant_id=tenant_id, include_revoked=True)
+    record = next((k for k in keys if k.id == key_id), None)
+    if record is None:
+        raise HTTPException(404, "API key not found.")
+    events = AuditRepository().list(
+        limit=limit,
+        principal=f"api-key:{record.id}",
+        tenant_id=tenant_id,
+    )
+    return {
+        "key_id": record.id,
+        "label": record.label,
+        "tenant_id": tenant_id,
+        "limit": limit,
+        "count": len(events),
+        "events": events,
     }
 
 
