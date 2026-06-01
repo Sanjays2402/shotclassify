@@ -304,6 +304,33 @@ class APIKeyAndSessionAuth(BaseHTTPMiddleware):
                         },
                         status_code=401,
                     )
+                # Per-tenant API key mandatory-rotation cap. Freshness
+                # sibling of the inactivity policy: any key older than
+                # ``max_age_days`` from its creation time is auto-revoked
+                # here and the request rejected with 401
+                # ``api_key_rotation_required``. Same revocation semantics
+                # as the inactivity branch.
+                from shotclassify_store import get_api_key_max_age_policy
+                age_policy = get_api_key_max_age_policy(record.tenant_id)
+                if api_keys_store.is_past_max_age(record, age_policy.max_age_days):
+                    api_keys_store.revoke(record.id, tenant_id=record.tenant_id)
+                    request.state.tenant_id = record.tenant_id
+                    request.state.principal = f"api-key:{record.id}"
+                    request.state.auto_revoked_api_key_id = record.id
+                    return JSONResponse(
+                        {
+                            "error": "api_key_rotation_required",
+                            "detail": (
+                                "This API key is older than the workspace "
+                                "mandatory rotation cap and has been "
+                                "automatically revoked. Rotate the key "
+                                "and update your integration to continue."
+                            ),
+                            "max_age_days": age_policy.max_age_days,
+                            "key_id": record.id,
+                        },
+                        status_code=401,
+                    )
                 if record.allowed_cidrs:
                     if not api_keys_store.ip_in_cidrs(src_ip, record.allowed_cidrs):
                         return JSONResponse(

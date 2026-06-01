@@ -805,6 +805,33 @@ def is_stale(record: "ApiKeyRecord", inactivity_days: int | None, *, now: dateti
     return (current - ts) > timedelta(days=inactivity_days)
 
 
+def is_past_max_age(
+    record: "ApiKeyRecord",
+    max_age_days: int | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return True when the key was created longer ago than ``max_age_days``.
+
+    Companion to :func:`is_stale`: that one keys off ``last_used_at`` so a
+    dormant credential gets caught. This one keys off ``created_at`` so an
+    actively used but stale credential gets caught and forced through
+    rotation. ``max_age_days=None`` (no policy) always returns False.
+    Timezone-safe: legacy rows written without tzinfo are treated as UTC.
+    """
+    if max_age_days is None or max_age_days <= 0:
+        return False
+    ts = record.created_at
+    if ts is None:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    current = now or _now()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    return (current - ts) > timedelta(days=max_age_days)
+
+
 # ---------------------------------------------------------------------------
 # Per-key monthly call quota (0033).
 # ---------------------------------------------------------------------------

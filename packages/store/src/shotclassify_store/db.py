@@ -291,6 +291,13 @@ class TenantSettingsRow(Base):
     # layer and the request is rejected with 401 ``api_key_stale_inactive``.
     # NULL = no policy (legacy). Wired into security_settings + admin UI.
     api_key_inactivity_days: Mapped[int | None] = mapped_column(nullable=True)
+    # Per-tenant API key mandatory-rotation cap. When set (days), a
+    # presented DB-backed API key whose ``created_at`` is older than
+    # this is auto-revoked at the auth layer and the request is rejected
+    # with 401 ``api_key_rotation_required``. Freshness sibling of
+    # ``api_key_inactivity_days``: that one catches dormant keys, this
+    # one catches actively used but stale keys. NULL = no policy.
+    api_key_max_age_days: Mapped[int | None] = mapped_column(nullable=True)
     # Per-tenant cap on the number of active (non-revoked) DB-backed API
     # keys. When set, ``api_keys_store.create_key`` (and the rotation
     # path, which mints a successor) reject with ``ValueError`` once the
@@ -1281,6 +1288,11 @@ def init_db() -> None:
                 if "api_key_inactivity_days" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN api_key_inactivity_days INTEGER"
+                    ))
+                # 0046 per-tenant API key mandatory rotation cap (max age in days).
+                if "api_key_max_age_days" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN api_key_max_age_days INTEGER"
                     ))
                 # 0031 per-tenant cap on active (non-revoked) API keys.
                 if "api_key_max_active" not in tcols:

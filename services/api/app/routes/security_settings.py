@@ -21,6 +21,7 @@ from shotclassify_store import (
     SESSION_IDLE_MAX_MINUTES,
     SESSION_IDLE_MIN_MINUTES,
     get_api_key_inactivity_policy,
+    get_api_key_max_age_policy,
     get_api_key_max_active_policy,
     get_api_key_ttl_policy,
     get_cors_origins,
@@ -35,6 +36,7 @@ from shotclassify_store import (
     get_webhook_egress_allowed_hosts,
     purge_expired_for_tenant,
     set_api_key_inactivity_policy,
+    set_api_key_max_age_policy,
     set_api_key_max_active_policy,
     set_api_key_ttl_policy,
     set_cors_origins,
@@ -758,6 +760,56 @@ def put_api_key_inactivity_route(
     try:
         cfg = set_api_key_inactivity_policy(
             tenant_id, inactivity_days=raw, updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return cfg.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant API key mandatory rotation (max age) policy
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api-key-max-age", dependencies=[require_role("admin")])
+def get_api_key_max_age_route(request: Request) -> dict:
+    """Return the tenant's API key mandatory rotation cap (days, or null)."""
+    tenant_id = _tenant(request)
+    return get_api_key_max_age_policy(tenant_id).to_dict()
+
+
+@router.put(
+    "/api-key-max-age",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_api_key_max_age_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Set or clear the tenant's API key mandatory rotation cap in days.
+
+    Body: ``{"max_age_days": int|null}``. ``null`` clears the policy.
+    When set, any DB-backed API key whose ``created_at`` is older than
+    the cap is auto-revoked on the next request and rejected with 401
+    ``api_key_rotation_required``. Existing keys are not retroactively
+    shortened: a tightened policy only takes effect when a stale key is
+    next presented. Companion to the inactivity policy (which keys off
+    last-use).
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "JSON object body required.")
+    if "max_age_days" not in payload:
+        raise HTTPException(
+            422, "Field 'max_age_days' is required (int or null)."
+        )
+    raw = payload["max_age_days"]
+    if raw is not None and (isinstance(raw, bool) or not isinstance(raw, int)):
+        raise HTTPException(422, "max_age_days must be an integer or null.")
+    actor = getattr(request.state, "principal", None)
+    try:
+        cfg = set_api_key_max_age_policy(
+            tenant_id, max_age_days=raw, updated_by=actor
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
