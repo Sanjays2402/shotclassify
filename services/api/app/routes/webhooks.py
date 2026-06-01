@@ -277,6 +277,65 @@ def replay_delivery(
 
 
 @router.post(
+    "/{webhook_id}/test",
+    dependencies=[require_mfa_step_up(), require_scope("admin")],
+)
+def test_webhook(
+    webhook_id: str,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+    _: str = require_role("admin"),
+):
+    """Fire a signed ``webhook.test`` ping at this subscription.
+
+    Lets a workspace admin verify TLS, signature handling, the tenant
+    egress allowlist, and receiver code on a brand-new subscription
+    before any real event flows. The ping is delivered regardless of
+    the subscription's event filter and is persisted as a normal
+    delivery row so it appears in the standard delivery feed and
+    audit export. Subject to MFA step-up and admin scope.
+    """
+    tenant_id = _require_tenant(request)
+    record = webhooks_store.get_subscription(webhook_id, tenant_id=tenant_id)
+    if not record:
+        raise HTTPException(404, "Webhook not found.")
+    request.state.audit_target_id = webhook_id
+    if dry_run:
+        return mark_dry_run(
+            request,
+            would_test={
+                "id": record.id,
+                "url": record.url,
+                "event": webhooks_store.TEST_EVENT,
+                "active": record.active,
+            },
+        )
+    if not record.active:
+        raise HTTPException(
+            409,
+            "Cannot test a paused or revoked subscription. Resume it first.",
+        )
+    actor = getattr(request.state, "principal", None)
+    request_id = getattr(request.state, "request_id", None)
+    delivery = webhooks_store.dispatch_test_event(
+        webhook_id,
+        tenant_id=tenant_id,
+        actor=actor,
+        request_id=request_id,
+    )
+    if not delivery:
+        # Cross-tenant guards or missing signing key. Mirror the 404
+        # used elsewhere to avoid leaking existence.
+        raise HTTPException(409, "Test event could not be dispatched.")
+    return {
+        "ok": delivery.status == "success",
+        "delivery": delivery.to_dict(),
+        "webhook_id": webhook_id,
+        "event": webhooks_store.TEST_EVENT,
+    }
+
+
+@router.post(
     "/{webhook_id}/rotate-secret",
     dependencies=[require_mfa_step_up(), require_scope("admin")],
 )

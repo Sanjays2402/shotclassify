@@ -268,3 +268,127 @@ def test_dispatch_records_failure_after_retries(monkeypatch, tmp_path):
     assert results[0].status == "failed"
     assert results[0].attempt == webhooks_store.MAX_ATTEMPTS
     assert results[0].error
+
+
+def test_test_endpoint_dispatches_signed_ping(monkeypatch, tmp_path):
+    """POST /v1/webhooks/{id}/test signs a webhook.test ping and records it."""
+    c = _client(monkeypatch, tmp_path)
+    httpd, port = _spawn_listener()
+    try:
+        # Create a real subscription pointed at our local listener.
+        r = c.post(
+            "/v1/webhooks",
+            headers=_admin("acme"),
+            json={
+                "url": f"http://127.0.0.1:{port}/hook",
+                # Note: only subscribes to classify.completed. The test
+                # ping must still be delivered regardless of the filter.
+                "events": ["classify.completed"],
+                "description": "ping target",
+            },
+        )
+        assert r.status_code == 200, r.text
+        wid = r.json()["webhook"]["id"]
+        secret = r.json()["secret"]
+
+        # Operator (member role) is blocked by RBAC.
+        r_op = c.post(
+            f"/v1/webhooks/{wid}/test", headers={"X-API-Key": "acme-op-key"}
+        )
+        assert r_op.status_code == 403
+
+        # Admin fires the test.
+        r_admin = c.post(f"/v1/webhooks/{wid}/test", headers=_admin("acme"))
+        assert r_admin.status_code == 200, r_admin.text
+        body = r_admin.json()
+        assert body["ok"] is True
+        assert body["event"] == "webhook.test"
+        assert body["delivery"]["event"] == "webhook.test"
+        assert body["delivery"]["status"] == "success"
+
+        # The listener actually received it, with a valid HMAC signature
+        # over the JSON body computed from the plaintext secret.
+        assert _Capture.received, "listener received nothing"
+        headers, raw_body = _Capture.received[-1]
+        assert headers.get("X-Shotclassify-Event") == "webhook.test"
+        assert headers.get("X-Shotclassify-Test") == "true"
+        sig = headers.get("X-Shotclassify-Signature", "")
+        secret_hash = hashlib.sha256(secret.encode()).hexdigest()
+        expected = (
+            "sha256="
+            + hmac.new(secret_hash.encode(), raw_body, hashlib.sha256).hexdigest()
+        )
+        assert hmac.compare_digest(sig, expected)
+
+        # The synthetic ping is persisted in the standard delivery feed
+        # so it shows up in the audit/export trail.
+        r_list = c.get(
+            f"/v1/webhooks/{wid}/deliveries", headers=_admin("acme")
+        )
+        assert r_list.status_code == 200
+        events = {d["event"] for d in r_list.json()["deliveries"]}
+        assert "webhook.test" in events
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_test_endpoint_cross_tenant_isolation(monkeypatch, tmp_path):
+    """Tenant B cannot fire a test ping at Tenant A's webhook."""
+    c = _client(monkeypatch, tmp_path)
+    r = c.post(
+        "/v1/webhooks",
+        headers=_admin("acme"),
+        json={"url": "https://example.com/hook", "events": ["*"]},
+    )
+    assert r.status_code == 200, r.text
+    wid = r.json()["webhook"]["id"]
+
+    # Globex admin tries to test Acme's webhook. Must look like 404, not 200,
+    # and must NOT generate a delivery row attributed to Globex either.
+    r_x = c.post(f"/v1/webhooks/{wid}/test", headers=_admin("globex"))
+    assert r_x.status_code == 404, r_x.text
+
+    # And no delivery row was created for Globex.
+    r_list = c.get("/v1/webhooks/deliveries/recent", headers=_admin("globex"))
+    assert r_list.status_code == 200
+    assert r_list.json()["deliveries"] == []
+
+
+def test_test_endpoint_dry_run_does_not_deliver(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.post(
+        "/v1/webhooks",
+        headers=_admin("acme"),
+        json={"url": "https://example.com/hook", "events": ["*"]},
+    )
+    wid = r.json()["webhook"]["id"]
+
+    r_dry = c.post(
+        f"/v1/webhooks/{wid}/test?dry_run=true", headers=_admin("acme")
+    )
+    assert r_dry.status_code == 200
+    body = r_dry.json()
+    assert body.get("dry_run") is True
+    assert body["would_test"]["id"] == wid
+    assert body["would_test"]["event"] == "webhook.test"
+
+    # No deliveries recorded.
+    r_list = c.get(f"/v1/webhooks/{wid}/deliveries", headers=_admin("acme"))
+    assert r_list.json()["deliveries"] == []
+
+
+def test_test_endpoint_rejects_paused_subscription(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.post(
+        "/v1/webhooks",
+        headers=_admin("acme"),
+        json={"url": "https://example.com/hook", "events": ["*"]},
+    )
+    wid = r.json()["webhook"]["id"]
+
+    rp = c.post(f"/v1/webhooks/{wid}/pause", headers=_admin("acme"))
+    assert rp.status_code == 200
+
+    r_test = c.post(f"/v1/webhooks/{wid}/test", headers=_admin("acme"))
+    assert r_test.status_code == 409

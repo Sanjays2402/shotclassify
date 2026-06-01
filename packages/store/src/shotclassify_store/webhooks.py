@@ -50,6 +50,12 @@ BACKOFF_MULTIPLIER = 4
 DELIVERY_TIMEOUT_SECONDS = 8.0
 MAX_PAYLOAD_PREVIEW = 512
 ALLOWED_EVENTS = ("classify.completed", "classify.failed", "*")
+# Synthetic ping event the operator can fire by hand from the dashboard or
+# the public API. It is NEVER raised by the pipeline, and subscriptions do
+# not need to declare it in their event filter to receive it: it is always
+# sent to the single targeted subscription so receivers can verify their
+# endpoint, TLS, signature handling, and IP allowlist before going live.
+TEST_EVENT = "webhook.test"
 
 
 @dataclass
@@ -908,3 +914,125 @@ def replay_delivery(
         request_id=None,
     )
     return get_delivery(new_id, tenant_id=tenant_id)
+
+
+def dispatch_test_event(
+    subscription_id: str,
+    *,
+    tenant_id: str,
+    actor: str | None = None,
+    request_id: str | None = None,
+    sleep: Any = time.sleep,
+) -> DeliveryRecord | None:
+    """Fire a one-shot signed ping at a single subscription.
+
+    Lets a workspace admin verify TLS, signature handling, IP allowlist,
+    and receiver code on a brand-new subscription before any real event
+    flows. The synthetic event is ``webhook.test`` and is delivered to
+    the targeted subscription regardless of its event filter, so
+    operators can test without first subscribing to a wildcard.
+
+    The same gates apply as for real dispatch:
+      * subscription must belong to ``tenant_id`` (cross-tenant returns
+        ``None`` so we never leak existence of other tenants' webhooks),
+      * subscription must be active (paused or revoked returns ``None``),
+      * tenant egress host allowlist is enforced and a failed delivery
+        row is recorded if the host is blocked,
+      * dual-sign during a secret rotation overlap.
+
+    The attempt is persisted as a real ``webhook_deliveries`` row so it
+    shows up in the standard delivery feed, replay UI, and audit export.
+    """
+    init_db()
+    if not tenant_id:
+        return None
+    sub = get_subscription(subscription_id, tenant_id=tenant_id)
+    if not sub or not sub.active:
+        return None
+    payload = {
+        "event": TEST_EVENT,
+        "subscription_id": sub.id,
+        "tenant_id": tenant_id,
+        "sent_at": datetime.now(UTC).isoformat(),
+        "actor": actor,
+        "message": (
+            "This is a test event sent from the Shotclassify dashboard. "
+            "Verify the X-Shotclassify-Signature header matches "
+            "HMAC-SHA256(SHA256(secret), body) before trusting it."
+        ),
+    }
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    from . import tenant_settings as _ts
+    egress_allowlist = _ts.get_webhook_egress_allowed_hosts(tenant_id)
+    if egress_allowlist:
+        from urllib.parse import urlparse
+        sub_host = (urlparse(sub.url).hostname or "").strip()
+        if not _ts.webhook_host_matches_allowlist(sub_host, egress_allowlist):
+            recorded_id = _record_delivery(
+                tenant_id=sub.tenant_id,
+                subscription_id=sub.id,
+                event=TEST_EVENT,
+                url=sub.url,
+                status="failed",
+                attempt=0,
+                http_status=None,
+                error=f"egress blocked: host {sub_host!r} not in tenant allowlist",
+                latency_ms=0,
+                payload_preview="",
+                signature="",
+                request_id=request_id,
+            )
+            log.warning(
+                "webhook_test_egress_blocked",
+                delivery_id=recorded_id,
+                subscription_id=sub.id,
+                tenant_id=sub.tenant_id,
+                host=sub_host,
+            )
+            return get_delivery(recorded_id, tenant_id=sub.tenant_id)
+    primary_key, next_key = _subscription_signing_keys(sub.id, tenant_id=tenant_id)
+    if not primary_key:
+        return None
+    signature = sign_body(primary_key, body)
+    delivery_id_hint = _new_id("whd")
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "shotclassify-webhooks/1",
+        "X-Shotclassify-Event": TEST_EVENT,
+        "X-Shotclassify-Delivery": delivery_id_hint,
+        "X-Shotclassify-Signature": signature,
+        "X-Shotclassify-Subscription": sub.id,
+        "X-Shotclassify-Test": "true",
+    }
+    if next_key:
+        headers["X-Shotclassify-Signature-Next"] = sign_body(next_key, body)
+    if request_id:
+        headers["X-Request-ID"] = request_id
+    ok, http_status, err, attempts, latency_ms = _post_with_retries(
+        url=sub.url, body=body, headers=headers, sleep=sleep
+    )
+    recorded_id = _record_delivery(
+        tenant_id=sub.tenant_id,
+        subscription_id=sub.id,
+        event=TEST_EVENT,
+        url=sub.url,
+        status="success" if ok else "failed",
+        attempt=attempts,
+        http_status=http_status,
+        error=err,
+        latency_ms=latency_ms,
+        payload_preview=body.decode("utf-8", errors="replace")[:MAX_PAYLOAD_PREVIEW],
+        signature=signature,
+        request_id=request_id,
+    )
+    log.info(
+        "webhook_test_dispatched",
+        delivery_id=recorded_id,
+        subscription_id=sub.id,
+        tenant_id=sub.tenant_id,
+        status="success" if ok else "failed",
+        attempts=attempts,
+        http_status=http_status,
+        latency_ms=latency_ms,
+    )
+    return get_delivery(recorded_id, tenant_id=sub.tenant_id)
