@@ -2,7 +2,7 @@
 // sk_live_* token via Authorization: Bearer ..., then proxies the
 // multipart form-data body to the upstream FastAPI /v1/classify.
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAndTouch, hasScope, workspaceOf } from "@/lib/keystore";
+import { verifyAndTouch, hasScope, workspaceOf, ipAllowed } from "@/lib/keystore";
 import { dispatchEvent } from "@/lib/webhooks";
 import { notifyClassifyCompleted } from "@/lib/notifications";
 import { withObservability } from "@/lib/observability";
@@ -48,6 +48,17 @@ async function postHandler(req: NextRequest): Promise<Response> {
       403,
       "insufficient_scope",
       "This API key is read-only. Create a key with the 'write' scope to call /v1/classify.",
+    );
+  }
+  const xff = req.headers.get("x-forwarded-for");
+  const ip = xff
+    ? xff.split(",")[0]?.trim() || null
+    : req.headers.get("x-real-ip")?.trim() || (req as unknown as { ip?: string | null }).ip || null;
+  if (!ipAllowed(key, ip)) {
+    return errorResponse(
+      403,
+      "ip_not_allowed",
+      `This API key is restricted to a fixed source-IP allowlist and the calling address${ip ? ` (${ip})` : ""} is not in it.`,
     );
   }
 

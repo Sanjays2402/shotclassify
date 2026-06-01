@@ -4,6 +4,7 @@ import {
   getKey,
   renameKey,
   setKeyScopes,
+  setKeyAllowedCidrs,
   dailyUsageSeries,
 } from "@/lib/keystore";
 
@@ -85,6 +86,22 @@ export async function PATCH(
   if (Array.isArray(body?.scopes)) {
     const scoped = await setKeyScopes(id, body.scopes);
     if (scoped) updated = scoped;
+  }
+  if (Array.isArray(body?.allowed_cidrs)) {
+    try {
+      const cidred = await setKeyAllowedCidrs(id, body.allowed_cidrs);
+      if (cidred) updated = cidred;
+    } catch (e) {
+      return NextResponse.json(
+        {
+          error: {
+            code: "invalid_cidr",
+            message: e instanceof Error ? e.message : "Invalid CIDR list.",
+          },
+        },
+        { status: 422 },
+      );
+    }
   }
   return NextResponse.json({ key: strip(updated) });
 }

@@ -12,6 +12,7 @@ import {
   getKeyAt,
   renameKeyAt,
   setKeyScopesAt,
+  setKeyAllowedCidrsAt,
   dailyUsageSeries,
   type StoredKey,
   type CreatedKey,
@@ -27,6 +28,9 @@ export {
   DEFAULT_WORKSPACE_ID,
   workspaceOf,
   normalizeWorkspaceId,
+  normalizeCidr,
+  normalizeCidrs,
+  ipAllowed,
 } from "./keystore-core";
 
 const STORE_PATH = defaultStorePath();
@@ -71,4 +75,11 @@ export function setKeyScopes(
   scopes: unknown,
 ): Promise<StoredKey | null> {
   return setKeyScopesAt(STORE_PATH, id, scopes);
+}
+
+export function setKeyAllowedCidrs(
+  id: string,
+  cidrs: unknown,
+): Promise<StoredKey | null> {
+  return setKeyAllowedCidrsAt(STORE_PATH, id, cidrs);
 }

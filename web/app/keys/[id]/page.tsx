@@ -9,9 +9,11 @@ import {
   Check,
   ChartLineUp,
   Copy,
+  Globe,
   Key,
   Lock,
   PencilSimple,
+  Plus,
   Terminal,
   Trash,
   Warning,
@@ -28,6 +30,7 @@ type KeyDetail = {
   usage_count: number;
   rotated_at?: string | null;
   scopes?: KeyScope[];
+  allowed_cidrs?: string[];
   daily_usage?: Record<string, number>;
 };
 
@@ -129,6 +132,15 @@ export default function KeyDetailPage() {
   const [revealed, setRevealed] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
+  // IP allowlist editor state. `cidrDraft` holds the in-progress text, the
+  // committed list comes from `data.key.allowed_cidrs`. Empty list = no
+  // restriction (legacy behaviour).
+  const [cidrDraft, setCidrDraft] = useState<string[]>([]);
+  const [cidrInput, setCidrInput] = useState("");
+  const [cidrSaving, setCidrSaving] = useState(false);
+  const [cidrError, setCidrError] = useState<string | null>(null);
+  const [cidrFlash, setCidrFlash] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     if (!id) return;
     try {
@@ -156,6 +168,84 @@ export default function KeyDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const cidrCommitted = useMemo(
+    () => data?.key.allowed_cidrs ?? [],
+    [data],
+  );
+  const cidrDirty = useMemo(() => {
+    if (cidrDraft.length !== cidrCommitted.length) return true;
+    for (let i = 0; i < cidrDraft.length; i++) {
+      if (cidrDraft[i] !== cidrCommitted[i]) return true;
+    }
+    return false;
+  }, [cidrDraft, cidrCommitted]);
+
+  // Keep the editor in sync with whatever the server last confirmed.
+  useEffect(() => {
+    setCidrDraft(cidrCommitted);
+    setCidrError(null);
+  }, [cidrCommitted]);
+
+  const onAddCidr = useCallback(() => {
+    const raw = cidrInput.trim();
+    if (!raw) return;
+    // Light client-side shape check; server canonicalizes and rejects bad input.
+    const looksLikeIp = /^[0-9a-fA-F:.]+(\/\d{1,3})?$/.test(raw);
+    if (!looksLikeIp) {
+      setCidrError(
+        "Not a valid IP or CIDR. Use forms like 203.0.113.4 or 2001:db8::/32.",
+      );
+      return;
+    }
+    if (cidrDraft.includes(raw)) {
+      setCidrError("That entry is already in the list.");
+      return;
+    }
+    setCidrError(null);
+    setCidrDraft((prev) => [...prev, raw]);
+    setCidrInput("");
+  }, [cidrInput, cidrDraft]);
+
+  const onRemoveCidr = useCallback((entry: string) => {
+    setCidrError(null);
+    setCidrDraft((prev) => prev.filter((e) => e !== entry));
+  }, []);
+
+  const onSaveCidrs = useCallback(
+    async (next: string[]) => {
+      if (!id) return;
+      setCidrSaving(true);
+      setCidrError(null);
+      setCidrFlash(null);
+      try {
+        const r = await fetch(`/api/keys/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ allowed_cidrs: next }),
+        });
+        if (!r.ok) {
+          let msg = `${r.status} ${r.statusText}`;
+          try {
+            const j = await r.json();
+            if (j?.error?.message) msg = j.error.message;
+          } catch {}
+          throw new Error(msg);
+        }
+        await load();
+        setCidrFlash(
+          next.length === 0
+            ? "Allowlist cleared. Any source IP can use this key."
+            : `Allowlist saved. ${next.length} entr${next.length === 1 ? "y" : "ies"} active.`,
+        );
+      } catch (e: any) {
+        setCidrError(e?.message || "Failed to save allowlist.");
+      } finally {
+        setCidrSaving(false);
+      }
+    },
+    [id, load],
+  );
 
   const onSaveName = useCallback(async () => {
     if (!data) return;
@@ -545,6 +635,127 @@ export default function KeyDetailPage() {
                 );
               })}
             </div>
+          </section>
+
+          {/* IP allowlist */}
+          <section
+            className="rounded border p-5"
+            style={{ borderColor: "var(--color-rule)" }}
+          >
+            <div className="eyebrow flex items-center gap-1.5">
+              <Globe size={12} weight="duotone" />
+              <span>Source IP allowlist</span>
+            </div>
+            <p
+              className="text-[12px] mt-1"
+              style={{ color: "var(--color-ink-mute)" }}
+            >
+              Restrict this key to specific source IPs or CIDR ranges. Leave
+              empty to accept from any IP. Use this for CI runners, a corporate
+              egress range, or a single bastion. Both IPv4 and IPv6 accepted,
+              with or without a /N suffix.
+            </p>
+
+            <div className="mt-3 flex flex-wrap gap-2" aria-label="Current allowlist">
+              {cidrDraft.length === 0 ? (
+                <span
+                  className="text-[12px] px-2 py-1 rounded border"
+                  style={{
+                    borderColor: "var(--color-rule)",
+                    color: "var(--color-ink-mute)",
+                  }}
+                >
+                  No restriction. Any IP can use this key.
+                </span>
+              ) : (
+                cidrDraft.map((entry) => (
+                  <span
+                    key={entry}
+                    className="text-[12px] px-2 py-1 rounded border inline-flex items-center gap-1.5"
+                    style={{ borderColor: "var(--color-rule)" }}
+                  >
+                    <code>{entry}</code>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${entry}`}
+                      onClick={() => onRemoveCidr(entry)}
+                      className="inline-flex"
+                      style={{ color: "var(--color-ink-mute)" }}
+                    >
+                      <Trash size={12} weight="duotone" />
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={cidrInput}
+                onChange={(e) => setCidrInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onAddCidr();
+                  }
+                }}
+                placeholder="203.0.113.0/24 or 2001:db8::/32"
+                aria-label="New IP or CIDR"
+                className="text-[12px] px-2 py-1 rounded border min-w-[18rem]"
+                style={{
+                  borderColor: "var(--color-rule)",
+                  background: "transparent",
+                  color: "var(--color-ink)",
+                }}
+              />
+              <button
+                type="button"
+                onClick={onAddCidr}
+                disabled={!cidrInput.trim()}
+                className="text-[12px] px-2.5 py-1 rounded border inline-flex items-center gap-1.5 disabled:opacity-50"
+                style={{ borderColor: "var(--color-rule)" }}
+              >
+                <Plus size={12} weight="duotone" /> Add
+              </button>
+              <button
+                type="button"
+                onClick={() => onSaveCidrs(cidrDraft)}
+                disabled={!cidrDirty || cidrSaving}
+                className="text-[12px] px-2.5 py-1 rounded inline-flex items-center gap-1.5 disabled:opacity-50"
+                style={{
+                  background: "var(--color-cue, #3b82f6)",
+                  color: "white",
+                }}
+              >
+                {cidrSaving ? "Saving..." : "Save allowlist"}
+              </button>
+              {cidrDraft.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => onSaveCidrs([])}
+                  disabled={cidrSaving}
+                  className="text-[12px] px-2.5 py-1 rounded border inline-flex items-center gap-1.5 disabled:opacity-50"
+                  style={{ borderColor: "var(--color-rule)", color: "var(--color-ink-mute)" }}
+                >
+                  Clear restriction
+                </button>
+              ) : null}
+            </div>
+
+            {cidrError ? (
+              <p className="mt-2 text-[12px]" style={{ color: "#b91c1c" }}>
+                {cidrError}
+              </p>
+            ) : null}
+            {cidrFlash ? (
+              <p
+                className="mt-2 text-[12px]"
+                style={{ color: "var(--color-ink-mute)" }}
+              >
+                {cidrFlash}
+              </p>
+            ) : null}
           </section>
 
           {/* Curl */}

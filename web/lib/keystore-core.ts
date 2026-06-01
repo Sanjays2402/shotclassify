@@ -48,6 +48,15 @@ export type StoredKey = {
   workspace_id?: string;
   /** Per-UTC-day request counts, keyed YYYY-MM-DD. Trimmed to ~90 days. */
   daily_usage?: Record<string, number>;
+  /**
+   * Per-key source-IP allowlist. Each entry is a bare IPv4/IPv6 address
+   * or a CIDR range. When non-empty, the key is only accepted from a
+   * request whose client IP matches at least one entry. An empty array
+   * (the default for legacy keys) means "accept from any IP", preserving
+   * backward compatibility. Stored normalized (lower-case, no leading
+   * zeroes, with a network suffix).
+   */
+  allowed_cidrs?: string[];
 };
 
 export const DEFAULT_WORKSPACE_ID = "default";
@@ -270,6 +279,178 @@ export async function setKeyScopesAt(
   const idx = all.findIndex((k) => k.id === id);
   if (idx === -1) return null;
   all[idx] = { ...all[idx], scopes: normalizeScopes(scopes) };
+  await writeAll(file, all);
+  return all[idx];
+}
+
+// ---- Per-key source-IP allowlist ------------------------------------
+//
+// Enterprise customers routinely require that a long-lived programmatic
+// credential only be honored from a fixed egress (a CI runner pool, a
+// bastion, a corporate NAT). The allowlist is enforced at the same
+// authentication boundary that verifies the key, so a leaked token alone
+// is not enough to drive the API from a laptop on a coffee-shop network.
+
+const MAX_ALLOWED_CIDRS = 64;
+
+function parseIPv4(addr: string): number[] | null {
+  const parts = addr.split(".");
+  if (parts.length !== 4) return null;
+  const out: number[] = [];
+  for (const p of parts) {
+    if (!/^\d{1,3}$/.test(p)) return null;
+    const n = Number(p);
+    if (n < 0 || n > 255) return null;
+    out.push(n);
+  }
+  return out;
+}
+
+function parseIPv6(addr: string): number[] | null {
+  // Strip optional zone id (e.g. fe80::1%eth0).
+  const noZone = addr.split("%")[0];
+  // Handle embedded IPv4 in the last 32 bits, e.g. ::ffff:1.2.3.4.
+  const v4Match = noZone.match(/(.*:)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  let normalized = noZone;
+  if (v4Match) {
+    const v4 = parseIPv4(v4Match[2]);
+    if (!v4) return null;
+    const hi = ((v4[0] << 8) | v4[1]).toString(16);
+    const lo = ((v4[2] << 8) | v4[3]).toString(16);
+    normalized = `${v4Match[1]}${hi}:${lo}`;
+  }
+  const halves = normalized.split("::");
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const explicit = halves.length === 1 ? left : [];
+  const groups = halves.length === 1 ? explicit : [...left, ...right];
+  for (const g of groups) {
+    if (g === "" || g.length > 4 || !/^[0-9a-fA-F]+$/.test(g)) return null;
+  }
+  if (halves.length === 1 && groups.length !== 8) return null;
+  if (halves.length === 2 && left.length + right.length > 8) return null;
+  const filler = halves.length === 2 ? 8 - (left.length + right.length) : 0;
+  const full: number[] = [];
+  for (const g of left) full.push(parseInt(g || "0", 16));
+  for (let i = 0; i < filler; i++) full.push(0);
+  for (const g of right) full.push(parseInt(g || "0", 16));
+  if (full.length !== 8) return null;
+  // Return as 16 bytes.
+  const bytes: number[] = [];
+  for (const g of full) {
+    bytes.push((g >> 8) & 0xff, g & 0xff);
+  }
+  return bytes;
+}
+
+function parseAddress(addr: string): { bytes: number[]; bits: number } | null {
+  const v4 = parseIPv4(addr);
+  if (v4) return { bytes: v4, bits: 32 };
+  if (addr.includes(":")) {
+    const v6 = parseIPv6(addr);
+    if (v6) return { bytes: v6, bits: 128 };
+  }
+  return null;
+}
+
+export function normalizeCidr(entry: string): string | null {
+  if (typeof entry !== "string") return null;
+  const raw = entry.trim().toLowerCase();
+  if (!raw) return null;
+  const slash = raw.indexOf("/");
+  const addrPart = slash === -1 ? raw : raw.slice(0, slash);
+  const suffix = slash === -1 ? null : raw.slice(slash + 1);
+  const parsed = parseAddress(addrPart);
+  if (!parsed) return null;
+  let prefix = parsed.bits;
+  if (suffix !== null) {
+    if (!/^\d{1,3}$/.test(suffix)) return null;
+    prefix = Number(suffix);
+    if (prefix < 0 || prefix > parsed.bits) return null;
+  }
+  // Render canonical form. For IPv4 we use dotted; for IPv6 we use the
+  // simple colon-grouped form (not the fully compressed :: form, to keep
+  // round-trips stable across edits).
+  if (parsed.bits === 32) {
+    return `${parsed.bytes.join(".")}/${prefix}`;
+  }
+  const groups: string[] = [];
+  for (let i = 0; i < 16; i += 2) {
+    groups.push(((parsed.bytes[i] << 8) | parsed.bytes[i + 1]).toString(16));
+  }
+  return `${groups.join(":")}/${prefix}`;
+}
+
+export function normalizeCidrs(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of input) {
+    const norm = normalizeCidr(typeof raw === "string" ? raw : "");
+    if (norm === null) {
+      throw new Error(
+        `Not a valid IP or CIDR: ${String(raw)}. Use forms like 203.0.113.4 or 2001:db8::/32.`,
+      );
+    }
+    if (!seen.has(norm)) {
+      seen.add(norm);
+      out.push(norm);
+    }
+  }
+  if (out.length > MAX_ALLOWED_CIDRS) {
+    throw new Error(`Too many entries (max ${MAX_ALLOWED_CIDRS}).`);
+  }
+  return out;
+}
+
+function matchPrefix(addrBytes: number[], netBytes: number[], prefix: number): boolean {
+  if (addrBytes.length !== netBytes.length) return false;
+  let remaining = prefix;
+  for (let i = 0; i < addrBytes.length && remaining > 0; i++) {
+    if (remaining >= 8) {
+      if (addrBytes[i] !== netBytes[i]) return false;
+      remaining -= 8;
+    } else {
+      const mask = (0xff << (8 - remaining)) & 0xff;
+      if ((addrBytes[i] & mask) !== (netBytes[i] & mask)) return false;
+      remaining = 0;
+    }
+  }
+  return true;
+}
+
+export function ipAllowed(
+  key: { allowed_cidrs?: string[] },
+  clientIp: string | null,
+): boolean {
+  const list = key.allowed_cidrs ?? [];
+  if (list.length === 0) return true; // unrestricted (legacy default)
+  if (!clientIp) return false;
+  const parsed = parseAddress(clientIp.trim());
+  if (!parsed) return false;
+  for (const entry of list) {
+    const slash = entry.indexOf("/");
+    const addr = slash === -1 ? entry : entry.slice(0, slash);
+    const prefix = slash === -1 ? parsed.bits : Number(entry.slice(slash + 1));
+    const net = parseAddress(addr);
+    if (!net) continue;
+    if (net.bytes.length !== parsed.bytes.length) continue;
+    if (matchPrefix(parsed.bytes, net.bytes, prefix)) return true;
+  }
+  return false;
+}
+
+export async function setKeyAllowedCidrsAt(
+  file: string,
+  id: string,
+  cidrs: unknown,
+): Promise<StoredKey | null> {
+  const normalized = normalizeCidrs(cidrs); // throws on bad input
+  const all = await readAll(file);
+  const idx = all.findIndex((k) => k.id === id);
+  if (idx === -1) return null;
+  all[idx] = { ...all[idx], allowed_cidrs: normalized };
   await writeAll(file, all);
   return all[idx];
 }

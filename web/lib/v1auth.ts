@@ -2,7 +2,7 @@
 // Centralizes API-key extraction, validation, and structured error envelopes.
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAndTouch, hasScope, workspaceOf, type StoredKey, type KeyScope } from "@/lib/keystore";
+import { verifyAndTouch, hasScope, workspaceOf, ipAllowed, type StoredKey, type KeyScope } from "@/lib/keystore";
 import { enforce, snapshotFor } from "@/lib/ratelimit";
 
 export const UPSTREAM_API =
@@ -16,6 +16,25 @@ export function extractToken(req: NextRequest): string | null {
   const xk = req.headers.get("x-api-key");
   if (xk) return xk;
   return null;
+}
+
+/**
+ * Best-effort source IP for an inbound request. Honours the first entry of
+ * X-Forwarded-For when present (per RFC 7239 conventions) and falls back to
+ * the connection-level address Next.js exposes. Returns null when no IP can
+ * be determined, in which case an allowlist-protected key denies access.
+ */
+export function clientIp(req: NextRequest): string | null {
+  const xff = req.headers.get("x-forwarded-for");
+  if (xff) {
+    const first = xff.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  const real = req.headers.get("x-real-ip");
+  if (real) return real.trim();
+  // NextRequest exposes `.ip` on some runtimes; tolerate its absence.
+  const maybe = (req as unknown as { ip?: string | null }).ip;
+  return maybe ?? null;
 }
 
 export function v1Error(
@@ -52,6 +71,14 @@ export async function authenticate(
       403,
       "insufficient_scope",
       `This API key is missing the '${requiredScope}' scope.`,
+    );
+  }
+  const ip = clientIp(req);
+  if (!ipAllowed(key, ip)) {
+    return v1Error(
+      403,
+      "ip_not_allowed",
+      `This API key is restricted to a fixed source-IP allowlist and the calling address${ip ? ` (${ip})` : ""} is not in it.`,
     );
   }
   const decision = await enforce(workspaceOf(key), key.id);

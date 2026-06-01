@@ -2,6 +2,26 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: per-API-key source-IP allowlist
+
+Security questionnaires from regulated buyers almost always include the question "can you pin a long-lived programmatic credential to a specific egress range so a leaked token alone is not enough to drive the API." ShotClassify now ships that as a first-class control. Every `sk_live_*` key has an `allowed_cidrs` field, an optional list of bare IPs or CIDR ranges (IPv4 and IPv6). An empty list, the default for legacy keys, preserves the existing "accept from any IP" behaviour; once one or more entries are set, the same authentication boundary that validates the key compares the resolved client IP (honouring `X-Forwarded-For` and `X-Real-IP`) and rejects with `403 ip_not_allowed` when the request does not match. Enforcement is wired into both the shared `authenticate()` helper used by `/v1/usage`, `/v1/shots`, and `/v1/webhooks`, and the standalone `/v1/classify` handler, so there is no `/v1/*` route that an out-of-range request can slip through. Workspace admins manage the list per key under `/keys/<id>` with add, remove, save, and clear actions; the panel surfaces the current restriction at a glance and shows a friendly empty state when the key is unrestricted. Inputs are normalized (lower-cased, prefix-validated, deduplicated, capped at 64 entries) and bad entries are rejected with a 422 that names the offending value. Coverage in `web/lib/key-cidr-allowlist.test.mts` proves IPv4 and IPv6 normalization, dedupe, prefix matching, that a verified key from an out-of-range IP is denied at the choke point, and that an invalid input leaves the persisted allowlist untouched.
+
+Try it locally:
+
+```
+cd web && npm run dev   # Next.js dashboard on :3000
+# In the dashboard: Keys -> pick a key -> Source IP allowlist -> add 203.0.113.0/24 -> Save
+# Or via the API:
+curl -s -X PATCH http://localhost:3000/api/keys/<key-id> \
+  -H 'content-type: application/json' \
+  -d '{"allowed_cidrs":["203.0.113.0/24","2001:db8::/32"]}'
+# Then a call from outside the range fails closed:
+curl -i -H "Authorization: Bearer sk_live_..." \
+  -H "X-Forwarded-For: 198.51.100.7" \
+  http://localhost:3000/v1/usage
+# => HTTP/1.1 403 ... "code":"ip_not_allowed"
+```
+
 ## What's new: API scope catalog and credential introspection
 
 Enterprise procurement reviewers consistently block deals on a single question: show us, in one place, every permission your API can issue, what each one grants, what it does not, and which built-in roles include it. ShotClassify now exposes that catalog as a first-class endpoint. `GET /v1/scopes` returns the canonical list (id, title, description, mutating flag, default roles) backed by `shotclassify_store.scope_catalog`, which is also the single source of truth that `VALID_SCOPES` validates against at API-key creation time, so a new scope cannot ship without a documented entry. A companion `GET /v1/auth/introspect` returns RFC 7662 style data for the calling credential only: principal, tenant binding, role, raw scopes, scopes hydrated against the catalog (legacy or removed scopes are flagged `unknown: true`), credential type, key id, label, last-used and expiry timestamps, and the propagated request id. Introspection deliberately does not accept a token parameter, so the endpoint cannot be turned into a credential oracle. A new admin UI at `/settings/scopes` renders the catalog and the active credential side by side so reviewers and on-call engineers can answer "what can this key actually do" in one click. Coverage in `tests/test_scope_catalog.py` proves the catalog enumerates every scope the store accepts, requires auth, returns the calling key's tenant and scopes, hydrates unknown scopes for legacy keys, and refuses to leak tenant B when a tenant-A-bound key passes `X-Tenant: B`.
