@@ -304,6 +304,19 @@ def create_user(payload: ScimUserIn, request: Request) -> JSONResponse:
     if existing_role is not None:
         # SCIM says POST of an existing resource is 409.
         return _scim_error(409, f"User '{principal}' already provisioned.", "uniqueness")
+    # Per-tenant allowed-email-domains policy: enforced for SCIM so an
+    # IdP cannot push personal addresses into a regulated workspace.
+    from shotclassify_store.tenant_settings import (
+        email_matches_allowed_domains,
+        get_allowed_invite_domains,
+    )
+    allowed_domains = get_allowed_invite_domains(tenant_id)
+    if allowed_domains and not email_matches_allowed_domains(principal, allowed_domains):
+        return _scim_error(
+            400,
+            f"Email '{principal}' is not in this workspace's allowed-invite domains.",
+            "invalidValue",
+        )
     try:
         record = memberships_store.upsert_member(
             tenant_id=tenant_id,

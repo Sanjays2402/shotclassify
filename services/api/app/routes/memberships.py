@@ -22,7 +22,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from shotclassify_store import memberships_store
-from shotclassify_store.memberships import SeatLimitExceeded
+from shotclassify_store.memberships import InviteDomainNotAllowed, SeatLimitExceeded
 
 from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.mfa import require_mfa_step_up
@@ -189,6 +189,16 @@ def create_invitation(payload: CreateInvitationRequest, request: Request) -> dic
                 "message": str(exc),
                 "seat_limit": exc.limit,
                 "seats_in_use": exc.in_use,
+            },
+        ) from exc
+    except InviteDomainNotAllowed as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invite_domain_not_allowed",
+                "message": str(exc),
+                "email": exc.email,
+                "allowed_domains": exc.allowed,
             },
         ) from exc
     except ValueError as exc:

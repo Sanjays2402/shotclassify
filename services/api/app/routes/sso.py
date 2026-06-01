@@ -33,6 +33,8 @@ from shotclassify_common import get_settings
 from shotclassify_store import tenant_for_sso_domain
 from shotclassify_store.memberships import role_for_member, upsert_member
 from shotclassify_store.tenant_settings import (
+    email_matches_allowed_domains,
+    get_allowed_invite_domains,
     get_sso_config,
     get_tenant_oidc,
     get_tenant_oidc_secret,
@@ -334,11 +336,13 @@ def callback(
         if tenant_id and email and "@" in email:
             domain_part = email.split("@", 1)[1].lower()
             cfg = get_sso_config(tenant_id)
+            allowed_domains = get_allowed_invite_domains(tenant_id)
             if (
                 cfg.auto_join_role
                 and cfg.domain
                 and cfg.domain == domain_part
                 and role_for_member(tenant_id, principal) is None
+                and email_matches_allowed_domains(email, allowed_domains)
             ):
                 upsert_member(
                     tenant_id=tenant_id,
@@ -376,11 +380,13 @@ def _test_issue(request: Request):
         if tenant_id and principal and "@" in principal:
             domain_part = principal.split("@", 1)[1].lower()
             cfg = get_sso_config(tenant_id)
+            allowed_domains = get_allowed_invite_domains(tenant_id)
             if (
                 cfg.auto_join_role
                 and cfg.domain
                 and cfg.domain == domain_part
                 and role_for_member(tenant_id, principal) is None
+                and email_matches_allowed_domains(principal, allowed_domains)
             ):
                 upsert_member(
                     tenant_id=tenant_id,

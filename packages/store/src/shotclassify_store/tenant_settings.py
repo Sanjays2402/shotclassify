@@ -1881,3 +1881,129 @@ def set_cmek_reference(
         updated_at=now,
         updated_by=updated_by,
     )
+
+
+# --- Allowed email domains for invitations + SSO auto-join ----------------
+
+ALLOWED_INVITE_DOMAINS_MAX = 64
+
+
+def _normalize_email_domain(raw: str) -> str:
+    """Validate and lowercase a single email domain.
+
+    Accepts the bare domain (``acme.com``) and the leading-dot wildcard
+    form (``.acme.com``) which also matches every sub-domain. Rejects
+    anything that contains ``@``, whitespace, scheme, or path so callers
+    cannot smuggle a URL or a full email address into the policy.
+    """
+    if not isinstance(raw, str):
+        raise ValueError(f"email domain must be a string: {raw!r}")
+    s = raw.strip().lower()
+    if not s:
+        raise ValueError("email domain cannot be empty")
+    if len(s) > 253:
+        raise ValueError(f"email domain too long: {s!r}")
+    if "@" in s or "/" in s or ":" in s or " " in s:
+        raise ValueError(f"invalid email domain: {raw!r}")
+    body = s[1:] if s.startswith(".") else s
+    if not body or "." not in body:
+        raise ValueError(f"email domain must include a TLD: {raw!r}")
+    for label in body.split("."):
+        if not label:
+            raise ValueError(f"empty label in email domain: {raw!r}")
+        if not all(c.isalnum() or c == "-" for c in label):
+            raise ValueError(f"invalid character in email domain: {raw!r}")
+        if label.startswith("-") or label.endswith("-"):
+            raise ValueError(f"label cannot start or end with hyphen: {raw!r}")
+    return s
+
+
+def _normalize_email_domains(raw: list[str] | None) -> list[str]:
+    if not raw:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        norm = _normalize_email_domain(item)
+        if norm not in seen:
+            seen.add(norm)
+            out.append(norm)
+    return out
+
+
+def get_allowed_invite_domains(tenant_id: str) -> list[str]:
+    """Return the allowed-email-domains policy for ``tenant_id``.
+
+    Empty list means no policy: any email may be invited or auto-joined.
+    """
+    if not tenant_id:
+        return []
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return []
+        raw = getattr(row, "allowed_invite_domains", None)
+        if not raw:
+            return []
+        return list(raw)
+
+
+def set_allowed_invite_domains(
+    tenant_id: str, domains: list[str], updated_by: str | None
+) -> list[str]:
+    """Persist the allowed-email-domains policy and return it normalized."""
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    normalized = _normalize_email_domains(domains)
+    if len(normalized) > ALLOWED_INVITE_DOMAINS_MAX:
+        raise ValueError(
+            f"at most {ALLOWED_INVITE_DOMAINS_MAX} allowed-invite domains are supported per tenant"
+        )
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                allowed_invite_domains=normalized,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.allowed_invite_domains = normalized
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return normalized
+
+
+def email_matches_allowed_domains(email: str, allowed: list[str]) -> bool:
+    """Return True when ``email``'s domain matches the allowlist.
+
+    An empty allowlist means "no policy" and returns True so callers can
+    enforce uniformly without a None check. Entries beginning with a dot
+    (``.acme.com``) match every sub-domain in addition to the bare label.
+    """
+    if not allowed:
+        return True
+    if not email or "@" not in email:
+        return False
+    domain = email.rsplit("@", 1)[1].strip().lower()
+    if not domain:
+        return False
+    for entry in allowed:
+        if entry.startswith("."):
+            suffix = entry  # ".acme.com"
+            bare = entry[1:]
+            if domain == bare or domain.endswith(suffix):
+                return True
+        elif domain == entry:
+            return True
+    return False

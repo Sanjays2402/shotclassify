@@ -21,6 +21,10 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from .db import InvitationRow, MembershipRow, get_session
+from .tenant_settings import (
+    email_matches_allowed_domains,
+    get_allowed_invite_domains,
+)
 
 VALID_ROLES = ("admin", "operator", "viewer")
 DEFAULT_INVITE_TTL_DAYS = 7
@@ -46,6 +50,22 @@ class SeatLimitExceeded(Exception):
         super().__init__(
             f"Workspace {tenant_id!r} has used {in_use}/{limit} seats. "
             "Revoke a pending invite, remove a member, or raise the seat limit."
+        )
+
+
+class InviteDomainNotAllowed(Exception):
+    """Raised when an invitation email's domain is not on the tenant's
+    allowed-invite-domains policy. The API layer maps this to HTTP 422
+    with a structured payload (``error: invite_domain_not_allowed``,
+    the offending email, and the allowed list) so the dashboard can
+    point the admin at the exact policy that blocked the invite."""
+
+    def __init__(self, *, email: str, allowed: list[str]) -> None:
+        self.email = email
+        self.allowed = allowed
+        super().__init__(
+            f"Email {email!r} is not in this workspace's allowed-invite domains: "
+            + ", ".join(allowed)
         )
 
 
@@ -418,6 +438,13 @@ def create_invitation(
         raise ValueError("A valid email address is required.")
     if not tenant_id:
         raise ValueError("tenant_id is required.")
+    # Per-tenant allowed-email-domains policy. When set, an invitation
+    # whose email domain is not on the list is refused at the store
+    # layer (not just the route layer) so SCIM, the SSO auto-join, and
+    # any future caller all share one enforcement point.
+    allowed = get_allowed_invite_domains(tenant_id)
+    if allowed and not email_matches_allowed_domains(email, allowed):
+        raise InviteDomainNotAllowed(email=email, allowed=list(allowed))
     token = _new_token()
     now = datetime.now(UTC)
     row = InvitationRow(

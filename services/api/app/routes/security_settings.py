@@ -59,6 +59,9 @@ from shotclassify_store import (
     CMEK_MODES,
     get_cmek_reference,
     set_cmek_reference,
+    ALLOWED_INVITE_DOMAINS_MAX,
+    get_allowed_invite_domains,
+    set_allowed_invite_domains,
 )
 from datetime import timedelta
 from shotclassify_store.sessions import SESSION_TTL, clip_active_for_tenant
@@ -1048,3 +1051,57 @@ def lift_freeze_route(request: Request) -> dict:
     actor = getattr(request.state, "principal", None)
     state = lift_freeze(tenant_id, lifted_by=actor)
     return state.to_dict()
+
+
+@router.get("/invite-domains", dependencies=[require_role("admin")])
+def get_invite_domains_route(request: Request) -> dict:
+    """Return the per-tenant allowed-email-domains policy.
+
+    Empty list means no policy: any email may be invited or auto-joined
+    via SSO / SCIM. When non-empty, every invite, SSO auto-join, and
+    SCIM provision is gated by domain match.
+    """
+    tenant_id = _tenant(request)
+    return {
+        "tenant_id": tenant_id,
+        "allowed_domains": get_allowed_invite_domains(tenant_id),
+        "max_entries": ALLOWED_INVITE_DOMAINS_MAX,
+    }
+
+
+@router.put(
+    "/invite-domains",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_invite_domains_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Replace the allowed-email-domains policy for the caller's tenant.
+
+    Send ``{"allowed_domains": []}`` to disable enforcement and accept
+    any email again. Entries beginning with a leading dot match every
+    sub-domain (``.acme.com`` matches ``ops.acme.com``).
+    """
+    tenant_id = _tenant(request)
+    raw = payload.get("allowed_domains")
+    if not isinstance(raw, list):
+        raise HTTPException(
+            422,
+            "Field 'allowed_domains' must be a list of email domain strings.",
+        )
+    if len(raw) > ALLOWED_INVITE_DOMAINS_MAX:
+        raise HTTPException(
+            422,
+            f"At most {ALLOWED_INVITE_DOMAINS_MAX} allowed-invite domains are supported per tenant.",
+        )
+    actor = getattr(request.state, "principal", None)
+    try:
+        normalized = set_allowed_invite_domains(tenant_id, raw, updated_by=actor)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {
+        "tenant_id": tenant_id,
+        "allowed_domains": normalized,
+        "max_entries": ALLOWED_INVITE_DOMAINS_MAX,
+    }

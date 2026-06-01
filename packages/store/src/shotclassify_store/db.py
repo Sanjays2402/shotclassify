@@ -397,6 +397,15 @@ class TenantSettingsRow(Base):
     freeze_engaged_by: Mapped[str | None] = mapped_column(
         String(128), nullable=True
     )
+    # Per-tenant allowed email domains for invitations and SSO auto-join.
+    # When set (non-empty), ``memberships_store.create_invitation`` and
+    # the SSO auto-join path reject any email whose domain is not on the
+    # list. NULL or empty list = no policy (legacy ``any email`` behaviour).
+    # Procurement control (SOC 2 CC6.2) that prevents an admin from inviting
+    # a personal gmail address into a regulated workspace.
+    allowed_invite_domains: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -1246,6 +1255,26 @@ def init_db() -> None:
                 if "auth_lockout_cooldown_minutes" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN auth_lockout_cooldown_minutes INTEGER"
+                    ))
+                if "freeze_mode" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN freeze_mode BOOLEAN NOT NULL DEFAULT 0"
+                    ))
+                if "freeze_reason" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN freeze_reason VARCHAR(256)"
+                    ))
+                if "freeze_engaged_at" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN freeze_engaged_at TIMESTAMP"
+                    ))
+                if "freeze_engaged_by" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN freeze_engaged_by VARCHAR(128)"
+                    ))
+                if "allowed_invite_domains" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN allowed_invite_domains JSON"
                     ))
     except Exception:
         # Best-effort. Real schema management lives in alembic.
