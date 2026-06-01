@@ -28,6 +28,7 @@ from shotclassify_store import (
     get_mfa_policy,
     get_privacy_settings,
     get_retention_days,
+    get_audit_retention_days,
     get_session_policy,
     get_sso_config,
     get_tenant_oidc,
@@ -41,6 +42,9 @@ from shotclassify_store import (
     set_mfa_policy,
     set_privacy_settings,
     set_retention_days,
+    set_audit_retention_days,
+    purge_expired_audit_for_tenant,
+    MAX_AUDIT_RETENTION_DAYS,
     set_session_policy,
     set_session_idle_policy,
     set_sso_config,
@@ -184,6 +188,78 @@ def run_retention_route(request: Request) -> dict:
     """
     tenant_id = _tenant(request)
     result = purge_expired_for_tenant(tenant_id)
+    return result.to_dict()
+
+
+@router.get("/audit-retention", dependencies=[require_role("admin")])
+def get_audit_retention_route(request: Request) -> dict:
+    """Read the per-tenant audit-log retention window.
+
+    ``audit_retention_days`` is independent of the classifications retention
+    window (``retention_days``) because enterprise customers negotiate the
+    two separately: short GDPR windows (90 to 365 days) for data
+    minimisation vs long SOC 2 / HIPAA windows (>= 365 days) for forensics.
+    """
+    tenant_id = _tenant(request)
+    days = get_audit_retention_days(tenant_id)
+    return {
+        "tenant_id": tenant_id,
+        "audit_retention_days": days,
+        "enabled": bool(days),
+        "max_days": MAX_AUDIT_RETENTION_DAYS,
+    }
+
+
+@router.put(
+    "/audit-retention",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_audit_retention_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Update the per-tenant audit-log retention window.
+
+    Accepts ``{"audit_retention_days": int|null}``. ``null`` or ``0``
+    disables the policy (keep audit data indefinitely). Lowering the
+    window does not retroactively purge: the next scheduled or manual
+    run does that. The change is recorded in the audit log via the
+    middleware along with the actor, request id, client IP, and tenant.
+    """
+    tenant_id = _tenant(request)
+    if "audit_retention_days" not in payload:
+        raise HTTPException(
+            422, "Field 'audit_retention_days' is required (int or null)."
+        )
+    actor = getattr(request.state, "principal", None)
+    try:
+        days = set_audit_retention_days(
+            tenant_id, payload["audit_retention_days"], updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {
+        "tenant_id": tenant_id,
+        "audit_retention_days": days,
+        "enabled": bool(days),
+        "max_days": MAX_AUDIT_RETENTION_DAYS,
+    }
+
+
+@router.post(
+    "/audit-retention/run",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def run_audit_retention_route(request: Request) -> dict:
+    """Manually trigger an audit-log purge for the caller's tenant.
+
+    Same tenant scoping rules as the scheduled job. Rows in other
+    tenants cannot be touched by this call even when the caller has
+    admin role. Tenants on a legal hold are skipped and the response
+    reports ``held=true``.
+    """
+    tenant_id = _tenant(request)
+    result = purge_expired_audit_for_tenant(tenant_id)
     return result.to_dict()
 
 

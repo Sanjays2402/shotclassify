@@ -180,6 +180,12 @@ class TenantSettingsRow(Base):
     # Enforced per tenant so different customers can pick their own
     # compliance window without code changes.
     retention_days: Mapped[int | None] = mapped_column(nullable=True)
+    # Audit-log retention policy: audit rows older than ``audit_retention_days``
+    # are hard-deleted by the audit-retention purge. NULL or <= 0 means keep
+    # forever. Independent of ``retention_days`` because enterprise contracts
+    # negotiate the audit window and the classification window separately
+    # (short GDPR audit windows vs long SOC2/HIPAA audit windows).
+    audit_retention_days: Mapped[int | None] = mapped_column(nullable=True)
     # SSO (OIDC) config and enforcement. When ``sso_enforced`` is True the
     # auth middleware rejects any session for this tenant that was not
     # minted via the SSO callback. ``sso_domain`` is the email domain that

@@ -33,6 +33,8 @@ from shotclassify_common import get_logger, get_settings
 from shotclassify_store import (
     AuditRepository,
     list_tenants_with_retention,
+    list_tenants_with_audit_retention,
+    purge_expired_audit_for_tenant,
     purge_expired_for_tenant,
 )
 
@@ -87,6 +89,62 @@ def run_once(*, now: datetime | None = None) -> list[dict]:
                 tenant_id=tenant_id,
                 removed=res.removed,
                 retention_days=res.retention_days,
+            )
+    # Audit-log retention runs in the same pass so operators only need to
+    # schedule one worker. The two policies are independent: a tenant may
+    # set only the audit window, only the classifications window, both,
+    # or neither.
+    audit_tenants = list_tenants_with_audit_retention()
+    for tenant_id in audit_tenants:
+        try:
+            ares = purge_expired_audit_for_tenant(tenant_id, now=now)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.exception(
+                "audit_retention_purge_failed",
+                tenant_id=tenant_id,
+                error=str(exc),
+            )
+            results.append(
+                {
+                    "tenant_id": tenant_id,
+                    "error": str(exc),
+                    "removed": 0,
+                    "kind": "audit",
+                }
+            )
+            continue
+        d = ares.to_dict()
+        d["kind"] = "audit"
+        results.append(d)
+        if ares.removed > 0:
+            try:
+                # The purge intentionally breaks the per-tenant audit hash
+                # chain for the deleted window; this audit entry is the
+                # disclosed record of that break so verify_chain reports
+                # an expected, attributable gap rather than an undisclosed
+                # mutation.
+                audit.record(
+                    principal=_SYSTEM_PRINCIPAL,
+                    method="JOB",
+                    path="/internal/audit-retention/purge",
+                    status_code=200,
+                    tenant_id=tenant_id,
+                    extra={
+                        "removed": ares.removed,
+                        "audit_retention_days": ares.audit_retention_days,
+                        "cutoff": ares.cutoff.isoformat(),
+                        "trigger": "scheduler",
+                    },
+                )
+            except Exception:  # pragma: no cover - audit best-effort
+                log.exception(
+                    "audit_retention_audit_failed", tenant_id=tenant_id
+                )
+            log.info(
+                "audit_retention_purge",
+                tenant_id=tenant_id,
+                removed=ares.removed,
+                audit_retention_days=ares.audit_retention_days,
             )
     return results
 

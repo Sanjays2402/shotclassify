@@ -2,6 +2,29 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
+## What's new: per-workspace audit log retention
+
+Procurement reviewers ask two opposite questions about audit logs: GDPR-focused buyers want a documented upper bound ("prove you delete this within 365 days"), SOC 2 and HIPAA-focused buyers want a documented lower bound ("prove you keep this for at least three years"). Conflating those two clauses with the existing classifications retention window blocks both deals. shotclassify now exposes audit retention as a separate per-workspace policy. Admins set `audit_retention_days` via `PUT /v1/settings/security/audit-retention` (admin role, MFA step-up), where `null` or `0` keeps audit data indefinitely (the default and the SOC 2 stance) and a positive integer between 1 and 3650 schedules the next purge cutoff. `POST /v1/settings/security/audit-retention/run` triggers an immediate tenant-scoped purge for operators who just lowered the window; the worker's retention scheduler now runs the audit purge in the same pass as the classifications purge so no second cron is needed. The purge intentionally breaks the per-tenant audit hash chain for the deleted window and writes its own audit row recording the cutoff, the row count, and the trigger so the chain verifier reports an attributable, disclosed gap rather than tampering. Tenants on a legal hold are skipped and the response surfaces `held=true`. Cross-tenant isolation is enforced at the query layer: an admin running a purge in their own workspace cannot touch another workspace's audit rows even when those rows are older than their own window. Manage it interactively at `Settings -> Security -> Audit retention`. Coverage in `tests/test_audit_retention_policy.py` exercises RBAC on read and write, input validation, the legal-hold short-circuit, and the cross-tenant isolation property.
+
+Try it (local):
+
+```bash
+# Read current policy (admin)
+curl -s -H "X-API-Key: $ADMIN_KEY" \
+  http://127.0.0.1:7441/v1/settings/security/audit-retention
+
+# Set a 365-day window (admin + MFA step-up)
+curl -s -X PUT -H "X-API-Key: $ADMIN_KEY" -H "content-type: application/json" \
+  -d '{"audit_retention_days": 365}' \
+  http://127.0.0.1:7441/v1/settings/security/audit-retention
+
+# Manually run the purge for this workspace
+curl -s -X POST -H "X-API-Key: $ADMIN_KEY" \
+  http://127.0.0.1:7441/v1/settings/security/audit-retention/run
+```
+
+Web UI: <http://127.0.0.1:3000/settings/security/audit-retention>
+
 ## What's new: data subject access requests (DSAR) for GDPR and CCPA
 
 When an EU or California data subject emails a buyer's privacy desk asking "what data does your shot-classifier vendor hold on me, and please delete it," the buyer needs a documented, auditable place to forward that request. shotclassify now ships one. A public `POST /v1/trust/dsar` lets the data subject (or their authorized agent) file a request without an account by naming the target `tenant_id`, picking `access`, `erasure`, or `rectification`, and supplying their email. The endpoint is exempt from auth, the per-tenant IP allowlist, and origin gating, the same way `/v1/trust/incidents` and `/v1/trust/subprocessors` already are, so a stranger on any network can submit. Submitters see only their ticket id, the receipt timestamp, and the statutory deadline (30 days, GDPR Article 12 §3); the full record is visible only to admins of the named tenant so prior requests cannot be enumerated. Admins of the workspace get `GET /v1/dsar` with status filters and per-status counts plus an `overdue` counter, `GET /v1/dsar/{id}` for the full record (state history, IP at intake, fulfillment summary), `PATCH /v1/dsar/{id}` to transition along `received -> verified -> fulfilled -> closed` (with `rejected` as a terminal branch), `GET /v1/dsar/{id}/footprint` to preview how many classifications and audit rows match the subject inside this tenant, and `POST /v1/dsar/{id}/fulfill` to either generate the Article 15 access export or perform the Article 17 erasure. Erasure hard-deletes matching classifications and intentionally retains audit-log rows under Article 17(3)(b) for legal-claims and our own SOC2 CC7.2 obligations; the fulfillment summary records both numbers. Every admin mutation requires the `admin` role and MFA step-up, flows through `AuditLogMiddleware` so the actor, IP, request id, and timestamp land in the tamper-evident audit chain, and supports `?dry_run=true` for preview. The state machine refuses out-of-order transitions (received -> closed returns 409). Cross-tenant isolation is enforced at the query layer: tenant B asking to read, mutate, or fulfill tenant A's ticket gets 404, not 403, so the existence of the id never leaks. Coverage in `tests/test_dsar.py` exercises public intake, cross-tenant 404 on read/patch/fulfill, the state machine guard, the access-fulfillment lifecycle, and input validation (5 tests).

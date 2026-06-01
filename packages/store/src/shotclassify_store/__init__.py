@@ -46,6 +46,15 @@ from .retention import (
     purge_expired_for_tenant,
     set_retention_days,
 )
+from .audit_retention import (
+    AuditPurgeResult,
+    MAX_AUDIT_RETENTION_DAYS,
+    get_audit_retention_days,
+    list_tenants_with_audit_retention,
+    purge_expired_audit_all_tenants,
+    purge_expired_audit_for_tenant,
+    set_audit_retention_days,
+)
 from . import legal_holds as legal_holds_store
 from .legal_holds import LegalHold, LegalHoldActive, tenant_has_active_hold
 from .db import LegalHoldRow
@@ -230,6 +239,13 @@ __all__ = [
     "purge_expired_for_tenant",
     "purge_expired_all_tenants",
     "list_tenants_with_retention",
+    "AuditPurgeResult",
+    "MAX_AUDIT_RETENTION_DAYS",
+    "get_audit_retention_days",
+    "set_audit_retention_days",
+    "purge_expired_audit_for_tenant",
+    "purge_expired_audit_all_tenants",
+    "list_tenants_with_audit_retention",
     "SsoConfig",
     "TenantOidcConfig",
     "OIDC_DEFAULT_SCOPES",
