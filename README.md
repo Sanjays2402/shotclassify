@@ -291,6 +291,26 @@ curl -s -X DELETE -H "X-API-Key: $ADMIN_KEY" \
 
 UI: open <http://127.0.0.1:3000/settings/security/freeze>.
 
+## What's new: security event webhooks for admin actions
+
+Procurement teams keep asking the same question: "can we get a real-time feed of admin actions in our SIEM?" Audit sinks have always solved that for raw HTTP collectors. The new `security.*` event family lets a workspace owner answer the same question through the existing webhook surface, so a Slack channel, PagerDuty service, or Tines workflow can subscribe with one HMAC-signed endpoint instead of standing up a fresh ingestion path. The audit middleware is the single chokepoint: when a sensitive route returns 2xx, it resolves the `(method, path)` to one of the curated event names (`security.role_changed`, `security.api_key_created`, `security.api_key_revoked`, `security.support_access_granted`, `security.workspace_teardown_scheduled`, `security.sso_config_changed`, `security.session_revoked`, and twelve more) and fans the event out to matching active subscriptions in a daemon thread, so the request path is never blocked on retries or backoff sleeps. The same signing, dual-sign rotation, per-tenant egress allowlist, autodisable circuit breaker, delivery log, and replay UI that protect classification events also protect these. Denied or validation-failed requests never fire an event because the resolver only runs on 2xx, and dry-run mutations are excluded by the same gate. Subscribers may pick any subset of `security.*` events or use `*` to receive everything. Cross-tenant isolation is enforced at dispatch time: a webhook registered against workspace A can never receive workspace B's events because the dispatcher only iterates subscriptions whose `tenant_id` matches the event source. Coverage in `tests/test_webhooks_security_events.py` proves a real signed delivery lands on a local listener for `security.api_key_created`, asserts the `tenant_id` cannot leak across workspaces, and confirms failed admin actions do not emit phantom events.
+
+Try it:
+
+```bash
+export API_KEY=...
+curl -sS http://127.0.0.1:7441/v1/webhooks -H "X-API-Key: $API_KEY" \
+  | jq .allowed_events
+
+WID=$(curl -sS -X POST http://127.0.0.1:7441/v1/webhooks \
+  -H "X-API-Key: $API_KEY" -H "content-type: application/json" \
+  -d '{"url":"https://hooks.example.com/sec","events":["security.api_key_created","security.role_changed","security.support_access_granted"]}' \
+  | jq -r .webhook.id)
+echo "subscribed: $WID"
+```
+
+UI: open <http://127.0.0.1:3000/webhooks> and pick from the security events advertised in `GET /v1/webhooks`.
+
 ## What's new: per-tenant webhook circuit breaker
 
 A failing receiver should not pull the rest of the integration down with it. The new per-tenant policy `webhook_autodisable_threshold` is an opt-in circuit breaker on outbound webhooks. When set to a positive integer N, the dispatcher tracks consecutive failed deliveries per subscription and pauses the subscription the moment the count reaches N. A successful delivery resets the counter, so only sustained failure trips the breaker. Pausing (rather than revoking) preserves the signing secret, event filters, and delivery history, and a manual resume clears `auto_disabled_at`, `auto_disabled_reason`, and the consecutive-failure counter so the next trip starts from a clean state. The threshold is bounded 2 to 10000, NULL means no policy and existing behaviour, and the breaker only ever acts within a single tenant: workspace B's failing subscription cannot affect workspace A's, and B cannot read or set A's policy. The `GET` and `PUT` routes live at `/v1/settings/security/webhook-autodisable`, require the `admin` role, and the `PUT` requires MFA step-up; every change is captured by the standard audit middleware. Coverage in `tests/test_webhook_autodisable.py` proves the threshold fires after exactly N consecutive failures, a success between failures resets the counter, resume clears the auto-disable metadata, cross-tenant policy reads return the caller's empty policy (not the other tenant's), and out-of-range thresholds return `422`.

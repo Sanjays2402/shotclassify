@@ -8,15 +8,89 @@ skipped to keep the table focused on actions worth reviewing.
 """
 from __future__ import annotations
 
+import re
+import threading
 import time
 
 import structlog
 from shotclassify_common import get_settings
 from shotclassify_store import AuditRepository, audit_sinks_store
+from shotclassify_store import webhooks as webhooks_store
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 log = structlog.get_logger(__name__)
+
+
+# (method, compiled-path-regex) -> security event name. The path patterns
+# are anchored against the full request path. Order does not matter; the
+# first match wins. Keep this table tight: any entry here means the audit
+# middleware will fan an event out to webhook subscribers, which is a
+# customer-visible contract.
+_SECURITY_EVENT_TABLE: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    ("PUT", re.compile(r"^/v1/members/[^/]+/role$"), "security.role_changed"),
+    ("POST", re.compile(r"^/v1/invitations$"), "security.member_invited"),
+    ("DELETE", re.compile(r"^/v1/invitations/[^/]+$"), "security.invitation_revoked"),
+    ("DELETE", re.compile(r"^/v1/members/[^/]+$"), "security.member_removed"),
+    ("POST", re.compile(r"^/v1/api-keys$"), "security.api_key_created"),
+    ("DELETE", re.compile(r"^/v1/api-keys/[^/]+$"), "security.api_key_revoked"),
+    ("PATCH", re.compile(r"^/v1/api-keys/[^/]+(/.*)?$"), "security.api_key_updated"),
+    ("DELETE", re.compile(r"^/v1/sessions/[^/]+$"), "security.session_revoked"),
+    ("POST", re.compile(r"^/v1/sessions/revoke-all$"), "security.sessions_revoked_all"),
+    ("POST", re.compile(r"^/v1/sessions/admin/revoke-principal$"), "security.sessions_revoked_all"),
+    ("DELETE", re.compile(r"^/v1/mfa$"), "security.mfa_disabled"),
+    ("PUT", re.compile(r"^/v1/sso/.*"), "security.sso_config_changed"),
+    ("POST", re.compile(r"^/v1/sso/.*"), "security.sso_config_changed"),
+    ("PATCH", re.compile(r"^/v1/sso/.*"), "security.sso_config_changed"),
+    ("DELETE", re.compile(r"^/v1/sso/.*"), "security.sso_config_changed"),
+    ("POST", re.compile(r"^/v1/support-access$"), "security.support_access_granted"),
+    ("DELETE", re.compile(r"^/v1/support-access/[^/]+$"), "security.support_access_revoked"),
+    ("POST", re.compile(r"^/v1/workspace/teardown$"), "security.workspace_teardown_scheduled"),
+    ("DELETE", re.compile(r"^/v1/workspace/teardown$"), "security.workspace_teardown_cancelled"),
+    ("POST", re.compile(r"^/v1/workspace/teardown/execute$"), "security.workspace_teardown_executed"),
+    ("PUT", re.compile(r"^/v1/security/ip-allowlist$"), "security.ip_allowlist_changed"),
+    ("PATCH", re.compile(r"^/v1/security/ip-allowlist$"), "security.ip_allowlist_changed"),
+    ("POST", re.compile(r"^/v1/webhooks$"), "security.webhook_subscription_created"),
+    ("DELETE", re.compile(r"^/v1/webhooks/[^/]+$"), "security.webhook_subscription_revoked"),
+)
+
+
+def _resolve_security_event(method: str, path: str) -> str | None:
+    for m, pat, name in _SECURITY_EVENT_TABLE:
+        if m == method and pat.match(path):
+            return name
+    return None
+
+
+def _fanout_security_event(
+    *,
+    tenant_id: str,
+    event: str,
+    payload: dict,
+    request_id: str | None,
+) -> None:
+    """Fire a security webhook in a background thread so the request path
+    is never blocked on retries or backoff sleeps."""
+    def _run() -> None:
+        try:
+            webhooks_store.dispatch_event(
+                tenant_id=tenant_id,
+                event=event,
+                payload=payload,
+                request_id=request_id,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning(
+                "security_webhook_dispatch_failed",
+                error=str(exc),
+                webhook_event=event,
+                tenant_id=tenant_id,
+            )
+
+    t = threading.Thread(
+        target=_run, name=f"security-webhook:{event}", daemon=True
+    )
+    t.start()
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -105,4 +179,34 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 )
             except Exception as exc:  # pragma: no cover - never break the request path
                 log.warning("audit_sink_dispatch_failed", error=str(exc), path=path)
+        # Per-tenant security event webhook fan-out. Mirrors the SIEM sink
+        # above but targets the customer-facing webhook subscriptions so
+        # buyers can wire admin-action alerts into their own SIEM / Slack
+        # without standing up a separate ingestion endpoint. Only fired on
+        # 2xx responses so a denied or validation-failed request does not
+        # generate a misleading delivery.
+        if (
+            tenant_id
+            and 200 <= response.status_code < 300
+            and not getattr(request.state, "dry_run", False)
+        ):
+            event_name = _resolve_security_event(method, path)
+            if event_name is not None:
+                _fanout_security_event(
+                    tenant_id=tenant_id,
+                    event=event_name,
+                    payload={
+                        "event": event_name,
+                        "tenant_id": tenant_id,
+                        "principal": str(principal),
+                        "method": method,
+                        "path": path,
+                        "status_code": response.status_code,
+                        "request_id": request_id,
+                        "client_ip": client_ip,
+                        "target_id": target_id,
+                        "occurred_at_ms": int(time.time() * 1000),
+                    },
+                    request_id=request_id,
+                )
         return response

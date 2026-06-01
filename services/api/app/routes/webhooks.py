@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from shotclassify_store import webhooks_store
 
 from ..dryrun import dry_run_query, mark_dry_run
@@ -33,8 +33,19 @@ router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
 
 class CreateWebhookRequest(BaseModel):
     url: str = Field(min_length=1, max_length=1024)
-    events: list[Literal["classify.completed", "classify.failed", "*"]]
+    events: list[str] = Field(min_length=1)
     description: str | None = Field(default=None, max_length=255)
+
+    @field_validator("events")
+    @classmethod
+    def _events_allowed(cls, v: list[str]) -> list[str]:
+        bad = [e for e in v if e not in webhooks_store.ALLOWED_EVENTS]
+        if bad:
+            allowed = ", ".join(webhooks_store.ALLOWED_EVENTS)
+            raise ValueError(
+                f"Unknown event(s): {', '.join(bad)}. Allowed: {allowed}"
+            )
+        return v
 
 
 class ReplayRequest(BaseModel):

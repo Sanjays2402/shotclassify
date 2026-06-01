@@ -49,7 +49,39 @@ BACKOFF_BASE_SECONDS = 1
 BACKOFF_MULTIPLIER = 4
 DELIVERY_TIMEOUT_SECONDS = 8.0
 MAX_PAYLOAD_PREVIEW = 512
-ALLOWED_EVENTS = ("classify.completed", "classify.failed", "*")
+# Security event names emitted by the audit middleware. Subscribers may
+# pick any subset (or "*") to receive a tap of high-signal admin actions
+# the moment they land in the audit log. The mapping from (method, path)
+# to event name lives in ``services/api/app/middleware/audit.py`` and is
+# the single chokepoint, so adding a sensitive route only requires a one-
+# line entry there.
+SECURITY_EVENTS = (
+    "security.role_changed",
+    "security.member_invited",
+    "security.member_removed",
+    "security.invitation_revoked",
+    "security.api_key_created",
+    "security.api_key_revoked",
+    "security.api_key_updated",
+    "security.session_revoked",
+    "security.sessions_revoked_all",
+    "security.mfa_disabled",
+    "security.sso_config_changed",
+    "security.support_access_granted",
+    "security.support_access_revoked",
+    "security.workspace_teardown_scheduled",
+    "security.workspace_teardown_cancelled",
+    "security.workspace_teardown_executed",
+    "security.ip_allowlist_changed",
+    "security.webhook_subscription_created",
+    "security.webhook_subscription_revoked",
+)
+ALLOWED_EVENTS = (
+    "classify.completed",
+    "classify.failed",
+    *SECURITY_EVENTS,
+    "*",
+)
 # Synthetic ping event the operator can fire by hand from the dashboard or
 # the public API. It is NEVER raised by the pipeline, and subscriptions do
 # not need to declare it in their event filter to receive it: it is always
