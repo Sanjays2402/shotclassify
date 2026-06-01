@@ -51,6 +51,10 @@ from shotclassify_store import (
     UPLOAD_BYTES_MAX,
     get_upload_size_policy,
     set_upload_size_policy,
+    CMEK_PROVIDERS,
+    CMEK_MODES,
+    get_cmek_reference,
+    set_cmek_reference,
 )
 from datetime import timedelta
 from shotclassify_store.sessions import SESSION_TTL, clip_active_for_tenant
@@ -841,6 +845,65 @@ def put_upload_size_route(
     try:
         cfg = set_upload_size_policy(
             tenant_id, max_upload_bytes=raw, updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return cfg.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant Customer-Managed Encryption Key (CMEK) reference
+# ---------------------------------------------------------------------------
+
+
+@router.get("/cmek", dependencies=[require_role("admin")])
+def get_cmek_route(request: Request) -> dict:
+    """Return the workspace CMEK declaration.
+
+    Procurement and security reviewers use this to confirm which key in
+    which customer KMS encrypts the workspace's data at rest and which
+    enforcement mode is active.
+    """
+    tenant_id = _tenant(request)
+    return get_cmek_reference(tenant_id).to_dict()
+
+
+@router.put(
+    "/cmek",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_cmek_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Update the workspace Customer-Managed Encryption Key declaration.
+
+    Body: ``{"provider": str|null, "key_uri": str|null, "mode": str}``.
+    ``mode`` is one of ``disabled``, ``advisory``, ``required``. When
+    ``mode != "disabled"`` both ``provider`` and ``key_uri`` are
+    required; the URI prefix is sanity-checked against the provider
+    (e.g. ``arn:aws:kms:`` for ``aws-kms``). The change is recorded by
+    the audit middleware with the actor, IP, user agent, and request
+    id; admin role and a fresh MFA step-up are mandatory because this
+    declaration is what the buyer's auditor will inspect.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "JSON object body required.")
+    if "mode" not in payload:
+        raise HTTPException(
+            422,
+            "Field 'mode' is required (one of "
+            f"{list(CMEK_MODES)}).",
+        )
+    actor = getattr(request.state, "principal", None)
+    try:
+        cfg = set_cmek_reference(
+            tenant_id,
+            provider=payload.get("provider"),
+            key_uri=payload.get("key_uri"),
+            mode=payload.get("mode"),
+            updated_by=actor,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

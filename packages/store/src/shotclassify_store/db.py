@@ -328,6 +328,26 @@ class TenantSettingsRow(Base):
     # protects shared workers from runaway memory and gives procurement
     # a per-workspace abuse-and-cost control they can demonstrate.
     max_upload_bytes: Mapped[int | None] = mapped_column(nullable=True)
+    # Customer-Managed Encryption Key (CMEK) reference. Procurement teams
+    # at large enterprises (financial services, healthcare, government)
+    # require the SaaS vendor to encrypt their data with a key the
+    # customer controls in their own KMS so the customer can revoke
+    # access by rotating the key. These columns record the *reference*
+    # to that key (provider, fully-qualified resource URI, enforcement
+    # mode). The actual envelope-encryption integration is a deployment
+    # concern and lives in the storage layer; this row is the
+    # authoritative tenant declaration that procurement and audit will
+    # inspect. ``cmek_mode`` is ``disabled`` (default), ``advisory``
+    # (declared but not gated), or ``required`` (the worker refuses to
+    # write a new object when the operator's CMEK adapter is unhealthy).
+    # All fields strictly tenant-scoped; only admin + MFA can mutate.
+    cmek_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    cmek_key_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    cmek_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    cmek_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cmek_updated_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # Per-tenant brute-force authentication lockout policy. When all three
     # are set, the auth middleware records every failed credential attempt
     # in ``auth_failures`` keyed by (tenant_id, source_ip), and once a
@@ -1008,6 +1028,27 @@ def init_db() -> None:
                 if "max_upload_bytes" not in tcols:
                     conn.execute(text(
                         "ALTER TABLE tenant_settings ADD COLUMN max_upload_bytes INTEGER"
+                    ))
+                # 0035 customer-managed encryption key (CMEK) reference.
+                if "cmek_provider" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN cmek_provider VARCHAR(32)"
+                    ))
+                if "cmek_key_uri" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN cmek_key_uri VARCHAR(512)"
+                    ))
+                if "cmek_mode" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN cmek_mode VARCHAR(16)"
+                    ))
+                if "cmek_updated_at" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN cmek_updated_at TIMESTAMP"
+                    ))
+                if "cmek_updated_by" not in tcols:
+                    conn.execute(text(
+                        "ALTER TABLE tenant_settings ADD COLUMN cmek_updated_by VARCHAR(256)"
                     ))
             if insp.has_table("sessions"):
                 scols = {c["name"] for c in insp.get_columns("sessions")}

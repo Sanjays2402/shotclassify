@@ -1655,3 +1655,229 @@ def set_auth_lockout_policy(
         cooldown_minutes=cool or 0,
         enabled=enabled,
     )
+
+
+# ---------------------------------------------------------------------------
+# Customer-Managed Encryption Key (CMEK) reference
+# ---------------------------------------------------------------------------
+#
+# Records the per-tenant declaration that this workspace's data is (or
+# should be) encrypted at rest with a key the customer controls in their
+# own KMS. The actual envelope-encryption integration is a deployment
+# concern that lives in the storage layer; this record is the
+# authoritative tenant declaration that procurement, audit, and the
+# operator-side CMEK adapter all read.
+#
+# Surfaces:
+#   * GET/PUT /v1/settings/security/cmek -- admin + MFA management
+#   * GET /v1/me -- callers see ``cmek_mode`` so the UI can banner
+#     "Customer-managed encryption: required" without an extra round trip
+#   * Trust Center subprocessor catalog response carries the available
+#     CMEK providers so procurement reviewers know what is supported
+#     before they create an account.
+from dataclasses import dataclass as _cmek_dataclass  # avoid re-import surprises
+
+CMEK_PROVIDERS: tuple[str, ...] = ("aws-kms", "gcp-kms", "azure-kv", "hashicorp-vault")
+CMEK_MODES: tuple[str, ...] = ("disabled", "advisory", "required")
+
+# Light per-provider URI shape validation. We deliberately do not call
+# out to the provider here (this module must work offline and inside
+# unit tests); the operator-side adapter is responsible for verifying
+# the key exists and the role can decrypt with it.
+_CMEK_URI_PREFIXES: dict[str, tuple[str, ...]] = {
+    "aws-kms": ("arn:aws:kms:", "arn:aws-us-gov:kms:", "arn:aws-cn:kms:"),
+    "gcp-kms": ("projects/",),
+    "azure-kv": ("https://",),
+    "hashicorp-vault": ("transit/", "https://"),
+}
+
+CMEK_KEY_URI_MAX = 512
+
+
+@dataclass(frozen=True)
+class CmekReference:
+    """Customer-managed encryption key declaration for a workspace."""
+
+    tenant_id: str
+    provider: str | None
+    key_uri: str | None
+    mode: str
+    updated_at: datetime | None
+    updated_by: str | None
+
+    def to_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "provider": self.provider,
+            "key_uri": self.key_uri,
+            "mode": self.mode,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "updated_by": self.updated_by,
+            "available_providers": list(CMEK_PROVIDERS),
+            "available_modes": list(CMEK_MODES),
+        }
+
+
+def _normalize_cmek_provider(raw) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValueError("cmek_provider must be a string or null")
+    s = raw.strip().lower()
+    if not s:
+        return None
+    if s not in CMEK_PROVIDERS:
+        raise ValueError(
+            f"unsupported cmek_provider {s!r}: must be one of {list(CMEK_PROVIDERS)}"
+        )
+    return s
+
+
+def _normalize_cmek_mode(raw) -> str:
+    if raw is None:
+        return "disabled"
+    if not isinstance(raw, str):
+        raise ValueError("cmek_mode must be a string")
+    s = raw.strip().lower()
+    if not s:
+        return "disabled"
+    if s not in CMEK_MODES:
+        raise ValueError(
+            f"unsupported cmek_mode {s!r}: must be one of {list(CMEK_MODES)}"
+        )
+    return s
+
+
+def _normalize_cmek_key_uri(raw, provider: str | None) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValueError("cmek_key_uri must be a string or null")
+    s = raw.strip()
+    if not s:
+        return None
+    if len(s) > CMEK_KEY_URI_MAX:
+        raise ValueError(f"cmek_key_uri must be <= {CMEK_KEY_URI_MAX} chars")
+    # Reject control chars and whitespace inside the URI; both would
+    # corrupt headers and confuse downstream KMS clients.
+    for c in s:
+        if c.isspace() or ord(c) < 0x20:
+            raise ValueError("cmek_key_uri must not contain whitespace or control chars")
+    if provider is not None:
+        prefixes = _CMEK_URI_PREFIXES.get(provider, ())
+        if prefixes and not any(s.startswith(p) for p in prefixes):
+            raise ValueError(
+                f"cmek_key_uri does not match the expected shape for "
+                f"provider {provider!r} (expected prefix one of {list(prefixes)})"
+            )
+    return s
+
+
+def get_cmek_reference(tenant_id: str | None) -> CmekReference:
+    """Return the CMEK declaration for ``tenant_id`` (defaults when unset)."""
+    if not tenant_id:
+        return CmekReference(
+            tenant_id="",
+            provider=None,
+            key_uri=None,
+            mode="disabled",
+            updated_at=None,
+            updated_by=None,
+        )
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return CmekReference(
+                tenant_id=tenant_id,
+                provider=None,
+                key_uri=None,
+                mode="disabled",
+                updated_at=None,
+                updated_by=None,
+            )
+        mode = getattr(row, "cmek_mode", None) or "disabled"
+        # Defensive: filter against the current allow-list so a stale
+        # value from before a removal can never come back to life.
+        if mode not in CMEK_MODES:
+            mode = "disabled"
+        return CmekReference(
+            tenant_id=tenant_id,
+            provider=getattr(row, "cmek_provider", None),
+            key_uri=getattr(row, "cmek_key_uri", None),
+            mode=mode,
+            updated_at=getattr(row, "cmek_updated_at", None),
+            updated_by=getattr(row, "cmek_updated_by", None),
+        )
+
+
+def set_cmek_reference(
+    tenant_id: str,
+    *,
+    provider,
+    key_uri,
+    mode,
+    updated_by: str | None,
+) -> CmekReference:
+    """Persist (or clear) the CMEK declaration for the workspace.
+
+    Validates the combination: ``required`` and ``advisory`` modes
+    demand a provider and a key URI; ``disabled`` clears everything so
+    the workspace cannot be left in a half-configured state. Raises
+    ``ValueError`` on invalid input so the API layer can return 422.
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    prov = _normalize_cmek_provider(provider)
+    norm_mode = _normalize_cmek_mode(mode)
+    uri = _normalize_cmek_key_uri(key_uri, prov)
+    if norm_mode == "disabled":
+        prov = None
+        uri = None
+    else:
+        if prov is None:
+            raise ValueError(
+                "cmek_provider is required when cmek_mode is 'advisory' or 'required'"
+            )
+        if uri is None:
+            raise ValueError(
+                "cmek_key_uri is required when cmek_mode is 'advisory' or 'required'"
+            )
+    now = datetime.now(UTC)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                cmek_provider=prov,
+                cmek_key_uri=uri,
+                cmek_mode=norm_mode,
+                cmek_updated_at=now,
+                cmek_updated_by=updated_by,
+                updated_at=now,
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.cmek_provider = prov
+            row.cmek_key_uri = uri
+            row.cmek_mode = norm_mode
+            row.cmek_updated_at = now
+            row.cmek_updated_by = updated_by
+            row.updated_at = now
+            row.updated_by = updated_by
+        s.commit()
+    return CmekReference(
+        tenant_id=tenant_id,
+        provider=prov,
+        key_uri=uri,
+        mode=norm_mode,
+        updated_at=now,
+        updated_by=updated_by,
+    )

@@ -17,6 +17,7 @@ import {
   SignOut,
   Key as KeyIcon,
   CloudArrowUp,
+  Vault,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 
@@ -293,6 +294,7 @@ export default function SecuritySettingsPage() {
       <ApiKeyInactivityPolicySection />
       <ApiKeyMaxActivePolicySection />
       <UploadSizePolicySection />
+      <CmekReferenceSection />
       <MfaPolicySection />
       <CorsOriginsSection />
       <SessionsSection />
@@ -2942,6 +2944,310 @@ function UploadSizePolicySection() {
                   : "text-rose-700 dark:text-rose-300"
               }`}
               role="status"
+            >
+              {flash.msg}
+            </p>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+type CmekResponse = {
+  tenant_id: string;
+  provider: string | null;
+  key_uri: string | null;
+  mode: "disabled" | "advisory" | "required";
+  updated_at: string | null;
+  updated_by: string | null;
+  available_providers: string[];
+  available_modes: Array<"disabled" | "advisory" | "required">;
+};
+
+const CMEK_PROVIDER_LABELS: Record<string, string> = {
+  "aws-kms": "AWS KMS",
+  "gcp-kms": "Google Cloud KMS",
+  "azure-kv": "Azure Key Vault",
+  "hashicorp-vault": "HashiCorp Vault",
+};
+
+const CMEK_URI_HINTS: Record<string, string> = {
+  "aws-kms": "arn:aws:kms:us-west-2:111111111111:key/abcd1234-...",
+  "gcp-kms":
+    "projects/p/locations/global/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
+  "azure-kv": "https://my-vault.vault.azure.net/keys/my-key/abcd1234",
+  "hashicorp-vault": "https://vault.example.com/v1/transit/keys/my-key",
+};
+
+function CmekReferenceSection() {
+  const { data, error, isLoading, mutate } = useSWR<CmekResponse>(
+    "/api/settings/security/cmek",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+
+  const [mode, setMode] = useState<"disabled" | "advisory" | "required">(
+    "disabled",
+  );
+  const [provider, setProvider] = useState<string>("aws-kms");
+  const [keyUri, setKeyUri] = useState<string>("");
+  const [otp, setOtp] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!data) return;
+    setMode(data.mode);
+    setProvider(data.provider ?? "aws-kms");
+    setKeyUri(data.key_uri ?? "");
+  }, [data?.mode, data?.provider, data?.key_uri]);
+
+  const status = error as ApiError | undefined;
+  const unauth = status?.status === 401;
+  const forbidden = status?.status === 403;
+
+  async function save() {
+    if (!data) return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      const body: {
+        mode: string;
+        provider: string | null;
+        key_uri: string | null;
+      } =
+        mode === "disabled"
+          ? { mode, provider: null, key_uri: null }
+          : { mode, provider, key_uri: keyUri.trim() };
+      if (mode !== "disabled" && !body.key_uri) {
+        setFlash({
+          kind: "err",
+          msg: "Enter the fully qualified key URI from your KMS.",
+        });
+        setBusy(false);
+        return;
+      }
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+      };
+      if (otp.trim()) headers["x-mfa-otp"] = otp.trim();
+      const res = await fetch("/api/settings/security/cmek", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setFlash({ kind: "err", msg: text || `Save failed (${res.status})` });
+        setBusy(false);
+        return;
+      }
+      const next: CmekResponse = await res.json();
+      setFlash({ kind: "ok", msg: "Saved." });
+      setOtp("");
+      await mutate(next, { revalidate: false });
+    } catch (e) {
+      setFlash({ kind: "err", msg: (e as Error).message || "Save failed" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const modeBadgeClass =
+    data?.mode === "required"
+      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+      : data?.mode === "advisory"
+        ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+        : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400";
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-center gap-2 mb-2">
+        <Vault size={20} weight="duotone" className="text-indigo-600" />
+        <h2 className="text-base font-semibold">
+          Customer-managed encryption key
+        </h2>
+        {data ? (
+          <span
+            className={`ml-auto rounded-full px-2.5 py-0.5 text-xs font-medium ${modeBadgeClass}`}
+          >
+            {data.mode}
+          </span>
+        ) : null}
+      </div>
+      <p className="text-sm text-zinc-500 mb-4">
+        Record the key in your own KMS that encrypts this workspace's
+        data at rest. Procurement and audit teams inspect this
+        declaration during vendor reviews; the operator-side CMEK
+        adapter reads it to envelope-encrypt newly stored objects with
+        your key. Set the mode to {`"required"`} to refuse new writes
+        when the adapter cannot reach your KMS.
+      </p>
+
+      {isLoading ? (
+        <div className="space-y-2" aria-busy="true">
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+          <div className="h-9 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-900" />
+        </div>
+      ) : unauth ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Sign in to manage the CMEK reference.
+        </div>
+      ) : forbidden ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Admin role required to change the CMEK reference.
+        </div>
+      ) : !data ? (
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+          Could not load CMEK reference.
+        </div>
+      ) : (
+        <>
+          <div className="mb-4 grid gap-2 text-sm sm:grid-cols-2">
+            <div className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
+              <div className="text-xs uppercase tracking-wide text-zinc-500">
+                Current provider
+              </div>
+              <div className="mt-1 font-medium">
+                {data.provider
+                  ? (CMEK_PROVIDER_LABELS[data.provider] ?? data.provider)
+                  : "Not set"}
+              </div>
+            </div>
+            <div className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
+              <div className="text-xs uppercase tracking-wide text-zinc-500">
+                Current key URI
+              </div>
+              <div className="mt-1 truncate font-mono text-xs">
+                {data.key_uri ?? "Not set"}
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-1">
+              Enforcement mode
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {(data.available_modes ?? []).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMode(m)}
+                  className={`rounded-md border px-3 py-1.5 text-sm transition ${
+                    mode === m
+                      ? "border-indigo-500 bg-indigo-50 text-indigo-900 dark:border-indigo-400 dark:bg-indigo-950 dark:text-indigo-100"
+                      : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300"
+                  }`}
+                  aria-pressed={mode === m}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {mode !== "disabled" ? (
+            <>
+              <div className="mb-3">
+                <label
+                  className="block text-sm font-medium mb-1"
+                  htmlFor="cmek-provider"
+                >
+                  KMS provider
+                </label>
+                <select
+                  id="cmek-provider"
+                  value={provider}
+                  onChange={(e) => setProvider(e.target.value)}
+                  className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                >
+                  {(data.available_providers ?? []).map((p) => (
+                    <option key={p} value={p}>
+                      {CMEK_PROVIDER_LABELS[p] ?? p}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="mb-3">
+                <label
+                  className="block text-sm font-medium mb-1"
+                  htmlFor="cmek-uri"
+                >
+                  Key URI
+                </label>
+                <input
+                  id="cmek-uri"
+                  type="text"
+                  value={keyUri}
+                  onChange={(e) => setKeyUri(e.target.value)}
+                  placeholder={CMEK_URI_HINTS[provider] ?? "Fully qualified key URI"}
+                  className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
+                  spellCheck={false}
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                />
+                <p className="mt-1 text-xs text-zinc-500">
+                  Example: {CMEK_URI_HINTS[provider] ?? "vendor-specific URI"}
+                </p>
+              </div>
+            </>
+          ) : null}
+
+          <div className="mb-3">
+            <label
+              className="block text-sm font-medium mb-1"
+              htmlFor="cmek-otp"
+            >
+              MFA code
+            </label>
+            <input
+              id="cmek-otp"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value)}
+              placeholder="123456"
+              className="w-40 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            />
+            <p className="mt-1 text-xs text-zinc-500">
+              Required when MFA step-up is enabled. Leave blank if your
+              admin policy does not enforce it.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy}
+              className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <FloppyDisk size={16} weight="duotone" />
+              {busy ? "Saving..." : "Save"}
+            </button>
+            {data.updated_at ? (
+              <span className="text-xs text-zinc-500">
+                Last updated {new Date(data.updated_at).toLocaleString()}
+                {data.updated_by ? ` by ${data.updated_by}` : ""}
+              </span>
+            ) : (
+              <span className="text-xs text-zinc-500">Never configured.</span>
+            )}
+          </div>
+
+          {flash ? (
+            <p
+              className={`mt-3 text-sm ${
+                flash.kind === "ok"
+                  ? "text-emerald-700 dark:text-emerald-400"
+                  : "text-red-700 dark:text-red-400"
+              }`}
             >
               {flash.msg}
             </p>

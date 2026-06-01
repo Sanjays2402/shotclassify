@@ -2,6 +2,33 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: per-workspace customer-managed encryption key reference
+
+Large enterprise buyers (financial services, healthcare, government) routinely require the vendor to encrypt their data at rest with a key the customer controls in their own KMS so they can revoke access by rotating the key. ShotClassify now records that declaration as a first-class per-workspace setting: provider (AWS KMS, GCP KMS, Azure Key Vault, HashiCorp Vault), fully qualified key URI, and an enforcement mode (`disabled`, `advisory`, `required`). The URI shape is sanity-checked against the provider (`arn:aws:kms:...` for `aws-kms`, `projects/...` for `gcp-kms`, and so on) so a pasted-from-the-wrong-tab value is refused at write time instead of bricking the storage adapter at decrypt time. Mode `required` is the production stance: when set, the operator-side CMEK adapter refuses to write a new object whenever your KMS is unreachable, instead of silently falling back to a deployment-managed key. The control surface lives at `/v1/settings/security/cmek` (admin role and a fresh MFA step-up on `PUT`), the change lands in the workspace's tamper-evident audit log with the actor, IP, request id, and user agent, and the declaration is strictly tenant-scoped (one workspace's CMEK reference is never visible to or shared with another, proven by `tests/test_tenant_cmek_reference.py::test_cmek_is_strictly_tenant_scoped`). Manage it interactively at `Settings -> Security -> Customer-managed encryption key` in the web console.
+
+### Try it
+
+Local API at `http://127.0.0.1:7441`, web dashboard at `http://localhost:3000`.
+
+```bash
+# Declare an AWS KMS key as the workspace CMEK in required mode
+curl -s -X PUT http://127.0.0.1:7441/v1/settings/security/cmek \
+  -H 'content-type: application/json' \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -H 'x-mfa-otp: 123456' \
+  -d '{
+        "provider": "aws-kms",
+        "key_uri": "arn:aws:kms:us-west-2:111111111111:key/abcd1234-...",
+        "mode": "required"
+      }'
+
+# Read the current declaration
+curl -s http://127.0.0.1:7441/v1/settings/security/cmek \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY"
+
+# UI: http://localhost:3000/settings/security -> Customer-managed encryption key
+```
+
 ## What's new: streaming audit export for SIEM ingestion
 
 The audit log already records every authenticated mutation with a tamper-evident hash chain, but procurement teams routinely ask for one more thing before signing: "give us a file we can drop into Splunk." ShotClassify now ships a tenant-scoped streaming export at `POST /v1/audit/export` that emits the workspace audit trail as CSV or JSON Lines with a signed manifest. The endpoint supports `since` / `until` / `principal` / `path_prefix` / `status_min` / `status_max` filters, pages through the database in 500-row chunks so multi-million-row exports do not exhaust the worker, and caps a single call at 250k rows so a runaway filter cannot. The response carries an `X-Audit-Manifest` header with the current chain tip plus filters applied, and the body itself ends with a manifest record (a `_manifest` JSONL row or a `# {...}` CSV trailer) containing exported_by, exported_at, request id, row count, truncation flag, and the verified hash-chain tip, so consumers can prove the file is intact without a second round trip. The export is a `POST`, which means the export action itself is captured by `AuditLogMiddleware` and lands in the workspace's own chain. Admin only, `read:audit` scope required, tenant-scoped at the query layer (an acme admin cannot export globex's rows). The audit page (`/settings/audit`) now has a real Export dialog with format toggle and date pickers; downloads happen via the browser and the manifest tip is surfaced in the success toast so a workspace owner can pin it off-platform. Coverage in `tests/test_audit_export.py` proves CSV and JSONL formats round-trip correctly, the manifest is present, viewers are denied, inverted date windows are rejected, and tenant A's export never contains tenant B's rows.
