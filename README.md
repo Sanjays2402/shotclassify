@@ -2,6 +2,32 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
+## What's new: send a signed test ping to any webhook subscription
+
+Enterprise integrators always ask the same question before they wire shotclassify into their production receiver: "can we fire a synthetic event at our endpoint so we can confirm TLS, signature verification, our IP allowlist, and our handler code before any real classification flows." `POST /v1/webhooks/{id}/test` is that endpoint. It signs and delivers a one-shot `webhook.test` payload to the targeted subscription, regardless of the subscription's event filter, so operators do not have to first add a wildcard subscription just to verify the receiver. The ping carries the standard `X-Shotclassify-Signature`, `X-Shotclassify-Delivery`, and `X-Shotclassify-Subscription` headers plus an `X-Shotclassify-Test: true` marker so receivers can route it to a no-op handler in production. Every gate that protects real dispatch is enforced here too: the subscription must belong to the caller's tenant (cross-tenant requests get `404`, not `403`, so the existence of another tenant's id never leaks), the subscription must be active (paused or revoked returns `409`), the per-tenant webhook egress host allowlist still applies (blocked hosts produce a failed delivery row with the reason), and during a secret rotation overlap the request is dual-signed with `X-Shotclassify-Signature-Next` so receivers can roll the new secret in. The route is `admin` role and scope, requires MFA step-up, accepts `?dry_run=true` for a preview, and is recorded by the standard audit middleware against the targeted subscription id. The dispatch attempt is persisted as a normal `webhook_deliveries` row so the test shows up in the delivery feed, the SIEM export, and the audit trail, and it can be replayed through the existing `/v1/webhooks/deliveries/{id}/replay` path. Coverage in `tests/test_webhooks_api.py` exercises a real signed delivery to a local listener (signature verified with the plaintext secret), cross-tenant isolation, the operator-role denial, the dry-run preview, and the paused-subscription `409`.
+
+Try it (local):
+
+```bash
+# API: http://127.0.0.1:7441
+make api  # in another shell
+
+# Create a subscription, save id + secret
+WID=$(curl -sS -X POST http://127.0.0.1:7441/v1/webhooks \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"url":"https://your.receiver.example.com/in","events":["classify.completed"]}' \
+  | jq -r .webhook.id)
+
+# Preview the test without sending
+curl -sS -X POST "http://127.0.0.1:7441/v1/webhooks/$WID/test?dry_run=true" \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY"
+
+# Fire a real signed test ping
+curl -sS -X POST "http://127.0.0.1:7441/v1/webhooks/$WID/test" \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY"
+```
+
 ## What's new: per-workspace audit log retention
 
 Procurement reviewers ask two opposite questions about audit logs: GDPR-focused buyers want a documented upper bound ("prove you delete this within 365 days"), SOC 2 and HIPAA-focused buyers want a documented lower bound ("prove you keep this for at least three years"). Conflating those two clauses with the existing classifications retention window blocks both deals. shotclassify now exposes audit retention as a separate per-workspace policy. Admins set `audit_retention_days` via `PUT /v1/settings/security/audit-retention` (admin role, MFA step-up), where `null` or `0` keeps audit data indefinitely (the default and the SOC 2 stance) and a positive integer between 1 and 3650 schedules the next purge cutoff. `POST /v1/settings/security/audit-retention/run` triggers an immediate tenant-scoped purge for operators who just lowered the window; the worker's retention scheduler now runs the audit purge in the same pass as the classifications purge so no second cron is needed. The purge intentionally breaks the per-tenant audit hash chain for the deleted window and writes its own audit row recording the cutoff, the row count, and the trigger so the chain verifier reports an attributable, disclosed gap rather than tampering. Tenants on a legal hold are skipped and the response surfaces `held=true`. Cross-tenant isolation is enforced at the query layer: an admin running a purge in their own workspace cannot touch another workspace's audit rows even when those rows are older than their own window. Manage it interactively at `Settings -> Security -> Audit retention`. Coverage in `tests/test_audit_retention_policy.py` exercises RBAC on read and write, input validation, the legal-hold short-circuit, and the cross-tenant isolation property.
