@@ -77,6 +77,16 @@ from .db import SupportAccessGrantRow
 from . import auth_lockouts as auth_lockouts_store
 from .auth_lockouts import LockoutStatus, LockoutView
 from .db import AuthFailureRow, AuthLockoutRow
+from . import access_reviews as access_reviews_store
+from .access_reviews import (
+    AccessReview,
+    AccessReviewError,
+    AccessReviewItem,
+    AccessReviewLastAdminError,
+    AccessReviewNotFound,
+    AccessReviewStateError,
+)
+from .db import AccessReviewItemRow, AccessReviewRow
 from .tenant_settings import (
     API_KEY_MAX_TTL_DAYS,
     API_KEY_MIN_TTL_DAYS,

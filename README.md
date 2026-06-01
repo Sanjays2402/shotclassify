@@ -2,6 +2,31 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
+## What's new: periodic access reviews for SOC2 CC6.3
+
+Workspace owners can now run the recurring re-certification of member access that SOC2 CC6.3 and ISO 27001 A.9.2.5 require. Open a review and the system snapshots every active member into one decision row per principal, freezing the role each person held at review time so a later promotion cannot rewrite history. Admins mark each row `keep` or `revoke`, optionally with a note, then apply. Apply removes every `revoke` membership in one transaction through the same `memberships_store.remove_member` path the regular members UI uses (so the same last-admin guard fires), stamps `revoked_at` on the items as proof, and seals the review as `applied` so a second apply returns 409. Apply also supports `?dry_run=true` and surfaces a `blocker` field when a planned revocation would leave the workspace with no admin. Every read and write filters by `tenant_id` at the query layer, so a forged review id from another tenant returns 404, never 200. The full per-member decision list can be exported as CSV for compliance evidence. The UI lives at `/settings/security/access-reviews`: history sidebar, status badges, keep/revoke buttons per row, preview-apply, cancel, and CSV export. Tenant isolation, RBAC denial for viewers, last-admin protection, and dry-run preview are covered in `tests/test_access_reviews.py` (7 tests).
+
+Try it (local):
+
+```bash
+# API: http://127.0.0.1:7441   UI: http://localhost:3000/settings/security/access-reviews
+
+# Open a review (admin role + MFA step-up; API keys skip MFA)
+curl -X POST http://127.0.0.1:7441/v1/access-reviews \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" \
+  -H "x-tenant: acme" \
+  -H "content-type: application/json" \
+  -d '{"title": "2026 Q2 access review"}'
+
+# Preview the apply (no mutation)
+curl -X POST 'http://127.0.0.1:7441/v1/access-reviews/REVIEW_ID/apply?dry_run=true' \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" -H "x-tenant: acme"
+
+# Export the sealed review as CSV for the auditor
+curl http://127.0.0.1:7441/v1/access-reviews/REVIEW_ID/export.csv \
+  -H "x-api-key: $SHOTCLASSIFY_API_KEY" -H "x-tenant: acme"
+```
+
 ## What's new: suspend members without losing audit history
 
 Offboard a teammate from a workspace immediately while keeping their membership row so existing audit log entries still resolve to a recognized name. Suspended principals are blocked at the auth middleware with `403 membership_suspended` for every tenant-scoped request. Reinstating clears the suspension.

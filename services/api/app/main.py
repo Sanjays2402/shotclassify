@@ -46,6 +46,7 @@ from .routes import sso as sso_routes
 from .routes import mfa as mfa_routes
 from .routes import api_keys as api_keys_routes
 from .routes import memberships as memberships_routes
+from .routes import access_reviews as access_reviews_routes
 from .routes import workspace_data as workspace_data_routes
 from .routes import admin as admin_routes
 from .routes import webhooks as webhooks_routes
@@ -57,6 +58,7 @@ from .routes import legal as legal_routes
 from .routes import support_access as support_access_routes
 from .routes import well_known as well_known_routes
 from .routes import scopes as scopes_routes
+from .routes import access_reviews as access_reviews_routes
 
 
 @asynccontextmanager
@@ -163,6 +165,7 @@ def create_app() -> FastAPI:
     app.include_router(mfa_routes.router)
     app.include_router(api_keys_routes.router)
     app.include_router(memberships_routes.router)
+    app.include_router(access_reviews_routes.router)
     app.include_router(workspace_data_routes.router)
     app.include_router(admin_routes.router)
     app.include_router(webhooks_routes.router)
@@ -175,6 +178,7 @@ def create_app() -> FastAPI:
     app.include_router(support_access_routes.admin_router)
     app.include_router(well_known_routes.router)
     app.include_router(scopes_routes.router)
+    app.include_router(access_reviews_routes.router)
     # Ensure the storage root exists for uploads. Blobs are served only
     # through the authenticated, tenant-scoped /v1/blobs/{id} endpoint;
     # the previous unauthenticated StaticFiles mount at /blob was removed

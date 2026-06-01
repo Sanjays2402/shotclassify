@@ -871,6 +871,61 @@ class AuthLockoutRow(Base):
     cleared_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
 
+class AccessReviewRow(Base):
+    """One quarterly access-review campaign for a tenant.
+
+    SOC2 CC6.3 and ISO 27001 A.9.2.5 require workspace owners to periodically
+    re-certify that every active member still needs the role they hold. A
+    row here represents one such campaign window: it is created in ``open``
+    status, accumulates one ``AccessReviewItemRow`` per current member, and
+    transitions to ``applied`` once the owner finalises the decisions.
+    """
+
+    __tablename__ = "access_reviews"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    # ``open`` (decisions being entered) -> ``applied`` (revocations executed)
+    # or ``cancelled``. ``open`` reviews block opening a second one for the
+    # same tenant so the audit trail stays unambiguous.
+    status: Mapped[str] = mapped_column(String(16), default="open", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applied_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class AccessReviewItemRow(Base):
+    """One per-member decision row inside an access-review campaign.
+
+    ``snapshot_role`` freezes the role the principal held at review-open so
+    a later promotion or demotion cannot silently rewrite the certification
+    record. ``decision`` is ``pending`` until the reviewer marks it ``keep``
+    or ``revoke``. Apply walks the items, removes every ``revoke`` membership
+    in a single transaction, and stamps ``revoked_at`` so the row doubles as
+    proof that the revocation actually happened.
+    """
+
+    __tablename__ = "access_review_items"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    review_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    principal: Mapped[str] = mapped_column(String(128), nullable=False)
+    snapshot_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     s = get_settings()
