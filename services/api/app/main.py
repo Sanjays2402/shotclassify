@@ -28,6 +28,7 @@ from .middleware.request_id import RequestIdMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.tenant import TenantResolutionMiddleware
 from .routes import audit as audit_routes
+from .routes import audit_sinks as audit_sinks_routes
 from .routes import auth as auth_routes
 from .routes import auth_lockouts as auth_lockouts_routes
 from .routes import blobs as blobs_routes
@@ -151,6 +152,7 @@ def create_app() -> FastAPI:
     app.include_router(history_routes.router)
     app.include_router(settings_routes.router)
     app.include_router(audit_routes.router)
+    app.include_router(audit_sinks_routes.router)
     app.include_router(me_routes.router)
     app.include_router(usage_routes.router)
     app.include_router(saved_views_routes.router)

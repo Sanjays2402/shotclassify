@@ -11,7 +11,8 @@ from __future__ import annotations
 import time
 
 import structlog
-from shotclassify_store import AuditRepository
+from shotclassify_common import get_settings
+from shotclassify_store import AuditRepository, audit_sinks_store
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
@@ -76,4 +77,32 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
             )
         except Exception as exc:  # pragma: no cover - never break the request path
             log.warning("audit_log_write_failed", error=str(exc), path=path)
+        # Best-effort fan-out to per-tenant SIEM sinks. Never block, never
+        # raise; a slow downstream collector must not affect this request.
+        tenant_id = getattr(request.state, "tenant_id", None)
+        if tenant_id:
+            try:
+                s = get_settings()
+                audit_sinks_store.dispatch_event(
+                    tenant_id,
+                    {
+                        "type": "shotclassify.audit",
+                        "tenant_id": tenant_id,
+                        "principal": str(principal),
+                        "method": method,
+                        "path": path,
+                        "status_code": response.status_code,
+                        "request_id": request_id,
+                        "client_ip": client_ip,
+                        "user_agent": request.headers.get("user-agent"),
+                        "elapsed_ms": elapsed_ms,
+                        "target_id": target_id,
+                        "extra": extra or {},
+                    },
+                    allow_http=s.webhook_egress_allow_http,
+                    allow_private=s.webhook_egress_allow_private,
+                    extra_blocked_cidrs=s.webhook_egress_extra_blocked_cidrs,
+                )
+            except Exception as exc:  # pragma: no cover - never break the request path
+                log.warning("audit_sink_dispatch_failed", error=str(exc), path=path)
         return response

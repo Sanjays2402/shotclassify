@@ -574,6 +574,40 @@ class WebhookDeliveryRow(Base):
     )
 
 
+class AuditSinkRow(Base):
+    """Outbound SIEM-style sink that receives a signed copy of every audit row.
+
+    Scoped per tenant. The dispatcher iterates active sinks after the
+    AuditLogMiddleware persists a row and POSTs the JSON event with an
+    HMAC signature derived from the SHA-256 of the plaintext secret
+    (the plaintext is shown exactly once at create time and never
+    persisted).
+    """
+
+    __tablename__ = "audit_sinks"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    secret_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_delivery_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    success_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    failure_count: Mapped[int] = mapped_column(default=0, nullable=False)
+
+
 class LegalHoldRow(Base):
     """Active or lifted legal hold on a workspace.
 

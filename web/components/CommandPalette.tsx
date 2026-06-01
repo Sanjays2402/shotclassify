@@ -31,6 +31,7 @@ import {
   GitDiff,
   Sparkle,
   Gauge,
+  Broadcast,
 } from "@phosphor-icons/react";
 
 import { fuzzyScore as _fuzzy, rankNav } from "@/lib/command-palette";
@@ -70,6 +71,7 @@ const NAV: Nav[] = [
   { kind: "nav", id: "nav-docs", label: "API docs", hint: "Endpoints and examples", href: "/api-docs", icon: <Books size={16} weight="duotone" /> },
   { kind: "nav", id: "nav-webhooks", label: "Webhooks", hint: "Outbound delivery", href: "/webhooks", icon: <WebhooksLogo size={16} weight="duotone" /> },
   { kind: "nav", id: "nav-rate-limits", label: "Rate limits", hint: "Per workspace and per key quotas", href: "/settings/security/rate-limits", icon: <Gauge size={16} weight="duotone" /> },
+  { kind: "nav", id: "nav-audit-sinks", label: "Audit sinks", hint: "Forward audit log to SIEM", href: "/settings/security/audit-sinks", icon: <Broadcast size={16} weight="duotone" /> },
   { kind: "nav", id: "nav-notif", label: "Inbox", hint: "Notifications", href: "/notifications", icon: <Bell size={16} weight="duotone" /> },
   { kind: "nav", id: "nav-usage", label: "Usage", hint: "Quota and history", href: "/usage", icon: <ChartBar size={16} weight="duotone" /> },
   { kind: "nav", id: "nav-pricing", label: "Pricing", hint: "Plans", href: "/pricing", icon: <CreditCard size={16} weight="duotone" /> },

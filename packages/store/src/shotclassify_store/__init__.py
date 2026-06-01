@@ -18,6 +18,7 @@ from .db import (
     TenantSettingsRow,
     WebhookDeliveryRow,
     WebhookSubscriptionRow,
+    AuditSinkRow,
     get_engine,
     get_session,
     init_db,
@@ -29,6 +30,8 @@ from .memberships import InvitationRecord, MembershipRecord, SeatLimitExceeded
 from . import scim as scim_store
 from .scim import ScimConfig
 from . import webhooks as webhooks_store
+from . import audit_sinks as audit_sinks_store
+from .audit_sinks import SinkRecord as AuditSinkRecord
 from .repository import Repository
 from .saved_views import SavedViewRepository
 from . import sessions as session_store
@@ -246,6 +249,9 @@ __all__ = [
     "webhooks_store",
     "WebhookSubscriptionRow",
     "WebhookDeliveryRow",
+    "audit_sinks_store",
+    "AuditSinkRecord",
+    "AuditSinkRow",
     "legal_holds_store",
     "LegalHold",
     "LegalHoldActive",

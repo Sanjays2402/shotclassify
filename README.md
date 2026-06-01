@@ -2,6 +2,26 @@
 
 Video and image shot classifier with per-tenant rules, audit trail, signed webhook deliveries, and an admin dashboard.
 
+## What's new: per-tenant audit log SIEM sinks
+
+Enterprise procurement teams routinely block deals on one question: can we get your audit log into our SIEM. ShotClassify now ships per-workspace audit sinks. A workspace admin registers an HTTPS endpoint at `Settings -> Security -> Audit sinks` (or `POST /v1/audit/sinks`) and every audit row written by `AuditLogMiddleware` (actor, method, path, status, request id, client IP, user agent, target id, tenant) is fanned out to that endpoint with an `HMAC-SHA256(sha256(secret), body)` signature in `X-Shotclassify-Audit-Signature` so receivers can verify authenticity. The plaintext signing secret is returned exactly once at create time; only its SHA-256 hash is persisted, so a DB leak cannot be used to forge events. Dispatch runs on a small background pool with a hard per-attempt timeout, reuses the existing webhook egress allowlist and SSRF guardrails (private/loopback addresses blocked unless explicitly permitted), and never blocks or fails the originating request. Each sink row tracks `success_count`, `failure_count`, `last_status`, and `last_error` so operators can see at a glance whether their collector is healthy, and a `Test` button on the page synchronously fires a probe event and reports the HTTP response. Every CRUD call is admin-only, requires the `admin` scope, runs through MFA step-up, and the existing audit middleware records it. Cross-tenant isolation is enforced at the query layer; coverage in `tests/test_audit_sinks.py` proves tenant B cannot list, fetch, revoke, or test tenant A's sink (404, not 403, to avoid existence leaks) and that a mutation on tenant B never reaches tenant A's collector.
+
+Try it locally:
+
+```
+make api      # FastAPI on :7441
+make web      # Next.js dashboard on :3000
+# Register a sink (returns the signing secret exactly once):
+curl -s -X POST http://127.0.0.1:7441/v1/audit/sinks \
+  -H 'x-api-key: <admin-scoped-key>' \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://collector.example.com/audit","description":"splunk prod"}'
+# Fire a probe at it:
+curl -s -X POST http://127.0.0.1:7441/v1/audit/sinks/<id>/test \
+  -H 'x-api-key: <admin-scoped-key>'
+# UI: http://localhost:3000/settings/security/audit-sinks
+```
+
 ## What's new: per-workspace request rate limits with standard headers
 
 Every enterprise security questionnaire asks two related questions: how do you stop a noisy customer from exhausting shared capacity, and how do callers know how much budget they have left without polling a separate API. ShotClassify now answers both with a per-workspace, per-API-key rate limiter that gates every `/v1/*` request. The limiter runs four fixed windows in parallel (workspace per-minute, workspace per-day, key per-minute, key per-day), takes the tightest constraint, and either commits the request to every bucket or commits nothing. Decisions are emitted as the de-facto standard `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `X-RateLimit-Policy`, and `X-RateLimit-Scope` headers on `200` responses, and as `HTTP 429 rate_limited` with `Retry-After` plus the same headers when the cap is reached. Plans (`free`, `pro`, `team`) seed sensible defaults; workspace admins can promote to `custom` and dial each window independently from the new `Settings -> Security -> Rate limits` page, which also surfaces live consumption against each ceiling. Configuration is persisted to a per-workspace JSON store at `storage/rate_limits.json` so a deploy restart inherits the active window instead of resetting a tenant's quota to zero. The admin API (`GET`/`PUT /api/ratelimit`) requires an `admin`-scoped `sk_live_*` key and derives the workspace strictly from the bearer key, so cross-tenant reads or writes are impossible at the query layer. The /v1/usage endpoint returns the calling key's live consumption so customers can build their own meters without a second round trip. Coverage in `web/lib/ratelimit-core.test.mts` proves cross-tenant counter isolation (workspace A exhausting its quota does not affect workspace B), per-key bounding when workspace headroom remains, atomic commit-or-skip behaviour, fixed-window rollover, and persistence of plan and limit changes.
