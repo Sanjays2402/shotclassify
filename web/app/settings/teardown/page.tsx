@@ -83,7 +83,7 @@ export default function WorkspaceTeardownPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const r = await fetch("/v1/workspace/teardown", {
+      const r = await fetch("/api/workspace/teardown", {
         credentials: "include",
       });
       if (!r.ok) throw new Error(await r.text());
@@ -123,7 +123,7 @@ export default function WorkspaceTeardownPage() {
     setBusy("schedule");
     setFlash(null);
     try {
-      const r = await fetch("/v1/workspace/teardown", {
+      const r = await fetch("/api/workspace/teardown", {
         method: "POST",
         credentials: "include",
         headers: {
@@ -157,7 +157,7 @@ export default function WorkspaceTeardownPage() {
     setBusy("cancel");
     setFlash(null);
     try {
-      const r = await fetch("/v1/workspace/teardown", {
+      const r = await fetch("/api/workspace/teardown", {
         method: "DELETE",
         credentials: "include",
         headers: { "x-mfa-otp": otp },
@@ -190,7 +190,7 @@ export default function WorkspaceTeardownPage() {
     setFlash(null);
     try {
       const r = await fetch(
-        `/v1/workspace/teardown/execute?confirm=${encodeURIComponent(tenant)}`,
+        `/api/workspace/teardown/execute?confirm=${encodeURIComponent(tenant)}`,
         {
           method: "POST",
           credentials: "include",
