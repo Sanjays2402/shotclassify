@@ -8,6 +8,8 @@ working until an admin opts in.
 from __future__ import annotations
 
 import ipaddress
+import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -1498,6 +1500,157 @@ def set_upload_size_policy(
             row.updated_by = updated_by
         s.commit()
     return UploadSizePolicy(tenant_id=tenant_id, max_upload_bytes=norm)
+
+
+# --- Per-tenant allowed upload content types (classify routes) -----------
+
+# Hard bounds on the allow-list. Floor is 1 (an empty list = no policy);
+# ceiling keeps a typo'd admin from pasting a megabyte of MIME junk.
+ALLOWED_CONTENT_TYPES_MAX: int = 32
+# Recognised image MIME types the deployment understands today. The
+# classify pipeline only handles raster images, so an admin enabling a
+# non-image type would lock themselves out for no benefit; we surface
+# the catalog so the UI can offer sane defaults without hard-coding
+# them on the frontend. Adding a new type here is a deploy-time
+# decision (the pipeline must actually support decoding it).
+KNOWN_IMAGE_CONTENT_TYPES: tuple[str, ...] = (
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "image/bmp",
+    "image/tiff",
+    "image/heic",
+    "image/heif",
+    "image/avif",
+    "image/svg+xml",
+)
+
+_CONTENT_TYPE_RE = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$")
+
+
+def _normalise_content_type(raw: str) -> str:
+    """Lower-case, strip parameters, and validate the basic MIME shape."""
+    if not isinstance(raw, str):
+        raise ValueError("each content type must be a string")
+    v = raw.strip().split(";", 1)[0].strip().lower()
+    if not v:
+        raise ValueError("empty content type")
+    if not _CONTENT_TYPE_RE.match(v):
+        raise ValueError(f"not a valid MIME type: {raw!r}")
+    return v
+
+
+@dataclass(frozen=True)
+class AllowedContentTypesPolicy:
+    tenant_id: str
+    types: tuple[str, ...]  # empty tuple = no policy
+
+    @property
+    def enforced(self) -> bool:
+        return bool(self.types)
+
+    def to_dict(self) -> dict:
+        return {
+            "tenant_id": self.tenant_id,
+            "types": list(self.types),
+            "enforced": self.enforced,
+            "max_entries": ALLOWED_CONTENT_TYPES_MAX,
+            "known": list(KNOWN_IMAGE_CONTENT_TYPES),
+        }
+
+    def accepts(self, content_type: str | None) -> bool:
+        """True iff ``content_type`` is permitted by this policy.
+
+        When the policy is empty the legacy gate (any ``image/*``) is
+        applied here so callers have a single boolean to consult and
+        do not bypass the policy by accident. ``content_type`` is
+        normalised the same way persisted entries are so a charset
+        suffix (``image/png; charset=binary``) is matched correctly.
+        """
+        if not content_type:
+            return False
+        try:
+            norm = _normalise_content_type(content_type)
+        except ValueError:
+            return False
+        if not self.enforced:
+            return norm.startswith("image/")
+        return norm in self.types
+
+
+def get_allowed_content_types(tenant_id: str | None) -> AllowedContentTypesPolicy:
+    """Return the per-tenant allow-list of upload content types."""
+    if not tenant_id:
+        return AllowedContentTypesPolicy(tenant_id="", types=())
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            return AllowedContentTypesPolicy(tenant_id=tenant_id, types=())
+        raw = getattr(row, "allowed_content_types", None) or []
+        return AllowedContentTypesPolicy(
+            tenant_id=tenant_id, types=tuple(raw)
+        )
+
+
+def set_allowed_content_types(
+    tenant_id: str,
+    *,
+    types: list[str] | None,
+    updated_by: str | None,
+) -> AllowedContentTypesPolicy:
+    """Replace the per-tenant allow-list of upload content types.
+
+    ``None`` or ``[]`` clears the policy and the tenant falls back to
+    the legacy gate (any ``image/*`` MIME). Otherwise every entry is
+    normalised (lower-cased, parameter-stripped, validated as a basic
+    MIME type) and stored in deterministic order. Duplicates are
+    collapsed silently. Raises ``ValueError`` on invalid entries or
+    over-cap lists so the API layer can return 422.
+    """
+    if not tenant_id:
+        raise ValueError("tenant_id is required")
+    norm: list[str] | None
+    if not types:
+        norm = None
+    else:
+        if not isinstance(types, list):
+            raise ValueError("types must be a list of strings or null")
+        if len(types) > ALLOWED_CONTENT_TYPES_MAX:
+            raise ValueError(
+                f"at most {ALLOWED_CONTENT_TYPES_MAX} entries per workspace"
+            )
+        seen: list[str] = []
+        for entry in types:
+            v = _normalise_content_type(entry)
+            if v not in seen:
+                seen.append(v)
+        norm = sorted(seen)
+    init_db()
+    with get_session() as s:
+        row = s.execute(
+            select(TenantSettingsRow).where(TenantSettingsRow.tenant_id == tenant_id)
+        ).scalar_one_or_none()
+        if row is None:
+            row = TenantSettingsRow(
+                tenant_id=tenant_id,
+                ip_allowlist=[],
+                allowed_content_types=norm,
+                updated_at=datetime.now(UTC),
+                updated_by=updated_by,
+            )
+            s.add(row)
+        else:
+            row.allowed_content_types = norm
+            row.updated_at = datetime.now(UTC)
+            row.updated_by = updated_by
+        s.commit()
+    return AllowedContentTypesPolicy(
+        tenant_id=tenant_id, types=tuple(norm or ())
+    )
 
 
 # Per-tenant brute-force authentication lockout policy bounds. Threshold

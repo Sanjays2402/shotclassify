@@ -2,6 +2,36 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
+## What's new: per-workspace upload content-type allow-list (DLP control)
+
+Procurement reviews at regulated buyers (financial services, healthcare, public sector) ask whether the SaaS vendor can restrict per-workspace which file formats are allowed to enter the pipeline. SVG (active content), TIFF (large parser surface), HEIC (closed format) are common excludes. ShotClassify now answers that with a per-tenant allow-list of upload `Content-Type` values. `GET /v1/settings/security/upload-content-types` returns the list and the deployment-known catalog the UI offers as one-click chips; `PUT` replaces it (admin role + fresh MFA step-up). When the list is empty the legacy gate (any `image/*`) is preserved so existing single-tenant deployments are unaffected. When non-empty, every `POST /v1/classify`, `POST /v1/classify/batch`, and `POST /v1/queue` upload whose declared `Content-Type` is not on the list is rejected with HTTP 415 `content_type_not_allowed` *before* the bytes are buffered or routed to the model. Entries are normalised (lower-cased, MIME parameters stripped, validated as `type/subtype`), de-duplicated, and stored in sorted order so the audit log shows clean diffs; the cap is 32 entries per workspace. Strictly tenant-scoped: a tightened policy on `acme` never affects an upload in `globex`. The admin console exposes a dedicated settings page at `/settings/security/upload-content-types` with empty / loading / error states and a chip-list of known image MIME types. Coverage in `tests/test_upload_content_types_policy.py` proves the default is unset, the policy actually rejects a JPEG when locked to PNG, the policy is strictly tenant-scoped (parallel admin keys), clearing the policy returns to the legacy gate, and invalid bodies are rejected with HTTP 422.
+
+Try it (local):
+
+```bash
+make api          # FastAPI on http://127.0.0.1:7441
+make web          # Next.js admin on http://localhost:3000
+
+# Read current policy (empty = no enforcement, any image/* is accepted)
+curl -s -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" \
+  http://127.0.0.1:7441/v1/settings/security/upload-content-types | jq
+
+# Lock the workspace to PNG and JPEG only
+curl -s -X PUT -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"types":["image/png","image/jpeg"]}' \
+  http://127.0.0.1:7441/v1/settings/security/upload-content-types | jq
+
+# An SVG upload is now refused at the gate
+curl -i -X POST -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" \
+  -F 'file=@picture.svg;type=image/svg+xml' \
+  http://127.0.0.1:7441/v1/classify
+# -> HTTP/1.1 415 Unsupported Media Type
+# {"detail":{"error":"content_type_not_allowed","allowed":["image/jpeg","image/png"],...}}
+
+# UI: http://localhost:3000/settings/security/upload-content-types
+```
+
 ## What's new: signed Trust Pack for procurement reviewers
 
 Enterprise procurement asks the same question at the end of every deal: "send us your security policy, sub-processor list, SSO/MFA/IP/retention settings for our workspace, and prove the bundle wasn't edited in transit." ShotClassify now answers in one call. `GET /v1/trust/pack` streams a deterministic ZIP containing this workspace's `SECURITY.md`, full policy snapshot (`policy.json` with SSO, OIDC, MFA, session, IP allowlist, CORS origins, API key TTL/inactivity/max-active policies, audit and history retention, privacy settings), the current sub-processor catalog, and this workspace's acknowledgement state. Every file is hashed (SHA-256) into a `manifest.json` and the manifest itself is signed with HMAC-SHA256 using the deployment's `app_secret_key`. The signature is also returned in the `X-Trust-Pack-Signature` response header so an automated procurement pipeline can verify without unzipping. `GET /v1/trust/pack/manifest` returns the same per-file hashes and signature without the ZIP bytes, so a reviewer can audit the shape first. Both endpoints are admin-role and strictly tenant-scoped: an `acme` admin can never enumerate `globex`'s policies. Coverage in `tests/test_trust_pack.py` proves member denial, unauthenticated denial, that the in-header signature matches the in-zip manifest, that per-file SHA-256s match the bytes actually written, and that two tenants get distinct bundles.
@@ -3200,6 +3230,35 @@ curl -s -X PUT http://localhost:7441/v1/settings/security/upload-size \
 ```
 
 The policy is strictly tenant-scoped: tenant A's cap cannot be read or enforced against tenant B (covered by `tests/test_upload_size_policy.py`).
+
+## Per-tenant upload content-type allow-list
+
+Workspace admins can lock the classify surface (`POST /v1/classify`, `POST /v1/classify/batch`, `POST /v1/queue`) to an explicit allow-list of upload `Content-Type` values. Disallowed uploads are refused with HTTP 415 `content_type_not_allowed` before the file is buffered to disk or routed to the model. This is the DLP control financial-services and healthcare buyers ask for during procurement: lock the pipeline to `image/png` and `image/jpeg`, refuse SVG (active content), TIFF, HEIC, and anything else not on the list. An empty list keeps the legacy gate (any `image/*` MIME).
+
+Try it:
+
+- UI: `http://localhost:3000/settings/security/upload-content-types` (admin role, MFA step-up required to save).
+- API:
+
+```bash
+# read the current allow-list (empty list = no policy, any image/* accepted)
+curl -s http://localhost:7441/v1/settings/security/upload-content-types \
+  -H "X-API-Key: $SHOTCLASSIFY_API_KEY"
+
+# lock the workspace to PNG and JPEG only
+curl -s -X PUT http://localhost:7441/v1/settings/security/upload-content-types \
+  -H "X-API-Key: $SHOTCLASSIFY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"types": ["image/png", "image/jpeg"]}'
+
+# clear the allow-list and fall back to the legacy any-image gate
+curl -s -X PUT http://localhost:7441/v1/settings/security/upload-content-types \
+  -H "X-API-Key: $SHOTCLASSIFY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"types": null}'
+```
+
+The policy is strictly tenant-scoped, refuses invalid MIME entries at write time, caps the list size, and is covered end-to-end by `tests/test_allowed_content_types_policy.py` (cross-tenant isolation, batch enforcement, validation, clear/restore).
 
 ## License
 

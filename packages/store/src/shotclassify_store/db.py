@@ -340,6 +340,17 @@ class TenantSettingsRow(Base):
     # protects shared workers from runaway memory and gives procurement
     # a per-workspace abuse-and-cost control they can demonstrate.
     max_upload_bytes: Mapped[int | None] = mapped_column(nullable=True)
+    # Per-tenant allow-list of upload Content-Type values accepted by
+    # the classify routes. NULL or empty = legacy behaviour (any
+    # ``image/*`` MIME). When non-empty, every upload whose declared
+    # Content-Type is not on the list is rejected with HTTP 415
+    # ``content_type_not_allowed`` *before* the file is buffered or
+    # routed to the model. Per-workspace DLP control: financial /
+    # healthcare buyers commonly lock the surface to ``image/png`` and
+    # ``image/jpeg`` and forbid SVG (active content), TIFF, HEIC.
+    allowed_content_types: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
     # Customer-Managed Encryption Key (CMEK) reference. Procurement teams
     # at large enterprises (financial services, healthcare, government)
     # require the SaaS vendor to encrypt their data with a key the

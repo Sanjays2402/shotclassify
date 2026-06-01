@@ -59,6 +59,11 @@ from shotclassify_store import (
     UPLOAD_BYTES_MAX,
     get_upload_size_policy,
     set_upload_size_policy,
+    ALLOWED_CONTENT_TYPES_MAX,
+    KNOWN_IMAGE_CONTENT_TYPES,
+    AllowedContentTypesPolicy,
+    get_allowed_content_types,
+    set_allowed_content_types,
     CMEK_PROVIDERS,
     CMEK_MODES,
     get_cmek_reference,
@@ -928,6 +933,59 @@ def put_upload_size_route(
     try:
         cfg = set_upload_size_policy(
             tenant_id, max_upload_bytes=raw, updated_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return cfg.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant allowed upload content types (classify routes)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/upload-content-types", dependencies=[require_role("admin")])
+def get_upload_content_types_route(request: Request) -> dict:
+    """Return the tenant's allow-list of upload Content-Type values.
+
+    An empty list means no policy: the classify routes accept any
+    ``image/*`` MIME (legacy behaviour). A non-empty list locks the
+    upload surface to exactly those types.
+    """
+    tenant_id = _tenant(request)
+    return get_allowed_content_types(tenant_id).to_dict()
+
+
+@router.put(
+    "/upload-content-types",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def put_upload_content_types_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Replace the per-tenant allow-list of upload Content-Type values.
+
+    Body: ``{"types": ["image/png", "image/jpeg"]}`` or
+    ``{"types": []}`` / ``{"types": null}`` to clear the policy.
+    Each entry is normalised (lower-cased, MIME parameters stripped)
+    and validated as a basic ``type/subtype`` token; duplicates are
+    collapsed; the persisted list is sorted for stable diffs in the
+    audit log. Tenant-scoped: the value never affects another
+    workspace's classify route.
+    """
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "JSON object body required.")
+    if "types" not in payload:
+        raise HTTPException(422, "Field 'types' is required (list or null).")
+    raw = payload["types"]
+    if raw is not None and not isinstance(raw, list):
+        raise HTTPException(422, "types must be a list of strings or null.")
+    actor = getattr(request.state, "principal", None)
+    try:
+        cfg = set_allowed_content_types(
+            tenant_id, types=raw, updated_by=actor
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

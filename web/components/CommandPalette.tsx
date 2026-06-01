@@ -75,6 +75,7 @@ const NAV: Nav[] = [
   { kind: "nav", id: "nav-rate-limits", label: "Rate limits", hint: "Per workspace and per key quotas", href: "/settings/security/rate-limits", icon: <Gauge size={16} weight="duotone" /> },
   { kind: "nav", id: "nav-audit-sinks", label: "Audit sinks", hint: "Forward audit log to SIEM", href: "/settings/security/audit-sinks", icon: <Broadcast size={16} weight="duotone" /> },
   { kind: "nav", id: "nav-audit-retention", label: "Audit retention", hint: "How long to keep audit rows", href: "/settings/security/audit-retention", icon: <ClockCounterClockwise size={16} weight="duotone" /> },
+  { kind: "nav", id: "nav-upload-content-types", label: "Upload content types", hint: "Allow-list MIME types accepted by classify", href: "/settings/security/upload-content-types", icon: <ImageIcon size={16} weight="duotone" /> },
   { kind: "nav", id: "nav-freeze", label: "Emergency freeze", hint: "Halt all writes during an incident", href: "/settings/security/freeze", icon: <Snowflake size={16} weight="duotone" /> },
   { kind: "nav", id: "nav-notif", label: "Inbox", hint: "Notifications", href: "/notifications", icon: <Bell size={16} weight="duotone" /> },
   { kind: "nav", id: "nav-usage", label: "Usage", hint: "Quota and history", href: "/usage", icon: <ChartBar size={16} weight="duotone" /> },

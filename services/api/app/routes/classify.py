@@ -10,6 +10,7 @@ from shotclassify_common.pipeline import process_image
 from shotclassify_common.utils import ensure_dir, new_id
 from shotclassify_store import (
     Repository,
+    get_allowed_content_types,
     get_upload_size_policy,
     webhooks_store,
 )
@@ -63,6 +64,32 @@ def _dispatch_classify_event(
     except Exception:  # noqa: BLE001
         # Webhook delivery must never leak back to the request path.
         pass
+
+
+def _enforce_content_type(upload: UploadFile, tenant_id: str | None) -> None:
+    """Reject an upload whose Content-Type is not permitted.
+
+    Per-tenant allow-list takes precedence: if the workspace has
+    registered an explicit list (DLP control) the upload must match
+    exactly. Otherwise the legacy gate (any ``image/*``) is applied so
+    existing single-tenant deployments keep working unchanged.
+    Rejected with HTTP 415 *before* the bytes are buffered or routed
+    to the model so a hostile or buggy client cannot spend tenant
+    resources on a payload that will be discarded.
+    """
+    policy = get_allowed_content_types(tenant_id)
+    if policy.accepts(upload.content_type):
+        return
+    raise HTTPException(
+        415,
+        {
+            "error": "content_type_not_allowed",
+            "content_type": upload.content_type,
+            "filename": upload.filename,
+            "allowed": list(policy.types) if policy.enforced else None,
+            "policy_enforced": policy.enforced,
+        },
+    )
 
 
 def _resolve_upload_cap(tenant_id: str | None) -> int | None:
@@ -150,6 +177,7 @@ async def classify(
     principal = getattr(request.state, "principal", None)
     tenant_id = getattr(request.state, "tenant_id", None)
     request_id = getattr(request.state, "request_id", None)
+    _enforce_content_type(file, tenant_id)
     enforce_quota(principal, tenant_id=tenant_id)
     cap = _resolve_upload_cap(tenant_id)
     _enforce_upload_cap(file, cap)
@@ -179,6 +207,8 @@ async def classify_batch(
     principal = getattr(request.state, "principal", None)
     tenant_id = getattr(request.state, "tenant_id", None)
     request_id = getattr(request.state, "request_id", None)
+    for f in files:
+        _enforce_content_type(f, tenant_id)
     enforce_quota(principal, tenant_id=tenant_id)
     cap = _resolve_upload_cap(tenant_id)
     for f in files:
@@ -245,6 +275,7 @@ async def correct(item_id: str, request: Request, category: str = Form(...)):
 async def enqueue(request: Request, file: UploadFile = File(...), background: BackgroundTasks = None):
     """Enqueue via Redis RQ if available; otherwise run inline as background task."""
     tenant_id = getattr(request.state, "tenant_id", None)
+    _enforce_content_type(file, tenant_id)
     cap = _resolve_upload_cap(tenant_id)
     _enforce_upload_cap(file, cap)
     rid, path = _save_upload(file, cap)
