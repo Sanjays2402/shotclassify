@@ -375,6 +375,28 @@ class TenantSettingsRow(Base):
     auth_lockout_threshold: Mapped[int | None] = mapped_column(nullable=True)
     auth_lockout_window_minutes: Mapped[int | None] = mapped_column(nullable=True)
     auth_lockout_cooldown_minutes: Mapped[int | None] = mapped_column(nullable=True)
+    # Emergency write lockdown ("freeze"). When ``freeze_mode`` is True
+    # the FreezeMiddleware rejects every mutating HTTP request scoped to
+    # this tenant with HTTP 423 ``tenant_frozen`` *before* the route
+    # handler runs. Reads stay open so investigators, auditors, and
+    # exporters can still work during an incident. ``freeze_reason``
+    # is the short, member-visible note the dashboard banner displays
+    # and the error body echoes back; ``freeze_engaged_at`` and
+    # ``freeze_engaged_by`` answer "when did this happen and who did
+    # it" on the admin overview without grepping the audit log.
+    # Lifting the freeze clears all four columns. Owner role + MFA
+    # step-up are required to engage or lift, so a stolen session
+    # cookie cannot silently lock or unlock a workspace.
+    freeze_mode: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    freeze_reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    freeze_engaged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    freeze_engaged_by: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

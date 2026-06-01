@@ -984,3 +984,67 @@ def put_cmek_route(
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return cfg.to_dict()
+
+
+# Emergency write lockdown (\"freeze\"). One toggle a workspace owner pulls
+# during a suspected incident: leaked admin token, departing insider,
+# anomalous traffic. While engaged, ``FreezeMiddleware`` rejects every
+# state-changing request scoped to this tenant with HTTP 423
+# ``tenant_frozen``. Reads stay open so investigators and exporters
+# keep working. Engaging *and* lifting require admin role + a fresh
+# MFA step-up so a stolen session cookie cannot silently flip the
+# switch in either direction.
+@router.get("/freeze", dependencies=[require_role("admin")])
+def get_freeze_route(request: Request) -> dict:
+    """Return the current freeze state for the caller's tenant."""
+    from shotclassify_store import get_freeze_state
+
+    tenant_id = _tenant(request)
+    return get_freeze_state(tenant_id).to_dict()
+
+
+@router.post(
+    "/freeze",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def engage_freeze_route(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """Engage the freeze. Body: ``{\"reason\": str}``.
+
+    ``reason`` is mandatory, surfaced in the 423 error body so every
+    blocked caller knows why their write failed, and shown in the
+    dashboard banner. Idempotent: re-engaging while already frozen
+    refreshes the reason and ``engaged_at``.
+    """
+    from shotclassify_store import engage_freeze
+
+    tenant_id = _tenant(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "JSON object body required.")
+    reason = payload.get("reason")
+    actor = getattr(request.state, "principal", None)
+    try:
+        state = engage_freeze(tenant_id, reason, engaged_by=actor)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return state.to_dict()
+
+
+@router.delete(
+    "/freeze",
+    dependencies=[require_role("admin"), require_mfa_step_up()],
+)
+def lift_freeze_route(request: Request) -> dict:
+    """Lift the freeze for the caller's tenant.
+
+    Clears the reason and ``engaged_at`` so the banner returns to the
+    not-engaged copy. Idempotent against a tenant that is not frozen.
+    """
+    from shotclassify_store import lift_freeze
+
+    tenant_id = _tenant(request)
+    actor = getattr(request.state, "principal", None)
+    state = lift_freeze(tenant_id, lifted_by=actor)
+    return state.to_dict()

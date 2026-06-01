@@ -19,6 +19,7 @@ from shotclassify_store import init_db
 from .middleware.audit import AuditLogMiddleware
 from .middleware.auth import APIKeyAndSessionAuth
 from .middleware.csrf import CSRFMiddleware
+from .middleware.freeze import FreezeMiddleware
 from .middleware.ip_allowlist import IPAllowlistMiddleware
 from .middleware.legal_acceptance import LegalAcceptanceGateMiddleware
 from .middleware.metrics import PrometheusMiddleware
@@ -115,6 +116,11 @@ def create_app() -> FastAPI:
     # then Auth, then RequestId innermost so the request_id contextvar is set
     # before audit/auth log handlers fire.
     app.add_middleware(RequestIdMiddleware)
+    # Freeze middleware depends on ``request.state.tenant_id``, so it
+    # must run AFTER TenantResolutionMiddleware on the inbound path.
+    # With Starlette's outer-to-inner add semantics that means add it
+    # BEFORE TenantResolutionMiddleware so it ends up more inner.
+    app.add_middleware(FreezeMiddleware)
     # IP allowlist runs AFTER tenant resolution on the inbound path; with
     # Starlette's outer-to-inner add semantics that means add it BEFORE
     # TenantResolutionMiddleware so it ends up more inner.

@@ -2,6 +2,39 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
+## What's new: emergency freeze (workspace-wide write lockdown)
+
+Every enterprise security questionnaire eventually asks: "if one of our admins is suspected of compromise at 02:00, can your platform stop accepting writes from that workspace before we finish the incident call." shotclassify now exposes a one-switch tenant-wide freeze that does exactly that. A workspace admin engages it with `POST /v1/settings/security/freeze` (admin role + fresh MFA step-up) with a required `reason`. While engaged, a new `FreezeMiddleware` rejects every `POST`, `PUT`, `PATCH` and `DELETE` request scoped to that tenant with HTTP 423 `tenant_frozen` *before* the route handler runs, so a leaked session cookie or stolen API key cannot create, modify or delete anything in the workspace. Reads stay open on purpose so investigators, auditors, exporters and the audit-log UI keep working. A narrow allowlist of mutation paths is exempt from the lockdown so the owner can lift the freeze, satisfy MFA, and sign out without being trapped: `/v1/settings/security/freeze` itself, `/v1/mfa/...`, `/auth/logout`, `/v1/sessions/...`, and the healthchecks. `DELETE /v1/settings/security/freeze` clears the state. Cross-tenant isolation is enforced at the middleware layer: a freeze on workspace `acme` does not affect workspace `globex` even though both run in the same API process, and the test suite asserts this with two parallel admin keys. The engaged reason, timestamp and engaging principal are persisted on `tenant_settings` so the dashboard banner names who is currently holding the lockdown and when, and both engage/lift go through the existing audit middleware with actor, IP, request id and tenant. Manage it interactively at `Settings -> Security -> Emergency freeze`. Coverage lives in `tests/test_tenant_freeze.py` (RBAC on read, reason validation on engage, blocked-write 423 plus cross-tenant isolation, and the exempt-lift recovery path).
+
+Try it (local):
+
+```bash
+# API: http://127.0.0.1:7441
+make api  # in another shell
+
+# Read current state (admin)
+curl -s -H "X-API-Key: $ADMIN_KEY" \
+  http://127.0.0.1:7441/v1/settings/security/freeze
+
+# Engage the freeze with a written reason
+curl -s -X POST -H "X-API-Key: $ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"reason":"Suspected leaked admin token"}' \
+  http://127.0.0.1:7441/v1/settings/security/freeze
+
+# Any write now returns 423 tenant_frozen
+curl -i -X POST -H "X-API-Key: $ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"name":"blocked","filters":{}}' \
+  http://127.0.0.1:7441/v1/saved-views
+
+# Lift the freeze
+curl -s -X DELETE -H "X-API-Key: $ADMIN_KEY" \
+  http://127.0.0.1:7441/v1/settings/security/freeze
+```
+
+UI: open <http://127.0.0.1:3000/settings/security/freeze>.
+
 ## What's new: send a signed test ping to any webhook subscription
 
 Enterprise integrators always ask the same question before they wire shotclassify into their production receiver: "can we fire a synthetic event at our endpoint so we can confirm TLS, signature verification, our IP allowlist, and our handler code before any real classification flows." `POST /v1/webhooks/{id}/test` is that endpoint. It signs and delivers a one-shot `webhook.test` payload to the targeted subscription, regardless of the subscription's event filter, so operators do not have to first add a wildcard subscription just to verify the receiver. The ping carries the standard `X-Shotclassify-Signature`, `X-Shotclassify-Delivery`, and `X-Shotclassify-Subscription` headers plus an `X-Shotclassify-Test: true` marker so receivers can route it to a no-op handler in production. Every gate that protects real dispatch is enforced here too: the subscription must belong to the caller's tenant (cross-tenant requests get `404`, not `403`, so the existence of another tenant's id never leaks), the subscription must be active (paused or revoked returns `409`), the per-tenant webhook egress host allowlist still applies (blocked hosts produce a failed delivery row with the reason), and during a secret rotation overlap the request is dual-signed with `X-Shotclassify-Signature-Next` so receivers can roll the new secret in. The route is `admin` role and scope, requires MFA step-up, accepts `?dry_run=true` for a preview, and is recorded by the standard audit middleware against the targeted subscription id. The dispatch attempt is persisted as a normal `webhook_deliveries` row so the test shows up in the delivery feed, the SIEM export, and the audit trail, and it can be replayed through the existing `/v1/webhooks/deliveries/{id}/replay` path. Coverage in `tests/test_webhooks_api.py` exercises a real signed delivery to a local listener (signature verified with the plaintext secret), cross-tenant isolation, the operator-role denial, the dry-run preview, and the paused-subscription `409`.

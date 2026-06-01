@@ -107,6 +107,15 @@ from .access_reviews import (
     AccessReviewStateError,
 )
 from .db import AccessReviewItemRow, AccessReviewRow
+from . import tenant_freeze as tenant_freeze_store
+from .tenant_freeze import (
+    FREEZE_REASON_MAX_LEN,
+    FreezeState,
+    engage_freeze,
+    get_freeze_state,
+    is_frozen,
+    lift_freeze,
+)
 from .tenant_settings import (
     API_KEY_MAX_TTL_DAYS,
     API_KEY_MIN_TTL_DAYS,
@@ -338,4 +347,11 @@ __all__ = [
     "DSAR_REQUEST_TYPES",
     "DSAR_STATUSES",
     "DataSubjectRequestRow",
+    "tenant_freeze_store",
+    "FreezeState",
+    "FREEZE_REASON_MAX_LEN",
+    "engage_freeze",
+    "get_freeze_state",
+    "is_frozen",
+    "lift_freeze",
 ]
