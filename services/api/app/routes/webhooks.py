@@ -134,6 +134,73 @@ def revoke_webhook(
     return {"ok": True, "revoked": webhook_id}
 
 
+@router.post(
+    "/{webhook_id}/pause",
+    dependencies=[require_mfa_step_up(), require_scope("admin")],
+)
+def pause_webhook(
+    webhook_id: str,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+    _: str = require_role("admin"),
+):
+    """Stop delivering events to this subscription without revoking it.
+
+    Paused subscriptions keep their signing secret, event filters, and
+    delivery history; the dispatcher and replay paths both skip them.
+    Use this during a downstream incident; resume to restart delivery.
+    """
+    return _set_webhook_active(webhook_id, request, dry_run=dry_run, active=False)
+
+
+@router.post(
+    "/{webhook_id}/resume",
+    dependencies=[require_mfa_step_up(), require_scope("admin")],
+)
+def resume_webhook(
+    webhook_id: str,
+    request: Request,
+    dry_run: bool = dry_run_query(),
+    _: str = require_role("admin"),
+):
+    """Restart event delivery on a previously paused subscription.
+
+    Revoked subscriptions cannot be resumed (409); create a new one.
+    """
+    return _set_webhook_active(webhook_id, request, dry_run=dry_run, active=True)
+
+
+def _set_webhook_active(
+    webhook_id: str, request: Request, *, dry_run: bool, active: bool
+) -> dict:
+    tenant_id = _require_tenant(request)
+    record = webhooks_store.get_subscription(webhook_id, tenant_id=tenant_id)
+    if not record:
+        raise HTTPException(404, "Webhook not found.")
+    request.state.audit_target_id = webhook_id
+    if dry_run:
+        next_status = "active" if active else "paused"
+        return mark_dry_run(
+            request,
+            would_set={
+                "id": record.id,
+                "url": record.url,
+                "from_status": record.status,
+                "to_status": next_status,
+            },
+        )
+    try:
+        updated = webhooks_store.set_subscription_active(
+            webhook_id, tenant_id=tenant_id, active=active
+        )
+    except LookupError:
+        raise HTTPException(404, "Webhook not found.")
+    except webhooks_store.SubscriptionStateError as exc:
+        status_code = 410 if exc.code == "revoked" else 409
+        raise HTTPException(status_code, str(exc))
+    return {"ok": True, "webhook": updated.to_dict()}
+
+
 @router.get("/{webhook_id}/deliveries", dependencies=[require_scope("read:audit")])
 def list_webhook_deliveries(
     webhook_id: str,

@@ -90,6 +90,18 @@ class SubscriptionRecord:
             secret_rotated_at=getattr(row, "secret_rotated_at", None),
         )
 
+    @property
+    def status(self) -> str:
+        """Three-state lifecycle: ``active`` | ``paused`` | ``revoked``.
+
+        ``active`` and ``paused`` are operator-controlled and reversible;
+        ``revoked`` is terminal. Surfacing this distinctly lets the admin UI
+        show a pause/resume control without conflating it with delete.
+        """
+        if self.revoked_at is not None:
+            return "revoked"
+        return "active" if self.active else "paused"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -98,6 +110,7 @@ class SubscriptionRecord:
             "description": self.description,
             "events": self.events,
             "active": self.active,
+            "status": self.status,
             "created_at": self.created_at.isoformat(),
             "created_by": self.created_by,
             "revoked_at": self.revoked_at.isoformat() if self.revoked_at else None,
@@ -334,6 +347,71 @@ def revoke_subscription(subscription_id: str, *, tenant_id: str) -> bool:
         row.revoked_at = datetime.now(UTC)
         session.commit()
         return True
+    finally:
+        session.close()
+
+
+class SubscriptionStateError(ValueError):
+    """Raised when pause/resume cannot apply to a subscription's current state.
+
+    Distinct from "not found" so route handlers can return 409 instead of 404
+    when the caller targets a revoked subscription. ``code`` is a stable
+    string for clients (``revoked``, ``already_paused``, ``already_active``).
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def set_subscription_active(
+    subscription_id: str, *, tenant_id: str, active: bool
+) -> SubscriptionRecord:
+    """Pause (active=False) or resume (active=True) a subscription.
+
+    Operationally distinct from revoke: pausing preserves the subscription,
+    its signing secret, delivery history, and event filters so an operator
+    can restart delivery once a downstream incident clears. Revoked
+    subscriptions cannot be resumed; create a new one instead.
+
+    Tenant-scoped: the (id, tenant_id) pair must match an existing row,
+    otherwise this raises ``LookupError`` so the route can return 404.
+    """
+    init_db()
+    if not tenant_id or not subscription_id:
+        raise LookupError("subscription not found")
+    session = get_session()
+    try:
+        row = (
+            session.execute(
+                select(WebhookSubscriptionRow).where(
+                    WebhookSubscriptionRow.id == subscription_id,
+                    WebhookSubscriptionRow.tenant_id == tenant_id,
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if not row:
+            raise LookupError("subscription not found")
+        if row.revoked_at is not None:
+            raise SubscriptionStateError(
+                "revoked",
+                "Subscription has been revoked and cannot be paused or resumed.",
+            )
+        if bool(active) == bool(row.active):
+            raise SubscriptionStateError(
+                "already_active" if row.active else "already_paused",
+                (
+                    "Subscription is already active."
+                    if row.active
+                    else "Subscription is already paused."
+                ),
+            )
+        row.active = bool(active)
+        session.commit()
+        session.refresh(row)
+        return SubscriptionRecord.from_row(row)
     finally:
         session.close()
 

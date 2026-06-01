@@ -2,7 +2,36 @@
 
 Shot classification API and dashboard for tagging images and video frames by camera shot type with a multi-tenant, audit-friendly workspace.
 
-## What's new: periodic access reviews for SOC2 CC6.3
+## What's new: pause and resume webhook subscriptions
+
+Webhook subscriptions now have a third lifecycle state between `active` and the terminal `revoked`: `paused`. Operators hit `POST /v1/webhooks/{id}/pause` during a downstream incident to stop deliveries without throwing away the signing secret, event filters, or delivery history; `POST /v1/webhooks/{id}/resume` brings the subscription back online. The dispatcher and the replay path both skip paused subscriptions, so a paused webhook receives nothing even if events keep flowing for other subscribers in the tenant. Revoked subscriptions stay terminal: resume on a revoked id returns `410`, by design, so an operator who really did mean to delete can never get it back by accident. Both routes require the `admin` role and scope, MFA step-up, and accept `?dry_run=true` so a preview shows the `from_status` -> `to_status` transition without mutating anything. Every transition is written through the normal audit middleware with the actor, request id, and target subscription id. Tenant isolation is enforced at the query layer: tenant B asking to pause tenant A's subscription gets `404`, not `403`, so the existence of the id never leaks. Coverage in `tests/test_webhook_pause_resume.py` exercises the round trip, double-pause and double-resume `409`s, the revoked-is-terminal `410`, the dry-run preview, cross-tenant isolation, and the operator-role denial.
+
+Try it (local):
+
+```bash
+# API: http://127.0.0.1:7441
+make api  # in another shell
+
+# Create a subscription, save the id
+curl -sS -X POST http://127.0.0.1:7441/v1/webhooks \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"url":"https://hooks.example.com/in","events":["classify.completed"]}'
+
+# Preview a pause without applying
+curl -sS -X POST "http://127.0.0.1:7441/v1/webhooks/$WID/pause?dry_run=true" \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY"
+
+# Pause (stops all deliveries; keeps secret + history)
+curl -sS -X POST "http://127.0.0.1:7441/v1/webhooks/$WID/pause" \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY"
+
+# Resume
+curl -sS -X POST "http://127.0.0.1:7441/v1/webhooks/$WID/resume" \
+  -H "X-API-Key: $SHOTCLASSIFY_ADMIN_KEY"
+```
+
+## Previously: periodic access reviews for SOC2 CC6.3
 
 Workspace owners can now run the recurring re-certification of member access that SOC2 CC6.3 and ISO 27001 A.9.2.5 require. Open a review and the system snapshots every active member into one decision row per principal, freezing the role each person held at review time so a later promotion cannot rewrite history. Admins mark each row `keep` or `revoke`, optionally with a note, then apply. Apply removes every `revoke` membership in one transaction through the same `memberships_store.remove_member` path the regular members UI uses (so the same last-admin guard fires), stamps `revoked_at` on the items as proof, and seals the review as `applied` so a second apply returns 409. Apply also supports `?dry_run=true` and surfaces a `blocker` field when a planned revocation would leave the workspace with no admin. Every read and write filters by `tenant_id` at the query layer, so a forged review id from another tenant returns 404, never 200. The full per-member decision list can be exported as CSV for compliance evidence. Tenant isolation, RBAC denial for viewers, last-admin protection, and dry-run preview are covered in `tests/test_access_reviews.py` (4 tests). The UI lives at `/admin/access-reviews`: campaign list, status badges, keep/revoke buttons per row, preview-apply, cancel, and CSV export.
 
