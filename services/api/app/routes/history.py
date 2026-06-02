@@ -1135,17 +1135,26 @@ def stats(request: Request):
     ``count``. ``pinned`` is an independent count of rows the user has
     pinned, so the same dashboards can render a "pinned" badge alongside
     the unlabeled-queue badge without a second filtered list call.
+    ``pinned_untagged`` is the intersection of pinned and untagged: rows
+    the user pinned but never tagged, so the dashboard can surface an
+    "incomplete pins" badge and route operators to finish labelling rows
+    they already cared enough about to pin, without a third filtered list
+    call. It is always ``<= min(pinned, untagged)``.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
     total = repo.count(tenant_id=tenant_id)
     untagged = repo.count_filtered(tenant_id=tenant_id, untagged=True)
     pinned = repo.count_filtered(tenant_id=tenant_id, pinned=True)
+    pinned_untagged = repo.count_filtered(
+        tenant_id=tenant_id, pinned=True, untagged=True
+    )
     return {
         "count": total,
         "untagged": untagged,
         "tagged": total - untagged,
         "pinned": pinned,
+        "pinned_untagged": pinned_untagged,
     }
 
 

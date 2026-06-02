@@ -64,6 +64,7 @@ def test_stats_reports_untagged_and_tagged_split(monkeypatch, tmp_path):
     assert body["untagged"] + body["tagged"] == body["count"]
     # Nothing was pinned in this fixture.
     assert body["pinned"] == 0
+    assert body["pinned_untagged"] == 0
 
 
 def test_stats_all_untagged_when_no_tags(monkeypatch, tmp_path):
@@ -72,7 +73,13 @@ def test_stats_all_untagged_when_no_tags(monkeypatch, tmp_path):
     _seed("b.png", [])
 
     body = c.get("/v1/history/stats", headers={"X-API-Key": "k"}).json()
-    assert body == {"count": 2, "untagged": 2, "tagged": 0, "pinned": 0}
+    assert body == {
+        "count": 2,
+        "untagged": 2,
+        "tagged": 0,
+        "pinned": 0,
+        "pinned_untagged": 0,
+    }
 
 
 def test_stats_all_tagged(monkeypatch, tmp_path):
@@ -81,7 +88,13 @@ def test_stats_all_tagged(monkeypatch, tmp_path):
     _seed("b.png", ["y", "z"])
 
     body = c.get("/v1/history/stats", headers={"X-API-Key": "k"}).json()
-    assert body == {"count": 2, "untagged": 0, "tagged": 2, "pinned": 0}
+    assert body == {
+        "count": 2,
+        "untagged": 0,
+        "tagged": 2,
+        "pinned": 0,
+        "pinned_untagged": 0,
+    }
 
 
 def test_stats_empty(monkeypatch, tmp_path):
@@ -90,7 +103,13 @@ def test_stats_empty(monkeypatch, tmp_path):
     init_db()
 
     body = c.get("/v1/history/stats", headers={"X-API-Key": "k"}).json()
-    assert body == {"count": 0, "untagged": 0, "tagged": 0, "pinned": 0}
+    assert body == {
+        "count": 0,
+        "untagged": 0,
+        "tagged": 0,
+        "pinned": 0,
+        "pinned_untagged": 0,
+    }
 
 
 def test_stats_reports_pinned_count_independent_of_tagged(monkeypatch, tmp_path):
@@ -112,3 +131,22 @@ def test_stats_reports_pinned_count_independent_of_tagged(monkeypatch, tmp_path)
     # Pinned is independent of the tagged/untagged split; it can overlap
     # either bucket and is not required to sum with them.
     assert body["untagged"] + body["tagged"] == body["count"]
+    # Only b.png is both pinned and untagged in this fixture.
+    assert body["pinned_untagged"] == 1
+    # The intersection can never exceed either side it intersects.
+    assert body["pinned_untagged"] <= body["pinned"]
+    assert body["pinned_untagged"] <= body["untagged"]
+
+
+def test_stats_pinned_untagged_zero_when_all_pinned_are_tagged(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # Every pinned row also has at least one tag.
+    _seed("a.png", ["finance"], pinned=True)
+    _seed("b.png", ["q1"], pinned=True)
+    # Unpinned + untagged: not part of the intersection.
+    _seed("c.png", None, pinned=False)
+
+    body = c.get("/v1/history/stats", headers={"X-API-Key": "k"}).json()
+    assert body["pinned"] == 2
+    assert body["untagged"] == 1
+    assert body["pinned_untagged"] == 0
