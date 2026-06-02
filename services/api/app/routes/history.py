@@ -422,15 +422,45 @@ def list_tags(
             "and autocomplete."
         ),
     ),
+    sort: str = Query(
+        "count",
+        pattern="^(count|name)$",
+        description=(
+            "Sort field. 'count' (default) ranks by usage with alphabetical "
+            "tie-break. 'name' sorts alphabetically by tag, useful for "
+            "taxonomy cleanup UIs that scan A-Z."
+        ),
+    ),
+    order: str | None = Query(
+        None,
+        pattern="^(asc|desc)$",
+        description=(
+            "Sort direction. Defaults to 'desc' for sort=count (most-used first) "
+            "and 'asc' for sort=name (A-Z). Combine with sort=count and order=asc "
+            "to surface rarest tags first when pruning."
+        ),
+    ),
 ) -> dict:
     """List distinct tags in the current tenant with their usage counts.
 
     Backs tag autocomplete on the history filter UI and any tag-cloud
-    widget. Sorted by count desc then tag asc so the most-used tags
-    surface first, with stable alphabetical tie-breaks.
+    widget. Default sort is by count desc with alphabetical tie-breaks
+    so the most-used tags surface first. Pass ``sort=name`` for an
+    alphabetical roll-up, or ``sort=count&order=asc`` to find the
+    rarest tags when cleaning up a taxonomy.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
-    items = Repository().list_tags(tenant_id=tenant_id, q=q, limit=limit, min_count=min_count)
+    try:
+        items = Repository().list_tags(
+            tenant_id=tenant_id,
+            q=q,
+            limit=limit,
+            min_count=min_count,
+            sort=sort,
+            order=order,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"items": items, "count": len(items)}
 
 

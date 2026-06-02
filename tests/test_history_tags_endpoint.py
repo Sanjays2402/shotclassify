@@ -127,3 +127,46 @@ def test_tags_endpoint_requires_auth(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.get("/v1/history/tags")
     assert r.status_code in (401, 403)
+
+
+def test_tags_endpoint_sort_by_name(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance", "q1"])
+    _seed("b.png", ["finance", "q2"])
+    _seed("c.png", ["ops"])
+
+    r = c.get("/v1/history/tags?sort=name", headers={"X-API-Key": "k"})
+    assert r.status_code == 200, r.text
+    tags = [it["tag"] for it in r.json()["items"]]
+    assert tags == ["finance", "ops", "q1", "q2"]
+
+    r = c.get("/v1/history/tags?sort=name&order=desc", headers={"X-API-Key": "k"})
+    assert r.status_code == 200
+    tags = [it["tag"] for it in r.json()["items"]]
+    assert tags == ["q2", "q1", "ops", "finance"]
+
+
+def test_tags_endpoint_sort_count_asc_for_rarest(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance"])
+    _seed("b.png", ["finance"])
+    _seed("c.png", ["finance"])
+    _seed("d.png", ["ops"])
+    _seed("e.png", ["rare"])
+
+    r = c.get("/v1/history/tags?sort=count&order=asc", headers={"X-API-Key": "k"})
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    # Rarest first, with alphabetical tie-break on count.
+    assert items[0]["tag"] in {"ops", "rare"}
+    assert items[1]["tag"] in {"ops", "rare"}
+    assert items[0]["count"] == 1
+    assert items[1]["count"] == 1
+    assert items[-1] == {"tag": "finance", "count": 3}
+
+
+def test_tags_endpoint_sort_invalid(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["x"])
+    r = c.get("/v1/history/tags?sort=bogus", headers={"X-API-Key": "k"})
+    assert r.status_code == 422

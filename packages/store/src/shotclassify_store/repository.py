@@ -369,6 +369,8 @@ class Repository:
         q: str | None = None,
         limit: int = 100,
         min_count: int = 1,
+        sort: str = "count",
+        order: str | None = None,
     ) -> list[dict]:
         """Return distinct tags in scope with their usage counts.
 
@@ -401,7 +403,24 @@ class Repository:
                     counts[norm] = counts.get(norm, 0) + 1
         if floor > 1:
             counts = {t: c for t, c in counts.items() if c >= floor}
-        items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        sort_key = (sort or "count").strip().lower()
+        if sort_key not in {"count", "name"}:
+            raise ValueError("`sort` must be 'count' or 'name'.")
+        if order is None:
+            ord_key = "asc" if sort_key == "name" else "desc"
+        else:
+            ord_key = order.strip().lower()
+        if ord_key not in {"asc", "desc"}:
+            raise ValueError("`order` must be 'asc' or 'desc'.")
+        reverse = ord_key == "desc"
+        if sort_key == "count":
+            # Stable alphabetical tie-break: tag asc regardless of order.
+            if reverse:
+                items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            else:
+                items = sorted(counts.items(), key=lambda kv: (kv[1], kv[0]))
+        else:
+            items = sorted(counts.items(), key=lambda kv: kv[0], reverse=reverse)
         return [{"tag": t, "count": c} for t, c in items[:capped]]
 
     def related_tags(
