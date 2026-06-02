@@ -479,6 +479,88 @@ class Repository:
             "last_seen": _iso(last_seen),
         }
 
+    def tag_timeseries(
+        self,
+        tag: str,
+        tenant_id: str | None = None,
+        days: int = 30,
+        until: "datetime | None" = None,
+    ) -> dict:
+        """Per-day usage counts for ``tag`` over a trailing window.
+
+        Backs a sparkline on the tag detail page so an operator can see
+        whether a tag is trending up, dying off, or steady before deciding
+        to merge, rename, or retire it. Returns a dense series with one
+        bucket per UTC day in the window (zero-filled), oldest first, so
+        the caller does not have to fill gaps client-side.
+
+        ``days`` is clamped to ``[1, 365]``. ``until`` defaults to "now"
+        in UTC; the window is the ``days`` calendar days ending on that
+        day inclusive. The tag is normalized the same way as on write
+        (trim, lowercase, 32 char cap).
+
+        Response shape::
+
+            {
+              "tag": "finance",
+              "start": "2025-01-01",
+              "end":   "2025-01-30",
+              "days":  30,
+              "total": 17,
+              "series": [{"date": "2025-01-01", "count": 0}, ...]
+            }
+        """
+        from datetime import date as _date, timedelta as _td, timezone as _tz
+
+        norm = (tag or "").strip().lower()[:32]
+        if not norm:
+            raise ValueError("`tag` must be a non-empty tag name.")
+        window = max(1, min(int(days), 365))
+        if until is None:
+            end_day = datetime.now(_tz.utc).date()
+        else:
+            u = until if until.tzinfo is not None else until.replace(tzinfo=_tz.utc)
+            end_day = u.astimezone(_tz.utc).date()
+        start_day = end_day - _td(days=window - 1)
+        start_dt = datetime.combine(start_day, datetime.min.time(), tzinfo=_tz.utc)
+        end_dt = datetime.combine(end_day, datetime.max.time(), tzinfo=_tz.utc)
+
+        stmt = select(ClassificationRow.tags, ClassificationRow.created_at).where(
+            ClassificationRow.created_at >= start_dt,
+            ClassificationRow.created_at <= end_dt,
+        )
+        stmt = self._scope_tenant(stmt, tenant_id)
+        buckets: dict[_date, int] = {}
+        with get_session() as s:
+            for raw, created in s.execute(stmt):
+                if not isinstance(raw, list) or created is None:
+                    continue
+                hit = False
+                for t in raw:
+                    if isinstance(t, str) and t.strip().lower() == norm:
+                        hit = True
+                        break
+                if not hit:
+                    continue
+                c = created if created.tzinfo is not None else created.replace(tzinfo=_tz.utc)
+                day = c.astimezone(_tz.utc).date()
+                buckets[day] = buckets.get(day, 0) + 1
+        series = []
+        total = 0
+        for i in range(window):
+            d = start_day + _td(days=i)
+            n = int(buckets.get(d, 0))
+            total += n
+            series.append({"date": d.isoformat(), "count": n})
+        return {
+            "tag": norm,
+            "start": start_day.isoformat(),
+            "end": end_day.isoformat(),
+            "days": window,
+            "total": total,
+            "series": series,
+        }
+
     def related_tags(
         self,
         tag: str,

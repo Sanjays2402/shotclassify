@@ -624,6 +624,54 @@ def tag_detail(tag: str, request: Request) -> dict:
 
 
 @router.get(
+    "/tags/{tag}/timeseries",
+    dependencies=[require_role("viewer"), require_scope("read:classifications")],
+)
+def tag_timeseries(
+    tag: str,
+    request: Request,
+    days: int = Query(
+        30,
+        ge=1,
+        le=365,
+        description=(
+            "Length of the trailing window in UTC days. Defaults to 30, "
+            "hard-capped at 365. Each bucket is one calendar day."
+        ),
+    ),
+) -> dict:
+    """Per-day usage counts for ``tag`` over a trailing window.
+
+    Backs a sparkline on the tag detail UI so an operator can see at a
+    glance whether a tag is trending up, dying off, or flat before
+    deciding to keep, rename, merge, or retire it. The series is dense
+    (zero-filled), oldest first, so the chart can render without any
+    gap-filling on the client.
+
+    Response shape::
+
+        {
+          "tag": "finance",
+          "start": "2025-01-01",
+          "end":   "2025-01-30",
+          "days":  30,
+          "total": 17,
+          "series": [{"date": "2025-01-01", "count": 0}, ...]
+        }
+
+    Unknown tags return ``total=0`` with a fully zero-filled series
+    rather than 404, so the chart can render an empty state without a
+    second round trip. Tag input is normalized (trim, lowercase, 32
+    char cap) to match write-time rules.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    try:
+        return Repository().tag_timeseries(tag=tag, tenant_id=tenant_id, days=days)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get(
     "/tags/{tag}/related",
     dependencies=[require_role("viewer"), require_scope("read:classifications")],
 )
