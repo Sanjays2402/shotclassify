@@ -574,6 +574,70 @@ def delete_view_by_name(
     return {"ok": True, "id": view_id, "name": match.get("name")}
 
 
+@router.patch(
+    "/by-name/{name:path}",
+    dependencies=[require_role("operator"), require_scope("write:classifications")],
+)
+def update_view_by_name(
+    request: Request, name: str, payload: dict = Body(...)
+) -> dict:
+    """Rename or update filters on one of the caller's saved views by name.
+
+    Mirrors ``PATCH /v1/saved-views/{view_id}`` for CLI users and scripts
+    that already know the view's name (``shotclassify views rename
+    'Receipts' --to 'Receipts Q3'``) so they do not need to round-trip
+    through list to resolve the id first. Match is the same
+    case-insensitive, whitespace-trimmed comparison the lookup and
+    delete-by-name endpoints use. Body accepts the same shape as the
+    id-based PATCH: ``{"name": "new", "filters": {...}}`` with at least
+    one of the two. Duplicate target names still come back as 409, and
+    foreign or unknown names 404, so scripts can branch on status the
+    same way they do on the id route.
+    """
+    needle = (name or "").strip().lower()
+    if not needle:
+        raise HTTPException(422, "name is required")
+    new_name = payload.get("name")
+    filters = payload.get("filters")
+    if new_name is None and filters is None:
+        raise HTTPException(422, "name or filters required")
+    if new_name is not None and (
+        not isinstance(new_name, str) or not new_name.strip()
+    ):
+        raise HTTPException(422, "name must be a non-empty string")
+    if filters is not None and not isinstance(filters, dict):
+        raise HTTPException(422, "filters must be an object")
+    principal, tenant_id = _scope(request)
+    repo = SavedViewRepository()
+    rows = repo.list(principal=principal, tenant_id=tenant_id)
+    match = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if (row.get("name") or "").strip().lower() == needle:
+            match = row
+            break
+    if match is None:
+        raise HTTPException(404, "saved view not found")
+    view_id = match.get("id")
+    request.state.audit_target_id = view_id
+    try:
+        updated = repo.update(
+            view_id,
+            principal=principal,
+            name=new_name,
+            filters=filters,
+            tenant_id=tenant_id,
+        )
+    except DuplicateSavedViewName as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    if updated is None:
+        raise HTTPException(404, "saved view not found")
+    return updated
+
+
 @router.get(
     "/name-available",
     dependencies=[require_role("viewer"), require_scope("read:classifications")],
