@@ -748,6 +748,15 @@ def tag_timeseries(
             "hard-capped at 365. Each bucket is one calendar day."
         ),
     ),
+    pinned: bool | None = Query(
+        None,
+        description=(
+            "Filter by pinned state. ``true`` counts only pinned records, "
+            "``false`` counts only unpinned, and omitting the param counts "
+            "both. Lets the tag detail sparkline render a pinned-only trend "
+            "behind the pinned badge without a second round trip."
+        ),
+    ),
 ) -> dict:
     """Per-day usage counts for ``tag`` over a trailing window.
 
@@ -775,7 +784,9 @@ def tag_timeseries(
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     try:
-        return Repository().tag_timeseries(tag=tag, tenant_id=tenant_id, days=days)
+        return Repository().tag_timeseries(
+            tag=tag, tenant_id=tenant_id, days=days, pinned=pinned
+        )
     except ValueError as e:
         raise HTTPException(400, str(e))
 

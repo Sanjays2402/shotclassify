@@ -527,6 +527,7 @@ class Repository:
         tenant_id: str | None = None,
         days: int = 30,
         until: "datetime | None" = None,
+        pinned: bool | None = None,
     ) -> dict:
         """Per-day usage counts for ``tag`` over a trailing window.
 
@@ -571,6 +572,8 @@ class Repository:
             ClassificationRow.created_at >= start_dt,
             ClassificationRow.created_at <= end_dt,
         )
+        if pinned is not None:
+            stmt = stmt.where(ClassificationRow.pinned == bool(pinned))
         stmt = self._scope_tenant(stmt, tenant_id)
         buckets: dict[_date, int] = {}
         with get_session() as s:

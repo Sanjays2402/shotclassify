@@ -160,3 +160,67 @@ def test_timeseries_requires_auth(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.get("/v1/history/tags/finance/timeseries")
     assert r.status_code in (401, 403)
+
+
+def _seed_pinned(filename: str, tags: list[str], pinned: bool, created_at):
+    """Like _seed but lets the test control the ``pinned`` flag."""
+    from shotclassify_store.db import ClassificationRow, get_session, init_db
+    from shotclassify_common import Category
+
+    init_db()
+    with get_session() as s:
+        s.add(
+            ClassificationRow(
+                id=uuid.uuid4().hex,
+                created_at=created_at,
+                filename=filename,
+                primary_category=Category.receipt.value,
+                confidence=0.9,
+                ocr_text="",
+                image_path=None,
+                tenant_id=None,
+                label=None,
+                tags=tags,
+                pinned=pinned,
+            )
+        )
+        s.commit()
+
+
+def test_timeseries_pinned_filter(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    today = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    _seed_pinned("p1.png", ["finance"], True, today)
+    _seed_pinned("p2.png", ["finance"], True, today - timedelta(days=2))
+    _seed_pinned("u1.png", ["finance"], False, today)
+    _seed_pinned("u2.png", ["finance"], False, today - timedelta(days=1))
+
+    # No filter: all four counted.
+    r = c.get(
+        "/v1/history/tags/finance/timeseries?days=7",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    assert r.json()["total"] == 4
+
+    # pinned=true: only the two pinned rows.
+    r = c.get(
+        "/v1/history/tags/finance/timeseries?days=7&pinned=true",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    assert body["series"][-1]["count"] == 1  # one pinned today
+    assert body["series"][-3]["count"] == 1  # one pinned two days ago
+
+    # pinned=false: only the two unpinned rows.
+    r = c.get(
+        "/v1/history/tags/finance/timeseries?days=7&pinned=false",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    assert body["series"][-1]["count"] == 1
+    assert body["series"][-2]["count"] == 1
