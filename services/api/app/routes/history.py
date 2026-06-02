@@ -662,6 +662,119 @@ def related_tags(
     except ValueError as e:
         raise HTTPException(400, str(e))
 
+
+RELATED_TAGS_EXPORT_MAX = 10_000
+RELATED_TAGS_EXPORT_COLUMNS = ["tag", "count"]
+
+
+@router.get(
+    "/tags/{tag}/related/export",
+    dependencies=[require_role("viewer"), require_scope("read:classifications")],
+)
+def export_related_tags(
+    tag: str,
+    request: Request,
+    format: str = Query(
+        "csv",
+        pattern="^(csv|json)$",
+        description="Output format: ``csv`` (default, opens in any spreadsheet) or ``json``.",
+    ),
+    limit: int = Query(
+        RELATED_TAGS_EXPORT_MAX,
+        ge=1,
+        le=RELATED_TAGS_EXPORT_MAX,
+        description=(
+            "Maximum number of related tags emitted. Hard-capped at "
+            f"{RELATED_TAGS_EXPORT_MAX} so co-occurrence dumps fit cleanly in a spreadsheet."
+        ),
+    ),
+    min_count: int = Query(
+        1,
+        ge=1,
+        le=1_000_000,
+        description=(
+            "Only include related tags that co-occur with the seed at least "
+            "this many times. Defaults to 1. Set to 2+ to drop one-off pairs "
+            "from a cleanup spreadsheet."
+        ),
+    ),
+):
+    """Download co-occurrence data for ``tag`` as CSV or JSON.
+
+    Mirrors the filters on ``GET /v1/history/tags/{tag}/related`` so admins
+    cleaning up a taxonomy can grab the same list they see in the related
+    sidebar and open it in a spreadsheet to plan merges of typos and
+    near-duplicates before reaching for ``POST /v1/history/tags/merge``.
+    The CSV has a stable ``tag,count`` schema and is streamed with a
+    ``content-disposition`` attachment header so browsers save it instead
+    of rendering it. Sorted by count desc then tag asc, matching the JSON
+    endpoint.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    try:
+        result = Repository().related_tags(
+            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    items = result["items"]
+    seed = result["tag"]
+    base_count = result["base_count"]
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # Filename-safe: seed is already normalized (lowercased, trimmed, 32 chars)
+    # but may contain characters that confuse Content-Disposition. Restrict to
+    # a conservative slug for the filename only; the seed inside JSON is intact.
+    safe_seed = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in seed) or "tag"
+    common_headers = {
+        "x-record-count": str(len(items)),
+        "x-base-count": str(base_count),
+        "access-control-expose-headers": "x-record-count, x-base-count",
+    }
+
+    if format == "json":
+        payload = {
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "tag": seed,
+            "base_count": base_count,
+            "count": len(items),
+            "filters": {
+                "limit": limit,
+                "min_count": min_count,
+            },
+            "items": items,
+        }
+        body = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+        return StreamingResponse(
+            iter([body]),
+            media_type="application/json",
+            headers={
+                "content-disposition": f'attachment; filename="shotclassify-related-{safe_seed}-{stamp}.json"',
+                **common_headers,
+            },
+        )
+
+    def _csv_iter():
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=RELATED_TAGS_EXPORT_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        yield buf.getvalue()
+        for row in items:
+            buf.seek(0)
+            buf.truncate(0)
+            writer.writerow({"tag": row["tag"], "count": row["count"]})
+            yield buf.getvalue()
+
+    return StreamingResponse(
+        _csv_iter(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "content-disposition": f'attachment; filename="shotclassify-related-{safe_seed}-{stamp}.csv"',
+            **common_headers,
+        },
+    )
+
+
 @router.post("/tags/rename", dependencies=[require_role("operator"), require_scope("write:classifications")])
 def rename_tag(
     request: Request,
