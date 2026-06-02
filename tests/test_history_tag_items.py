@@ -29,6 +29,7 @@ def _seed(
     tenant_id: str | None = None,
     created_at: datetime | None = None,
     confidence: float = 0.9,
+    pinned: bool = False,
 ) -> str:
     from shotclassify_store.db import ClassificationRow, get_session, init_db
     from shotclassify_common import Category
@@ -48,7 +49,7 @@ def _seed(
                 tenant_id=tenant_id,
                 label=None,
                 tags=tags,
-                pinned=False,
+                pinned=pinned,
             )
         )
         s.commit()
@@ -160,6 +161,54 @@ def test_tag_items_bad_sort_rejected(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.get(
         "/v1/history/tags/finance/items?sort=bogus",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 422
+
+
+def test_tag_items_pinned_filter(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    base = datetime(2025, 1, 1, 12, 0, tzinfo=timezone.utc)
+    _seed("p1.png", ["finance"], created_at=base, pinned=True)
+    _seed("p2.png", ["finance"], created_at=base + timedelta(days=1), pinned=True)
+    _seed("u1.png", ["finance"], created_at=base + timedelta(days=2), pinned=False)
+    _seed("other.png", ["ops"], created_at=base + timedelta(days=3), pinned=True)
+
+    # pinned=true returns only pinned records for the tag.
+    r = c.get(
+        "/v1/history/tags/finance/items?pinned=true",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert {row["filename"] for row in body} == {"p1.png", "p2.png"}
+    assert all(row["pinned"] is True for row in body)
+    assert r.headers["x-total-count"] == "2"
+
+    # pinned=false returns only unpinned records for the tag.
+    r = c.get(
+        "/v1/history/tags/finance/items?pinned=false",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert {row["filename"] for row in body} == {"u1.png"}
+    assert r.headers["x-total-count"] == "1"
+
+    # Omitting pinned returns both, ignoring records of other tags.
+    r = c.get(
+        "/v1/history/tags/finance/items",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    assert {row["filename"] for row in r.json()} == {"p1.png", "p2.png", "u1.png"}
+    assert r.headers["x-total-count"] == "3"
+
+
+def test_tag_items_pinned_bad_value_rejected(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.get(
+        "/v1/history/tags/finance/items?pinned=maybe",
         headers={"X-API-Key": "k"},
     )
     assert r.status_code == 422

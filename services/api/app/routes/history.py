@@ -687,6 +687,15 @@ def tag_items(
             "``conf_desc`` and ``conf_asc`` order by ``confidence``."
         ),
     ),
+    pinned: bool | None = Query(
+        None,
+        description=(
+            "Filter by pinned state. ``true`` returns only pinned records, "
+            "``false`` returns only unpinned, and omitting the param returns both. "
+            "Lets the tag detail UI drill into the pinned subset behind the "
+            "pinned badge without a second round trip."
+        ),
+    ),
 ) -> list[ClassificationRecord]:
     """List classification records that carry ``tag`` in the current tenant.
 
@@ -696,7 +705,9 @@ def tag_items(
     32 char cap) to match write-time rules. Unknown tags return an empty
     list rather than 404, so the panel can render an empty state without a
     second round trip. ``x-total-count``, ``x-offset``, and ``x-limit``
-    response headers expose pagination state for the UI.
+    response headers expose pagination state for the UI. The optional
+    ``pinned`` filter narrows the panel to pinned or unpinned records so
+    the UI can render a pinned-only view from the tag detail badge.
     """
     norm = (tag or "").strip().lower()[:32]
     if not norm:
@@ -709,8 +720,9 @@ def tag_items(
         tenant_id=tenant_id,
         tag=norm,
         sort=sort,
+        pinned=pinned,
     )
-    total = repo.count_filtered(tenant_id=tenant_id, tag=norm)
+    total = repo.count_filtered(tenant_id=tenant_id, tag=norm, pinned=pinned)
     response.headers["x-total-count"] = str(total)
     response.headers["x-offset"] = str(offset)
     response.headers["x-limit"] = str(limit)
