@@ -191,3 +191,78 @@ def test_saved_view_rejects_duplicate_name(monkeypatch, tmp_path):
     )
     assert r.status_code == 200, r.text
     assert r.json()["name"] == "Q1 Review"
+
+
+def test_saved_view_duplicate_copies_filters_and_auto_names(monkeypatch, tmp_path):
+    """POST /v1/saved-views/{id}/duplicate clones the row for the same user.
+
+    Default name is ``"{source} (copy)"`` with auto ``(copy 2)``,
+    ``(copy 3)`` suffixes on collision so a user can hit "Duplicate"
+    repeatedly without getting a 409 on the very first try.
+    """
+    c = _client(monkeypatch, tmp_path)
+    base = {
+        "name": "Pinned receipts",
+        "filters": {
+            "category": "receipt",
+            "min_conf": 0.5,
+            "pinned": True,
+            "tags": ["finance"],
+        },
+    }
+    r = c.post("/v1/saved-views", json=base, headers=HEADERS)
+    assert r.status_code == 200, r.text
+    src_id = r.json()["id"]
+
+    # First duplicate: default name + copied filters.
+    r = c.post(f"/v1/saved-views/{src_id}/duplicate", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    dup1 = r.json()
+    assert dup1["id"] != src_id
+    assert dup1["name"] == "Pinned receipts (copy)"
+    assert dup1["filters"] == {
+        "category": "receipt",
+        "min_conf": 0.5,
+        "pinned": True,
+        "tags": ["finance"],
+    }
+
+    # Second duplicate auto-suffixes.
+    r = c.post(f"/v1/saved-views/{src_id}/duplicate", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "Pinned receipts (copy 2)"
+
+    # Explicit name override and filter override.
+    r = c.post(
+        f"/v1/saved-views/{src_id}/duplicate",
+        json={"name": "Receipts, Q2", "filters": {"category": "receipt", "min_conf": 0.8}},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["name"] == "Receipts, Q2"
+    assert body["filters"] == {"category": "receipt", "min_conf": 0.8}
+
+    # Explicit name that collides still 409s.
+    r = c.post(
+        f"/v1/saved-views/{src_id}/duplicate",
+        json={"name": "Pinned receipts"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 409, r.text
+
+    # Unknown id is 404.
+    r = c.post("/v1/saved-views/does-not-exist/duplicate", headers=HEADERS)
+    assert r.status_code == 404
+
+    # Bad payload shape rejected.
+    r = c.post(
+        f"/v1/saved-views/{src_id}/duplicate",
+        json={"filters": "not-an-object"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 422
+
+    # Sidebar now has source + 3 copies = 4 rows.
+    r = c.get("/v1/saved-views", headers=HEADERS)
+    assert r.json()["count"] == 4

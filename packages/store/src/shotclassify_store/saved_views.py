@@ -248,6 +248,98 @@ class SavedViewRepository:
             s.commit()
             return _row_to_dict(row)
 
+    def duplicate(
+        self,
+        view_id: str,
+        *,
+        principal: str,
+        name: str | None = None,
+        filters: dict[str, Any] | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Clone an existing view for the same principal.
+
+        ``name`` defaults to ``"{source} (copy)"`` and is auto-suffixed with
+        ``(2)``, ``(3)``, ... if that name is already taken in the same
+        (principal, tenant) scope, so the common "start from this view and
+        tweak" flow does not 409 on the very first try. An explicit ``name``
+        is honoured verbatim and collides as usual.
+
+        ``filters`` overrides the source filter set when provided, otherwise
+        the source's filters are copied as-is (and re-coerced, so a stale
+        row gets cleaned up on copy).
+        """
+        with get_session() as s:
+            row = s.get(SavedViewRow, view_id)
+            if row is None or row.principal != principal:
+                return None
+            if tenant_id is not None and row.tenant_id not in (None, tenant_id):
+                return None
+            source_name = row.name or ""
+            source_filters = dict(row.filters or {})
+            row_tenant = row.tenant_id
+
+            if filters is not None:
+                clean_filters = _coerce_filters(filters)
+            else:
+                clean_filters = _coerce_filters(source_filters)
+
+            existing_count = s.execute(
+                select(sa_func.count(SavedViewRow.id)).where(
+                    SavedViewRow.principal == principal
+                )
+            ).scalar_one()
+            if existing_count >= PER_USER_MAX:
+                raise ValueError(
+                    f"saved view limit reached ({PER_USER_MAX} per user)"
+                )
+
+            if name is not None:
+                final_name = _clean_name(name)
+                dup = s.execute(
+                    select(SavedViewRow.id).where(
+                        SavedViewRow.principal == principal,
+                        SavedViewRow.tenant_id == row_tenant,
+                        sa_func.lower(SavedViewRow.name) == final_name.lower(),
+                    )
+                ).first()
+                if dup is not None:
+                    raise DuplicateSavedViewName(final_name)
+            else:
+                base = _clean_name(f"{source_name} (copy)")
+                final_name = base
+                # Auto-disambiguate: (copy), (copy 2), (copy 3), ...
+                # Cap iterations so a malicious 50-row sidebar full of
+                # "X (copy N)" names cannot spin forever.
+                for attempt in range(2, PER_USER_MAX + 2):
+                    dup = s.execute(
+                        select(SavedViewRow.id).where(
+                            SavedViewRow.principal == principal,
+                            SavedViewRow.tenant_id == row_tenant,
+                            sa_func.lower(SavedViewRow.name)
+                            == final_name.lower(),
+                        )
+                    ).first()
+                    if dup is None:
+                        break
+                    final_name = _clean_name(f"{source_name} (copy {attempt})")
+                else:
+                    raise DuplicateSavedViewName(final_name)
+
+            now = datetime.now(UTC)
+            new_row = SavedViewRow(
+                id=uuid.uuid4().hex,
+                principal=principal,
+                tenant_id=row_tenant,
+                name=final_name,
+                filters=clean_filters,
+                created_at=now,
+                updated_at=now,
+            )
+            s.add(new_row)
+            s.commit()
+            return _row_to_dict(new_row)
+
     def update(
         self,
         view_id: str,

@@ -60,6 +60,42 @@ def create_view(request: Request, payload: dict = Body(...)) -> dict:
         raise HTTPException(422, str(e))
 
 
+@router.post("/{view_id}/duplicate", dependencies=[require_role("operator"), require_scope("write:classifications")])
+def duplicate_view(
+    request: Request, view_id: str, payload: dict | None = Body(default=None)
+) -> dict:
+    """Clone a saved view for the same principal.
+
+    Optional body: ``{"name": "...", "filters": {...}}``. When ``name`` is
+    omitted the new view is called ``"{source} (copy)"`` (auto-suffixed if
+    that name is taken). When ``filters`` is omitted the source filters are
+    copied verbatim.
+    """
+    principal, tenant_id = _scope(request)
+    payload = payload or {}
+    name = payload.get("name")
+    filters = payload.get("filters")
+    if name is not None and (not isinstance(name, str) or not name.strip()):
+        raise HTTPException(422, "name must be a non-empty string")
+    if filters is not None and not isinstance(filters, dict):
+        raise HTTPException(422, "filters must be an object")
+    try:
+        row = SavedViewRepository().duplicate(
+            view_id,
+            principal=principal,
+            name=name,
+            filters=filters,
+            tenant_id=tenant_id,
+        )
+    except DuplicateSavedViewName as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    if row is None:
+        raise HTTPException(404, "saved view not found")
+    return row
+
+
 @router.get("/{view_id}", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def get_view(request: Request, view_id: str) -> dict:
     principal, tenant_id = _scope(request)
