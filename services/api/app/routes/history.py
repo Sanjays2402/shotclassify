@@ -989,8 +989,23 @@ def delete_tag(
 
 @router.get("/stats", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def stats(request: Request):
+    """Tenant-scoped row counts for the history dashboard.
+
+    ``count`` is the total number of classification rows. ``untagged`` and
+    ``tagged`` split that total by whether the row has at least one tag,
+    so dashboards and sidebar badges can render an "unlabeled queue" count
+    without a second filtered list call. The two splits always sum to
+    ``count``.
+    """
     tenant_id = getattr(request.state, "tenant_id", None)
-    return {"count": Repository().count(tenant_id=tenant_id)}
+    repo = Repository()
+    total = repo.count(tenant_id=tenant_id)
+    untagged = repo.count_filtered(tenant_id=tenant_id, untagged=True)
+    return {
+        "count": total,
+        "untagged": untagged,
+        "tagged": total - untagged,
+    }
 
 
 @router.get("/aggregate", dependencies=[require_role("viewer"), require_scope("read:classifications")])
