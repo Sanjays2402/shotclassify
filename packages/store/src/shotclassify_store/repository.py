@@ -474,13 +474,18 @@ class Repository:
         norm = (tag or "").strip().lower()[:32]
         if not norm:
             raise ValueError("`tag` must be a non-empty tag name.")
-        stmt = select(ClassificationRow.tags, ClassificationRow.created_at)
+        stmt = select(
+            ClassificationRow.tags,
+            ClassificationRow.created_at,
+            ClassificationRow.pinned,
+        )
         stmt = self._scope_tenant(stmt, tenant_id)
         count = 0
+        pinned_count = 0
         first_seen: datetime | None = None
         last_seen: datetime | None = None
         with get_session() as s:
-            for raw, created in s.execute(stmt):
+            for raw, created, pinned in s.execute(stmt):
                 if not isinstance(raw, list):
                     continue
                 hit = False
@@ -493,6 +498,8 @@ class Repository:
                 if not hit:
                     continue
                 count += 1
+                if bool(pinned):
+                    pinned_count += 1
                 if created is None:
                     continue
                 if first_seen is None or created < first_seen:
@@ -509,6 +516,7 @@ class Repository:
         return {
             "tag": norm,
             "count": count,
+            "pinned": pinned_count,
             "first_seen": _iso(first_seen),
             "last_seen": _iso(last_seen),
         }

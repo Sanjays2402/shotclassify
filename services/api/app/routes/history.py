@@ -638,11 +638,15 @@ def tag_detail(tag: str, request: Request) -> dict:
         {
           "tag": "finance",
           "count": 42,
+          "pinned": 7,
           "first_seen": "2025-01-04T18:22:11+00:00",
           "last_seen":  "2025-03-19T08:05:00+00:00"
         }
 
-    Unknown tags return ``count=0`` with ``first_seen`` and ``last_seen``
+    ``pinned`` is the number of records carrying the tag that the user
+    has pinned, so the detail page can render a "pinned" badge next to
+    the usage count without a second round trip. Unknown tags return
+    ``count=0`` and ``pinned=0`` with ``first_seen`` and ``last_seen``
     set to ``null`` rather than 404, so the UI can render an empty state
     without a second round trip. Tag input is normalized (trim, lowercase,
     32 char cap) to match write-time rules.

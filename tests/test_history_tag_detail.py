@@ -28,6 +28,7 @@ def _seed(
     tags: list[str],
     tenant_id: str | None = None,
     created_at: datetime | None = None,
+    pinned: bool = False,
 ) -> None:
     from shotclassify_store.db import ClassificationRow, get_session, init_db
     from shotclassify_common import Category
@@ -46,7 +47,7 @@ def _seed(
                 tenant_id=tenant_id,
                 label=None,
                 tags=tags,
-                pinned=False,
+                pinned=pinned,
             )
         )
         s.commit()
@@ -77,9 +78,24 @@ def test_tag_detail_unknown_tag_returns_empty(monkeypatch, tmp_path):
     assert r.json() == {
         "tag": "nope",
         "count": 0,
+        "pinned": 0,
         "first_seen": None,
         "last_seen": None,
     }
+
+
+def test_tag_detail_pinned_count(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance"], pinned=True)
+    _seed("b.png", ["finance"], pinned=True)
+    _seed("c.png", ["finance"], pinned=False)
+    _seed("d.png", ["ops"], pinned=True)  # different tag, ignored
+
+    r = c.get("/v1/history/tags/finance", headers={"X-API-Key": "k"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 3
+    assert body["pinned"] == 2
 
 
 def test_tag_detail_normalizes_input(monkeypatch, tmp_path):
