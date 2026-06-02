@@ -32,6 +32,7 @@ def test_aggregate_returns_real_rollups(tmp_path, monkeypatch):
             route={"action": "none"},
             elapsed_ms=200 + i * 10,
             user_corrected_to="code_snippet" if i == 1 else None,
+            pinned=(i % 2 == 0),
         )
         for i in range(8)
     ]
@@ -54,3 +55,63 @@ def test_aggregate_returns_real_rollups(tmp_path, monkeypatch):
     assert len(agg["confidence_histogram"]) == 10
     assert sum(b["count"] for b in agg["confidence_histogram"]) == 8
     assert len(agg["hourly"]) >= 1
+    assert agg["pinned"] is None
+
+
+def test_aggregate_pinned_filter_narrows_rollups(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'agg_pinned.db'}")
+    monkeypatch.setenv("STORAGE_LOCAL_DIR", str(tmp_path / "storage"))
+
+    from shotclassify_common.settings import get_settings
+    from shotclassify_store import db
+    from shotclassify_store.db import ClassificationRow, get_session
+    from shotclassify_store.repository import Repository
+
+    get_settings.cache_clear()
+    db.get_engine.cache_clear()
+    db._session_factory.cache_clear()
+
+    now = datetime.now(timezone.utc)
+    repo = Repository()
+    rows = [
+        ClassificationRow(
+            id=f"r{i}",
+            filename=f"f{i}.png",
+            created_at=now - timedelta(hours=i % 6),
+            primary_category="receipt" if i % 2 == 0 else "code_snippet",
+            confidence=0.7 + (i % 3) * 0.1,
+            ocr_text="",
+            ocr_lang="en",
+            extracted={},
+            route={"action": "none"},
+            elapsed_ms=200 + i * 10,
+            user_corrected_to="code_snippet" if i == 1 else None,
+            pinned=(i % 2 == 0),
+        )
+        for i in range(8)
+    ]
+    with get_session() as s:
+        for r in rows:
+            s.add(r)
+        s.commit()
+
+    all_agg = repo.aggregate(tenant_id=None, hours=24)
+    pinned_agg = repo.aggregate(tenant_id=None, hours=24, pinned=True)
+    unpinned_agg = repo.aggregate(tenant_id=None, hours=24, pinned=False)
+
+    assert all_agg["total"] == 8
+    assert pinned_agg["total"] == 4
+    assert unpinned_agg["total"] == 4
+    assert pinned_agg["pinned"] is True
+    assert unpinned_agg["pinned"] is False
+    # Pinned rows are the even indices, which are all receipts.
+    pinned_cats = {p["category"] for p in pinned_agg["per_class"]}
+    assert pinned_cats == {"receipt"}
+    unpinned_cats = {p["category"] for p in unpinned_agg["per_class"]}
+    assert unpinned_cats == {"code_snippet"}
+    # The correction was on row r1 (unpinned), so it must not leak
+    # into the pinned rollup.
+    assert pinned_agg["corrections"] == 0
+    assert unpinned_agg["corrections"] == 1
+    # Splits sum back to the unfiltered total.
+    assert pinned_agg["total"] + unpinned_agg["total"] == all_agg["total"]

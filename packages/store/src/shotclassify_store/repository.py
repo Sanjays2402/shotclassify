@@ -929,19 +929,28 @@ class Repository:
         self,
         tenant_id: str | None = None,
         hours: int = 24,
+        pinned: bool | None = None,
     ) -> dict:
         """Return rich rollups for the analytics dashboard.
 
         Computes per-category counts, mean confidence per class,
         latency percentiles (p50/p95/p99), a 24-bin hourly volume
         histogram, and a correction count. All numbers are derived
-        from real rows scoped to ``tenant_id``.
+        from real rows scoped to ``tenant_id``. ``pinned`` narrows
+        the rollup to pinned or unpinned rows: ``True`` returns the
+        analytics computed only over pinned classifications, ``False``
+        flips to the unpinned subset, and ``None`` (the default)
+        ignores pin state so the dashboard sees every row.
         """
         from datetime import datetime, timedelta, timezone
 
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         stmt = select(ClassificationRow)
         stmt = self._scope_tenant(stmt, tenant_id)
+        if pinned is True:
+            stmt = stmt.where(ClassificationRow.pinned.is_(True))
+        elif pinned is False:
+            stmt = stmt.where(ClassificationRow.pinned.is_(False))
         with get_session() as s:
             rows = list(s.execute(stmt).scalars())
 
@@ -1008,6 +1017,7 @@ class Repository:
         return {
             "total": total,
             "window_hours": hours,
+            "pinned": pinned,
             "window_count": len(recent_rows),
             "corrections": corrections,
             "correction_rate": round(corrections / total, 4) if total else 0.0,

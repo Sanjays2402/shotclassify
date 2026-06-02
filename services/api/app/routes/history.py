@@ -1150,9 +1150,23 @@ def stats(request: Request):
 
 
 @router.get("/aggregate", dependencies=[require_role("viewer"), require_scope("read:classifications")])
-def aggregate(request: Request, hours: int = Query(24, ge=1, le=24 * 30)):
+def aggregate(
+    request: Request,
+    hours: int = Query(24, ge=1, le=24 * 30),
+    pinned: bool | None = Query(
+        None,
+        description=(
+            "Optional pinned filter. ``true`` computes the dashboard "
+            "rollups (per-class, latency, confidence histogram, hourly "
+            "volume, corrections) over pinned rows only; ``false`` flips "
+            "to the unpinned subset. Omit to ignore pin state. Lets the "
+            "analytics dashboard mirror a pinned-only toggle without a "
+            "second round trip."
+        ),
+    ),
+):
     tenant_id = getattr(request.state, "tenant_id", None)
-    return Repository().aggregate(tenant_id=tenant_id, hours=hours)
+    return Repository().aggregate(tenant_id=tenant_id, hours=hours, pinned=pinned)
 
 
 @router.get("/{item_id}", response_model=ClassificationRecord, dependencies=[require_role("viewer"), require_scope("read:classifications")])
