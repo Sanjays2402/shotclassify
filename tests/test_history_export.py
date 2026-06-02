@@ -234,3 +234,88 @@ def test_history_export_truncated_false_when_full_set_fits(monkeypatch, tmp_path
     assert body["total_matched"] == 1
     assert body["truncated"] is False
     assert r.headers["x-truncated"] == "false"
+
+
+def test_history_export_offset_paginates_through_truncated_set(monkeypatch, tmp_path):
+    """`offset` lets a caller resume a truncated export. Walking the pages
+    yields every row exactly once with no overlap or gap, and the last
+    page reports truncated=false with no next_offset."""
+    c = _client(monkeypatch, tmp_path)
+    for i in range(5):
+        _seed_one(f"shot-{i}.png", 0.5 + i * 0.05)
+
+    # Page 1: rows 0..1 of 5. Headers expose the next cursor.
+    r1 = c.get(
+        "/v1/history/export?format=json&limit=2&offset=0",
+        headers={"X-API-Key": "k"},
+    )
+    assert r1.status_code == 200
+    b1 = json.loads(r1.text)
+    assert b1["count"] == 2
+    assert b1["offset"] == 0
+    assert b1["total_matched"] == 5
+    assert b1["truncated"] is True
+    assert b1["next_offset"] == 2
+    assert r1.headers["x-offset"] == "0"
+    assert r1.headers["x-next-offset"] == "2"
+    assert r1.headers["x-truncated"] == "true"
+
+    # Page 2: rows 2..3.
+    r2 = c.get(
+        "/v1/history/export?format=json&limit=2&offset=2",
+        headers={"X-API-Key": "k"},
+    )
+    b2 = json.loads(r2.text)
+    assert b2["offset"] == 2
+    assert b2["next_offset"] == 4
+    assert b2["truncated"] is True
+
+    # Page 3: row 4 only, end of set. No next cursor, not truncated.
+    r3 = c.get(
+        "/v1/history/export?format=json&limit=2&offset=4",
+        headers={"X-API-Key": "k"},
+    )
+    b3 = json.loads(r3.text)
+    assert b3["count"] == 1
+    assert b3["offset"] == 4
+    assert b3["truncated"] is False
+    assert b3["next_offset"] is None
+    assert "x-next-offset" not in r3.headers
+    assert r3.headers["x-truncated"] == "false"
+
+    # Coverage + uniqueness across pages.
+    ids = [rec["id"] for rec in b1["records"] + b2["records"] + b3["records"]]
+    assert len(ids) == 5
+    assert len(set(ids)) == 5
+
+
+def test_history_export_offset_works_for_csv_and_ndjson(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    for i in range(4):
+        _seed_one(f"row-{i}.png", 0.6 + i * 0.05)
+
+    # CSV: offset=2, limit=2 -> 2 data rows, x-offset header set.
+    r = c.get(
+        "/v1/history/export?format=csv&limit=2&offset=2",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    assert r.headers["x-record-count"] == "2"
+    assert r.headers["x-offset"] == "2"
+    assert r.headers["x-total-matched"] == "4"
+    assert r.headers["x-truncated"] == "false"
+    reader = csv.reader(io.StringIO(r.text))
+    rows = list(reader)
+    assert len(rows) == 1 + 2  # header + 2 data rows
+
+    # NDJSON exposes the same cursor headers.
+    r = c.get(
+        "/v1/history/export?format=ndjson&limit=2&offset=0",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    assert r.headers["x-offset"] == "0"
+    assert r.headers["x-next-offset"] == "2"
+    assert r.headers["x-truncated"] == "true"
+    lines = [ln for ln in r.text.splitlines() if ln.strip()]
+    assert len(lines) == 2

@@ -171,6 +171,15 @@ def export_history(
     request: Request,
     format: str = Query("csv", pattern="^(csv|json|ndjson)$"),
     limit: int = Query(1000, ge=1, le=EXPORT_MAX),
+    offset: int = Query(
+        0,
+        ge=0,
+        le=100_000,
+        description=(
+            "Skip this many matching rows before streaming. Pair with `limit` "
+            "to resume a truncated export, e.g. ?limit=5000&offset=5000."
+        ),
+    ),
     category: Category | None = Query(None),
     q: str | None = Query(None, description="Full-text query over OCR text and filename"),
     since: datetime | None = Query(None, description="Include records at or after this UTC timestamp"),
@@ -201,6 +210,7 @@ def export_history(
     repo = Repository()
     records = repo.list(
         limit=limit,
+        offset=offset,
         category=category,
         query=q,
         tenant_id=tenant_id,
@@ -230,16 +240,20 @@ def export_history(
         pinned=pinned,
         tags=tags_norm,
     )
-    truncated = total_matched > len(records)
+    truncated = (offset + len(records)) < total_matched
+    next_offset = offset + len(records) if truncated else None
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     common_headers = {
         "x-record-count": str(len(records)),
         "x-total-matched": str(total_matched),
+        "x-offset": str(offset),
         "x-truncated": "true" if truncated else "false",
         "access-control-expose-headers": (
-            "x-record-count, x-total-matched, x-truncated"
+            "x-record-count, x-total-matched, x-offset, x-next-offset, x-truncated"
         ),
     }
+    if next_offset is not None:
+        common_headers["x-next-offset"] = str(next_offset)
 
     if format == "ndjson":
         # Newline-delimited JSON: one record per line, no wrapper object.
@@ -262,11 +276,14 @@ def export_history(
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "count": len(records),
             "total_matched": total_matched,
+            "offset": offset,
+            "next_offset": next_offset,
             "truncated": truncated,
             "filters": {
                 "category": category.value if category else None,
                 "q": q,
                 "limit": limit,
+                "offset": offset,
                 "since": since.isoformat() if since else None,
                 "until": until.isoformat() if until else None,
                 "min_conf": min_conf,
