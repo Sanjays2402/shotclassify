@@ -42,21 +42,53 @@ def list_views(request: Request) -> dict:
     return {"items": items, "count": len(items)}
 
 
+_EXPORT_MAX_IDS = 200
+
+
 @router.get(
     "/export",
     dependencies=[require_role("viewer"), require_scope("read:classifications")],
 )
-def export_views(request: Request) -> Response:
+def export_views(
+    request: Request,
+    ids: str | None = Query(
+        None,
+        description=(
+            "Optional comma-separated list of view ids to include. When "
+            "omitted, every saved view owned by the caller in the current "
+            "tenant is exported. Unknown ids are silently dropped so a "
+            "partial selection still produces a usable backup; the "
+            "response's ``count`` reflects what actually shipped. Capped "
+            f"at {_EXPORT_MAX_IDS} ids per call."
+        ),
+    ),
+) -> Response:
     """Download the caller's saved views as a JSON file.
 
     Lets a user back up or migrate their personal filter sidebar without
     going through workspace-wide admin exports. Scope is the same as
     ``GET /v1/saved-views``: only rows owned by the calling principal in
     the current tenant are returned, with all repository-side coercion
-    already applied.
+    already applied. Pass ``?ids=a,b,c`` to export just a subset, which
+    is the common case when migrating a hand-picked few views between
+    workspaces instead of the whole sidebar.
     """
     principal, tenant_id = _scope(request)
+    wanted: set[str] | None = None
+    if ids is not None:
+        wanted = {tok.strip() for tok in ids.split(",") if tok.strip()}
+        if len(wanted) > _EXPORT_MAX_IDS:
+            raise HTTPException(
+                422,
+                f"too many ids ({len(wanted)}); max {_EXPORT_MAX_IDS} per export",
+            )
     items = SavedViewRepository().list(principal=principal, tenant_id=tenant_id)
+    if wanted is not None:
+        items = [
+            r
+            for r in items
+            if isinstance(r, dict) and r.get("id") in wanted
+        ]
     now = datetime.now(UTC)
     body = {
         "schema": "shotclassify.saved_views.v1",

@@ -317,6 +317,69 @@ def test_saved_views_export_requires_auth(monkeypatch, tmp_path):
     assert r.status_code in (401, 403)
 
 
+def test_saved_views_export_filters_by_ids(monkeypatch, tmp_path):
+    """``?ids=`` lets a user export a hand-picked subset of their views."""
+    import json
+
+    c = _client(monkeypatch, tmp_path)
+    seeded = []
+    for name, filters in (
+        ("Receipts", {"category": "receipt"}),
+        ("High conf", {"min_conf": 0.9}),
+        ("Pinned only", {"pinned": True}),
+    ):
+        r = c.post(
+            "/v1/saved-views",
+            json={"name": name, "filters": filters},
+            headers=HEADERS,
+        )
+        assert r.status_code == 200, r.text
+        seeded.append(r.json())
+
+    keep = [seeded[0]["id"], seeded[2]["id"]]
+
+    # Subset with a stray empty token and an unknown id mixed in: empty
+    # tokens are dropped, unknown ids are silently ignored.
+    r = c.get(
+        "/v1/saved-views/export",
+        params={"ids": f"{keep[0]},,{keep[1]},does-not-exist"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    body = json.loads(r.content)
+    assert body["count"] == 2
+    got = sorted(v["name"] for v in body["items"])
+    assert got == ["Pinned only", "Receipts"]
+
+    # Only unknown ids -> empty export, still a valid envelope.
+    r = c.get(
+        "/v1/saved-views/export",
+        params={"ids": "nope-1,nope-2"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200
+    body = json.loads(r.content)
+    assert body["count"] == 0
+    assert body["items"] == []
+
+    # No ids param -> full export, unchanged behaviour.
+    r = c.get("/v1/saved-views/export", headers=HEADERS)
+    assert r.status_code == 200
+    assert json.loads(r.content)["count"] == 3
+
+
+def test_saved_views_export_rejects_too_many_ids(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    too_many = ",".join(f"id-{i}" for i in range(201))
+    r = c.get(
+        "/v1/saved-views/export",
+        params={"ids": too_many},
+        headers=HEADERS,
+    )
+    assert r.status_code == 422
+    assert "too many ids" in r.text
+
+
 def test_saved_views_import_round_trip_from_export(monkeypatch, tmp_path):
     """Export from one workspace, import into another, get the same set back."""
     import json
