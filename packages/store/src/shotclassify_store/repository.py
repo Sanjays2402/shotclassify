@@ -245,6 +245,7 @@ class Repository:
         tag: str | None = None,
         pinned: bool | None = None,
         tags: list[str] | None = None,
+        untagged: bool | None = None,
     ):
         from sqlalchemy import asc, desc
 
@@ -294,6 +295,28 @@ class Repository:
             stmt = stmt.where(ClassificationRow.tags.cast(Text).ilike(needle))
         if pinned is not None:
             stmt = stmt.where(ClassificationRow.pinned == bool(pinned))
+        # `untagged=true` returns rows with no tags (NULL or empty list);
+        # `untagged=false` returns rows with at least one tag. Backs an
+        # "unlabeled queue" UI for triage. Stored as JSON, so an empty
+        # list serializes to the literal text "[]".
+        if untagged is not None:
+            tags_text = ClassificationRow.tags.cast(Text)
+            # SQLAlchemy's JSON type serializes Python None to the JSON
+            # literal "null" rather than SQL NULL, so check both the
+            # text payload and the column being SQL NULL to be safe
+            # across SQLite, Postgres, and rows written before the JSON
+            # type defaulting changed.
+            empty_payload = tags_text.in_(("null", "[]"))
+            if untagged:
+                stmt = stmt.where(
+                    or_(
+                        ClassificationRow.tags.is_(None),
+                        empty_payload,
+                    )
+                )
+            else:
+                stmt = stmt.where(ClassificationRow.tags.is_not(None))
+                stmt = stmt.where(~empty_payload)
         stmt = self._scope_tenant(stmt, tenant_id)
         return stmt
 
@@ -312,6 +335,7 @@ class Repository:
         tag: str | None = None,
         pinned: bool | None = None,
         tags: list[str] | None = None,
+        untagged: bool | None = None,
     ) -> list[ClassificationRecord]:
         stmt = self._list_stmt(
             category=category,
@@ -325,6 +349,7 @@ class Repository:
             tag=tag,
             pinned=pinned,
             tags=tags,
+            untagged=untagged,
         )
         if offset:
             stmt = stmt.offset(int(offset))
@@ -345,6 +370,7 @@ class Repository:
         tag: str | None = None,
         pinned: bool | None = None,
         tags: list[str] | None = None,
+        untagged: bool | None = None,
     ) -> int:
         from sqlalchemy import func
 
@@ -359,6 +385,7 @@ class Repository:
             tag=tag,
             pinned=pinned,
             tags=tags,
+            untagged=untagged,
         ).order_by(None).with_only_columns(func.count(ClassificationRow.id))
         with get_session() as s:
             return int(s.execute(stmt).scalar() or 0)

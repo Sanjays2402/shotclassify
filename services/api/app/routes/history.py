@@ -198,6 +198,13 @@ def export_history(
         ),
     ),
     pinned: bool | None = Query(None, description="If true, only pinned; if false, only unpinned."),
+    untagged: bool | None = Query(
+        None,
+        description=(
+            "If true, only rows with no tags (the unlabeled queue). If false, "
+            "only rows with at least one tag. Mirrors GET /v1/history."
+        ),
+    ),
 ):
     """Stream classification history as CSV or JSON for download.
 
@@ -222,6 +229,7 @@ def export_history(
         tag=tag,
         pinned=pinned,
         tags=tags_norm,
+        untagged=untagged,
     )
     # Tell the caller how many rows match the filter on the server vs how
     # many fit in this download, so an export capped at ``limit`` does not
@@ -239,6 +247,7 @@ def export_history(
         tag=tag,
         pinned=pinned,
         tags=tags_norm,
+        untagged=untagged,
     )
     truncated = (offset + len(records)) < total_matched
     next_offset = offset + len(records) if truncated else None
@@ -292,6 +301,7 @@ def export_history(
                 "tag": tag,
                 "tags": tags_norm,
                 "pinned": pinned,
+                "untagged": untagged,
             },
             "records": [json.loads(r.model_dump_json()) for r in records],
         }
@@ -350,6 +360,14 @@ def list_history(
         ),
     ),
     pinned: bool | None = Query(None, description="If true, only pinned; if false, only unpinned."),
+    untagged: bool | None = Query(
+        None,
+        description=(
+            "If true, only rows with no tags (the unlabeled queue). If false, "
+            "only rows with at least one tag. Combines with `tag`/`tags`, "
+            "but `untagged=true` plus a tag filter will always return zero."
+        ),
+    ),
 ) -> list[ClassificationRecord]:
     _validate_range_filters(min_conf, max_conf, since, until)
     tags_norm = _normalize_tags_filter(tags)
@@ -369,6 +387,7 @@ def list_history(
         tag=tag,
         pinned=pinned,
         tags=tags_norm,
+        untagged=untagged,
     )
     total = repo.count_filtered(
         category=category,
@@ -381,6 +400,7 @@ def list_history(
         tag=tag,
         pinned=pinned,
         tags=tags_norm,
+        untagged=untagged,
     )
     response.headers["x-total-count"] = str(total)
     response.headers["x-offset"] = str(offset)
