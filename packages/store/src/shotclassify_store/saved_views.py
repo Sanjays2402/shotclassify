@@ -16,12 +16,24 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import desc, or_, select
+from sqlalchemy import desc, func as sa_func, or_, select
 
 from .db import SavedViewRow, get_session, init_db
 
 NAME_MAX = 128
 PER_USER_MAX = 50
+
+
+class DuplicateSavedViewName(ValueError):
+    """Raised when a principal tries to reuse a saved view name (case-insensitive).
+
+    Subclasses ``ValueError`` so existing 422-mapping callers keep working,
+    but route handlers can ``except DuplicateSavedViewName`` to return 409.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"a saved view named {name!r} already exists")
+        self.name = name
 
 # Whitelist of filter keys that the UI is allowed to persist. Anything else is
 # dropped on write so a malicious or stale payload can never inflate the row.
@@ -210,6 +222,19 @@ class SavedViewRepository:
                 raise ValueError(
                     f"saved view limit reached ({PER_USER_MAX} per user)"
                 )
+            # Reject duplicate names (case-insensitive) within the same
+            # (principal, tenant) scope. Without this, re-clicking "Save
+            # view" on the same filters spawns identical-looking rows in
+            # the sidebar that the user then has to clean up by hand.
+            dup = s.execute(
+                select(SavedViewRow.id).where(
+                    SavedViewRow.principal == principal,
+                    SavedViewRow.tenant_id == tenant_id,
+                    sa_func.lower(SavedViewRow.name) == clean_name.lower(),
+                )
+            ).first()
+            if dup is not None:
+                raise DuplicateSavedViewName(clean_name)
             row = SavedViewRow(
                 id=uuid.uuid4().hex,
                 principal=principal,
@@ -239,7 +264,19 @@ class SavedViewRepository:
             if tenant_id is not None and row.tenant_id not in (None, tenant_id):
                 return None
             if name is not None:
-                row.name = _clean_name(name)
+                new_name = _clean_name(name)
+                if new_name.lower() != (row.name or "").lower():
+                    dup = s.execute(
+                        select(SavedViewRow.id).where(
+                            SavedViewRow.principal == principal,
+                            SavedViewRow.tenant_id == row.tenant_id,
+                            sa_func.lower(SavedViewRow.name) == new_name.lower(),
+                            SavedViewRow.id != row.id,
+                        )
+                    ).first()
+                    if dup is not None:
+                        raise DuplicateSavedViewName(new_name)
+                row.name = new_name
             if filters is not None:
                 row.filters = _coerce_filters(filters)
             row.updated_at = datetime.now(UTC)

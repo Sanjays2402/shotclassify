@@ -14,6 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, HTTPException, Request
 
 from shotclassify_store import SavedViewRepository
+from shotclassify_store.saved_views import DuplicateSavedViewName
 
 from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.rbac import require_role, require_scope
@@ -53,6 +54,8 @@ def create_view(request: Request, payload: dict = Body(...)) -> dict:
             filters=filters,
             tenant_id=tenant_id,
         )
+    except DuplicateSavedViewName as e:
+        raise HTTPException(409, str(e))
     except ValueError as e:
         raise HTTPException(422, str(e))
 
@@ -89,6 +92,8 @@ def update_view(
             filters=filters,
             tenant_id=tenant_id,
         )
+    except DuplicateSavedViewName as e:
+        raise HTTPException(409, str(e))
     except ValueError as e:
         raise HTTPException(422, str(e))
     if row is None:
