@@ -198,6 +198,82 @@ _VALID_CONFLICT_MODES = ("skip", "rename", "error")
 _IMPORT_MAX_ITEMS = 200
 
 
+_BULK_DELETE_MAX = 200
+
+
+@router.post(
+    "/bulk-delete",
+    dependencies=[require_role("operator"), require_scope("write:classifications")],
+)
+def bulk_delete_views(
+    request: Request,
+    payload: dict = Body(...),
+    dry_run: bool = dry_run_query(),
+) -> dict | object:
+    """Delete several of the caller's saved views in one call.
+
+    Body: ``{"ids": ["a", "b", ...]}``. Only rows owned by the calling
+    principal in the current tenant are touched; unknown or foreign ids
+    land in ``not_found`` instead of erroring out the whole batch, so the
+    sidebar's "clear selected" action does not have to retry one id at a
+    time after a stale tab. Pass ``?dry_run=true`` to preview the split
+    without writing.
+    """
+    ids_raw = payload.get("ids")
+    if not isinstance(ids_raw, list) or not ids_raw:
+        raise HTTPException(422, "ids must be a non-empty list")
+    if len(ids_raw) > _BULK_DELETE_MAX:
+        raise HTTPException(
+            422,
+            f"too many ids ({len(ids_raw)}); max {_BULK_DELETE_MAX} per call",
+        )
+    seen: set[str] = set()
+    ids: list[str] = []
+    for tok in ids_raw:
+        if not isinstance(tok, str) or not tok.strip():
+            raise HTTPException(422, "ids must be non-empty strings")
+        clean = tok.strip()
+        if clean in seen:
+            continue
+        seen.add(clean)
+        ids.append(clean)
+
+    principal, tenant_id = _scope(request)
+    repo = SavedViewRepository()
+
+    existing_rows = repo.list(principal=principal, tenant_id=tenant_id)
+    owned: set[str] = {
+        r.get("id")
+        for r in existing_rows
+        if isinstance(r, dict) and r.get("id")
+    }
+    deletable = [i for i in ids if i in owned]
+    not_found = [i for i in ids if i not in owned]
+
+    if dry_run:
+        return mark_dry_run(
+            request,
+            would_delete={
+                "ids": deletable,
+                "count": len(deletable),
+                "not_found": not_found,
+            },
+        )
+
+    deleted: list[str] = []
+    for view_id in deletable:
+        if repo.delete(view_id, principal=principal, tenant_id=tenant_id):
+            deleted.append(view_id)
+        else:
+            not_found.append(view_id)
+    return {
+        "deleted": deleted,
+        "count": len(deleted),
+        "not_found": not_found,
+        "requested": len(ids),
+    }
+
+
 @router.post(
     "/import",
     dependencies=[require_role("operator"), require_scope("write:classifications")],
