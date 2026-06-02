@@ -18,6 +18,10 @@ from ..middleware.rbac import require_role, require_scope
 router = APIRouter(prefix="/v1/history", tags=["history"])
 
 EXPORT_MAX = 5000
+# Mirror of the per-record tag cap enforced inside
+# ``shotclassify_store.repository.update_meta``. Kept in sync here so the
+# route can return a clear 400 instead of silently dropping tags on write.
+MAX_TAGS_PER_RECORD = 16
 EXPORT_COLUMNS = [
     "id",
     "created_at",
@@ -274,6 +278,11 @@ def bulk(request: Request, payload: dict = Body(...), dry_run: bool = dry_run_qu
                 tags_in.append(norm)
         if not tags_in:
             raise HTTPException(400, "`tags` had no usable entries after normalizing.")
+        if len(tags_in) > MAX_TAGS_PER_RECORD:
+            raise HTTPException(
+                400,
+                f"Too many tags in one request (max {MAX_TAGS_PER_RECORD}).",
+            )
 
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
@@ -442,8 +451,10 @@ def patch(
     if tags_in is not None:
         if not isinstance(tags_in, list) or not all(isinstance(t, str) for t in tags_in):
             raise HTTPException(400, "`tags` must be a list of strings.")
-        if len(tags_in) > 64:
-            raise HTTPException(400, "Too many tags (max 16 kept).")
+        if len(tags_in) > MAX_TAGS_PER_RECORD:
+            raise HTTPException(
+                400, f"Too many tags (max {MAX_TAGS_PER_RECORD})."
+            )
     tenant_id = getattr(request.state, "tenant_id", None)
     rec = Repository().update_meta(
         item_id,

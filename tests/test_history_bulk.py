@@ -107,3 +107,13 @@ def test_bulk_validation(monkeypatch, tmp_path):
     assert c.post("/v1/history/bulk", json={"ids": ["a"], "action": "nuke"}, headers=HEADERS).status_code == 400
     # tag action without tags
     assert c.post("/v1/history/bulk", json={"ids": ["a"], "action": "tag_add"}, headers=HEADERS).status_code == 400
+    # too many tags in one request: must reject with the real cap (16),
+    # not silently truncate inside the store.
+    too_many = [f"t{i}" for i in range(17)]
+    res = c.post(
+        "/v1/history/bulk",
+        json={"ids": ["a"], "action": "tag_add", "tags": too_many},
+        headers=HEADERS,
+    )
+    assert res.status_code == 400, res.text
+    assert "16" in res.json()["detail"]

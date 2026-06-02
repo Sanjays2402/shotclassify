@@ -106,3 +106,25 @@ def test_patch_rejects_bad_tags(monkeypatch, tmp_path):
         "/v1/history/shot-4", json={"tags": [1, 2, 3]}, headers=HEADERS
     )
     assert res.status_code == 400
+
+
+def test_patch_rejects_too_many_tags(monkeypatch, tmp_path):
+    # The store caps tags at 16 per record. Sending more should be a clean
+    # 400 with the real cap in the message, not a silent truncation and
+    # not a misleading "max 16 kept" while accepting up to 64.
+    c = _client(monkeypatch, tmp_path)
+    _seed_one("shot-5")
+    too_many = [f"t{i}" for i in range(17)]
+    res = c.patch(
+        "/v1/history/shot-5", json={"tags": too_many}, headers=HEADERS
+    )
+    assert res.status_code == 400, res.text
+    assert "16" in res.json()["detail"]
+
+    # Boundary: exactly 16 is accepted and persisted in full.
+    sixteen = [f"t{i}" for i in range(16)]
+    res = c.patch(
+        "/v1/history/shot-5", json={"tags": sixteen}, headers=HEADERS
+    )
+    assert res.status_code == 200, res.text
+    assert len(res.json()["tags"]) == 16
