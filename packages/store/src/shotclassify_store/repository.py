@@ -404,6 +404,59 @@ class Repository:
         items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
         return [{"tag": t, "count": c} for t, c in items[:capped]]
 
+    def rename_tag(
+        self,
+        old: str,
+        new: str,
+        tenant_id: str | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Rename a tag across every classification in the tenant scope.
+
+        Fixes typos and consolidates near-duplicates (``finace`` -> ``finance``)
+        in one call instead of patching records one by one. Both names are
+        normalized the same way as on write (trim, lowercase, 32 char cap).
+        If a row already has both the old and new tag, the old one is dropped
+        and the new one is kept once. Tag order is preserved otherwise.
+        Returns ``{"updated": int, "old": str, "new": str}``. When
+        ``dry_run=True`` no rows are written and ``updated`` reflects what
+        would have changed.
+        """
+        old_norm = (old or "").strip().lower()[:32]
+        new_norm = (new or "").strip().lower()[:32]
+        if not old_norm or not new_norm:
+            raise ValueError("`old` and `new` must be non-empty tag names.")
+        if old_norm == new_norm:
+            return {"updated": 0, "old": old_norm, "new": new_norm}
+        stmt = select(ClassificationRow)
+        stmt = self._scope_tenant(stmt, tenant_id)
+        updated = 0
+        with get_session() as s:
+            for row in s.execute(stmt).scalars():
+                tags = row.tags or []
+                if not isinstance(tags, list) or old_norm not in tags:
+                    continue
+                seen: set[str] = set()
+                new_tags: list[str] = []
+                for t in tags:
+                    if not isinstance(t, str):
+                        continue
+                    norm = t.strip().lower()[:32]
+                    if norm == old_norm:
+                        norm = new_norm
+                    if not norm or norm in seen:
+                        continue
+                    seen.add(norm)
+                    new_tags.append(norm)
+                if new_tags == tags:
+                    continue
+                updated += 1
+                if not dry_run:
+                    row.tags = new_tags
+            if not dry_run:
+                s.commit()
+        return {"updated": updated, "old": old_norm, "new": new_norm}
+
     def get(
         self, item_id: str, tenant_id: str | None = None
     ) -> ClassificationRecord | None:

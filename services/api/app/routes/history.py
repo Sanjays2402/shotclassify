@@ -434,6 +434,53 @@ def list_tags(
     return {"items": items, "count": len(items)}
 
 
+@router.post("/tags/rename", dependencies=[require_role("operator"), require_scope("write:classifications")])
+def rename_tag(
+    request: Request,
+    payload: dict = Body(
+        ...,
+        examples=[{"from": "finace", "to": "finance"}],
+    ),
+    dry_run: bool = dry_run_query(),
+) -> dict:
+    """Rename a tag across every classification in the current tenant.
+
+    Body fields:
+      * ``from`` (string, required): existing tag to rename.
+      * ``to`` (string, required): replacement tag. Same write-time
+        normalization as ``PATCH /v1/history/{id}`` (trim, lowercase,
+        32 char cap).
+
+    If a record already has both the old and new tag, the old one is
+    dropped so the new one is not duplicated. Returns the count of
+    records that changed. Honours ``dry_run=true``.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Body must be a JSON object.")
+    allowed = {"from", "to"}
+    unknown = set(payload) - allowed
+    if unknown:
+        raise HTTPException(400, f"Unknown field(s): {sorted(unknown)}")
+    old = payload.get("from")
+    new = payload.get("to")
+    if not isinstance(old, str) or not isinstance(new, str):
+        raise HTTPException(400, "`from` and `to` must be strings.")
+    tenant_id = getattr(request.state, "tenant_id", None)
+    try:
+        result = Repository().rename_tag(
+            old=old, new=new, tenant_id=tenant_id, dry_run=dry_run
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if dry_run:
+        return mark_dry_run(
+            request,
+            would_update=result["updated"],
+            old=result["old"],
+            new=result["new"],
+        )
+    return result
+
 @router.get("/stats", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def stats(request: Request):
     tenant_id = getattr(request.state, "tenant_id", None)
