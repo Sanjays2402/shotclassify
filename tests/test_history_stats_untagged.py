@@ -23,7 +23,7 @@ def _client(monkeypatch, tmp_path):
     return TestClient(create_app())
 
 
-def _seed(filename: str, tags: list[str] | None) -> None:
+def _seed(filename: str, tags: list[str] | None, pinned: bool = False) -> None:
     from shotclassify_store.db import ClassificationRow, get_session, init_db
     from shotclassify_common import Category
 
@@ -41,7 +41,7 @@ def _seed(filename: str, tags: list[str] | None) -> None:
                 tenant_id=None,
                 label=None,
                 tags=tags,
-                pinned=False,
+                pinned=pinned,
             )
         )
         s.commit()
@@ -62,6 +62,8 @@ def test_stats_reports_untagged_and_tagged_split(monkeypatch, tmp_path):
     assert body["tagged"] == 2
     # Invariant: untagged + tagged == count, always.
     assert body["untagged"] + body["tagged"] == body["count"]
+    # Nothing was pinned in this fixture.
+    assert body["pinned"] == 0
 
 
 def test_stats_all_untagged_when_no_tags(monkeypatch, tmp_path):
@@ -70,7 +72,7 @@ def test_stats_all_untagged_when_no_tags(monkeypatch, tmp_path):
     _seed("b.png", [])
 
     body = c.get("/v1/history/stats", headers={"X-API-Key": "k"}).json()
-    assert body == {"count": 2, "untagged": 2, "tagged": 0}
+    assert body == {"count": 2, "untagged": 2, "tagged": 0, "pinned": 0}
 
 
 def test_stats_all_tagged(monkeypatch, tmp_path):
@@ -79,7 +81,7 @@ def test_stats_all_tagged(monkeypatch, tmp_path):
     _seed("b.png", ["y", "z"])
 
     body = c.get("/v1/history/stats", headers={"X-API-Key": "k"}).json()
-    assert body == {"count": 2, "untagged": 0, "tagged": 2}
+    assert body == {"count": 2, "untagged": 0, "tagged": 2, "pinned": 0}
 
 
 def test_stats_empty(monkeypatch, tmp_path):
@@ -88,4 +90,25 @@ def test_stats_empty(monkeypatch, tmp_path):
     init_db()
 
     body = c.get("/v1/history/stats", headers={"X-API-Key": "k"}).json()
-    assert body == {"count": 0, "untagged": 0, "tagged": 0}
+    assert body == {"count": 0, "untagged": 0, "tagged": 0, "pinned": 0}
+
+
+def test_stats_reports_pinned_count_independent_of_tagged(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # Pinned + tagged.
+    _seed("a.png", ["finance"], pinned=True)
+    # Pinned + untagged (pinned should still count it).
+    _seed("b.png", None, pinned=True)
+    # Unpinned + tagged.
+    _seed("c.png", ["q1"], pinned=False)
+    # Unpinned + untagged.
+    _seed("d.png", [], pinned=False)
+
+    body = c.get("/v1/history/stats", headers={"X-API-Key": "k"}).json()
+    assert body["count"] == 4
+    assert body["tagged"] == 2
+    assert body["untagged"] == 2
+    assert body["pinned"] == 2
+    # Pinned is independent of the tagged/untagged split; it can overlap
+    # either bucket and is not required to sum with them.
+    assert body["untagged"] + body["tagged"] == body["count"]

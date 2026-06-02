@@ -995,16 +995,20 @@ def stats(request: Request):
     ``tagged`` split that total by whether the row has at least one tag,
     so dashboards and sidebar badges can render an "unlabeled queue" count
     without a second filtered list call. The two splits always sum to
-    ``count``.
+    ``count``. ``pinned`` is an independent count of rows the user has
+    pinned, so the same dashboards can render a "pinned" badge alongside
+    the unlabeled-queue badge without a second filtered list call.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
     total = repo.count(tenant_id=tenant_id)
     untagged = repo.count_filtered(tenant_id=tenant_id, untagged=True)
+    pinned = repo.count_filtered(tenant_id=tenant_id, pinned=True)
     return {
         "count": total,
         "untagged": untagged,
         "tagged": total - untagged,
+        "pinned": pinned,
     }
 
 
