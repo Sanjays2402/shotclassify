@@ -153,7 +153,8 @@ def export_history(
     _validate_range_filters(min_conf, max_conf, since, until)
     tags_norm = _normalize_tags_filter(tags)
     tenant_id = getattr(request.state, "tenant_id", None)
-    records = Repository().list(
+    repo = Repository()
+    records = repo.list(
         limit=limit,
         category=category,
         query=q,
@@ -167,7 +168,33 @@ def export_history(
         pinned=pinned,
         tags=tags_norm,
     )
+    # Tell the caller how many rows match the filter on the server vs how
+    # many fit in this download, so an export capped at ``limit`` does not
+    # look like the full dataset. ``x-truncated=true`` is the single bit a
+    # script can grep for; ``x-total-matched`` and ``x-record-count`` give
+    # the exact numbers.
+    total_matched = repo.count_filtered(
+        category=category,
+        query=q,
+        tenant_id=tenant_id,
+        since=since,
+        until=until,
+        min_conf=min_conf,
+        max_conf=max_conf,
+        tag=tag,
+        pinned=pinned,
+        tags=tags_norm,
+    )
+    truncated = total_matched > len(records)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    common_headers = {
+        "x-record-count": str(len(records)),
+        "x-total-matched": str(total_matched),
+        "x-truncated": "true" if truncated else "false",
+        "access-control-expose-headers": (
+            "x-record-count, x-total-matched, x-truncated"
+        ),
+    }
 
     if format == "ndjson":
         # Newline-delimited JSON: one record per line, no wrapper object.
@@ -181,7 +208,7 @@ def export_history(
             media_type="application/x-ndjson",
             headers={
                 "content-disposition": f'attachment; filename="shotclassify-history-{stamp}.ndjson"',
-                "x-record-count": str(len(records)),
+                **common_headers,
             },
         )
 
@@ -189,6 +216,8 @@ def export_history(
         payload = {
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "count": len(records),
+            "total_matched": total_matched,
+            "truncated": truncated,
             "filters": {
                 "category": category.value if category else None,
                 "q": q,
@@ -210,7 +239,7 @@ def export_history(
             media_type="application/json",
             headers={
                 "content-disposition": f'attachment; filename="shotclassify-history-{stamp}.json"',
-                "x-record-count": str(len(records)),
+                **common_headers,
             },
         )
 
@@ -229,8 +258,8 @@ def export_history(
         _csv_iter(),
         media_type="text/csv; charset=utf-8",
         headers={
-            "content-disposition": f'attachment; filename="shotclassify-history-{stamp}.csv"',
-            "x-record-count": str(len(records)),
+            'content-disposition': f'attachment; filename="shotclassify-history-{stamp}.csv"',
+            **common_headers,
         },
     )
 

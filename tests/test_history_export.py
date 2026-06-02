@@ -180,3 +180,57 @@ def test_history_export_ndjson_one_line_per_record(monkeypatch, tmp_path):
     assert filenames == {"a.png", "b.png"}
     for p in parsed:
         assert "id" in p and "primary_category" in p and "confidence" in p
+
+
+def test_history_export_signals_truncation(monkeypatch, tmp_path):
+    """When the row count beats ``limit`` the export must flag truncation
+    so the caller can paginate or widen the filter instead of silently
+    shipping a partial download."""
+    c = _client(monkeypatch, tmp_path)
+    for i in range(5):
+        _seed_one(f"shot-{i}.png", 0.5 + i * 0.05)
+
+    # Cap below the matching count.
+    r = c.get(
+        "/v1/history/export?format=csv&limit=2",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    assert r.headers["x-record-count"] == "2"
+    assert r.headers["x-total-matched"] == "5"
+    assert r.headers["x-truncated"] == "true"
+
+    # JSON body mirrors the headers so a downstream tool sees the same
+    # truncation signal whether it inspects body or headers.
+    r = c.get(
+        "/v1/history/export?format=json&limit=2",
+        headers={"X-API-Key": "k"},
+    )
+    body = json.loads(r.text)
+    assert body["count"] == 2
+    assert body["total_matched"] == 5
+    assert body["truncated"] is True
+    assert r.headers["x-truncated"] == "true"
+
+    # NDJSON only carries the signal in headers (no wrapper object exists).
+    r = c.get(
+        "/v1/history/export?format=ndjson&limit=2",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.headers["x-truncated"] == "true"
+    assert r.headers["x-total-matched"] == "5"
+
+
+def test_history_export_truncated_false_when_full_set_fits(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed_one("only.png", 0.7)
+
+    r = c.get(
+        "/v1/history/export?format=json&limit=50",
+        headers={"X-API-Key": "k"},
+    )
+    body = json.loads(r.text)
+    assert body["count"] == 1
+    assert body["total_matched"] == 1
+    assert body["truncated"] is False
+    assert r.headers["x-truncated"] == "false"
