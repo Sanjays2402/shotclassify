@@ -423,6 +423,62 @@ class Repository:
             items = sorted(counts.items(), key=lambda kv: kv[0], reverse=reverse)
         return [{"tag": t, "count": c} for t, c in items[:capped]]
 
+    def tag_detail(
+        self,
+        tag: str,
+        tenant_id: str | None = None,
+    ) -> dict:
+        """Return usage summary for a single tag in the tenant scope.
+
+        Backs a tag detail page (``GET /v1/history/tags/{tag}``) so the UI
+        can show "used N times, first on X, last on Y" before the user
+        decides to rename, merge or delete the tag. ``first_seen`` and
+        ``last_seen`` are ISO 8601 UTC strings, or ``None`` if the tag is
+        not present in the scope. The tag is normalized the same way as
+        write-time (trim, lowercase, 32 char cap).
+        """
+        norm = (tag or "").strip().lower()[:32]
+        if not norm:
+            raise ValueError("`tag` must be a non-empty tag name.")
+        stmt = select(ClassificationRow.tags, ClassificationRow.created_at)
+        stmt = self._scope_tenant(stmt, tenant_id)
+        count = 0
+        first_seen: datetime | None = None
+        last_seen: datetime | None = None
+        with get_session() as s:
+            for raw, created in s.execute(stmt):
+                if not isinstance(raw, list):
+                    continue
+                hit = False
+                for t in raw:
+                    if not isinstance(t, str):
+                        continue
+                    if t.strip().lower() == norm:
+                        hit = True
+                        break
+                if not hit:
+                    continue
+                count += 1
+                if created is None:
+                    continue
+                if first_seen is None or created < first_seen:
+                    first_seen = created
+                if last_seen is None or created > last_seen:
+                    last_seen = created
+        from datetime import timezone as _tz
+        def _iso(dt: datetime | None) -> str | None:
+            if dt is None:
+                return None
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_tz.utc)
+            return dt.isoformat()
+        return {
+            "tag": norm,
+            "count": count,
+            "first_seen": _iso(first_seen),
+            "last_seen": _iso(last_seen),
+        }
+
     def related_tags(
         self,
         tag: str,

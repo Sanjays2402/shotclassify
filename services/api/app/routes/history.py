@@ -465,6 +465,38 @@ def list_tags(
 
 
 @router.get(
+    "/tags/{tag}",
+    dependencies=[require_role("viewer"), require_scope("read:classifications")],
+)
+def tag_detail(tag: str, request: Request) -> dict:
+    """Return usage summary for a single tag in the current tenant.
+
+    Backs a tag detail page that shows how often the tag is used and when
+    it first and last appeared, so an operator can decide whether to keep,
+    rename, merge or delete it before reaching for the bulk endpoints.
+
+    Response shape::
+
+        {
+          "tag": "finance",
+          "count": 42,
+          "first_seen": "2025-01-04T18:22:11+00:00",
+          "last_seen":  "2025-03-19T08:05:00+00:00"
+        }
+
+    Unknown tags return ``count=0`` with ``first_seen`` and ``last_seen``
+    set to ``null`` rather than 404, so the UI can render an empty state
+    without a second round trip. Tag input is normalized (trim, lowercase,
+    32 char cap) to match write-time rules.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    try:
+        return Repository().tag_detail(tag=tag, tenant_id=tenant_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get(
     "/tags/{tag}/related",
     dependencies=[require_role("viewer"), require_scope("read:classifications")],
 )
