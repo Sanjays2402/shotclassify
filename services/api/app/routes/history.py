@@ -655,6 +655,68 @@ def tag_detail(tag: str, request: Request) -> dict:
 
 
 @router.get(
+    "/tags/{tag}/items",
+    response_model=list[ClassificationRecord],
+    dependencies=[require_role("viewer"), require_scope("read:classifications")],
+)
+def tag_items(
+    tag: str,
+    request: Request,
+    response: Response,
+    limit: int = Query(
+        50,
+        ge=1,
+        le=500,
+        description="Maximum number of records returned. Hard-capped at 500.",
+    ),
+    offset: int = Query(
+        0,
+        ge=0,
+        le=1_000_000,
+        description="Offset into the result set for simple pagination.",
+    ),
+    sort: str = Query(
+        "new",
+        pattern="^(new|old|conf_desc|conf_asc)$",
+        description=(
+            "Sort order. ``new`` (default) and ``old`` order by ``created_at``; "
+            "``conf_desc`` and ``conf_asc`` order by ``confidence``."
+        ),
+    ),
+) -> list[ClassificationRecord]:
+    """List classification records that carry ``tag`` in the current tenant.
+
+    Backs a "recent uses" panel on the tag detail UI so an operator can
+    eyeball what the tag is actually applied to before deciding to keep,
+    rename, merge or delete it. Tag input is normalized (trim, lowercase,
+    32 char cap) to match write-time rules. Unknown tags return an empty
+    list rather than 404, so the panel can render an empty state without a
+    second round trip. ``x-total-count``, ``x-offset``, and ``x-limit``
+    response headers expose pagination state for the UI.
+    """
+    norm = (tag or "").strip().lower()[:32]
+    if not norm:
+        raise HTTPException(400, "`tag` must be a non-empty tag name.")
+    tenant_id = getattr(request.state, "tenant_id", None)
+    repo = Repository()
+    items = repo.list(
+        limit=limit,
+        offset=offset,
+        tenant_id=tenant_id,
+        tag=norm,
+        sort=sort,
+    )
+    total = repo.count_filtered(tenant_id=tenant_id, tag=norm)
+    response.headers["x-total-count"] = str(total)
+    response.headers["x-offset"] = str(offset)
+    response.headers["x-limit"] = str(limit)
+    response.headers["access-control-expose-headers"] = (
+        "x-total-count, x-offset, x-limit"
+    )
+    return items
+
+
+@router.get(
     "/tags/{tag}/timeseries",
     dependencies=[require_role("viewer"), require_scope("read:classifications")],
 )
