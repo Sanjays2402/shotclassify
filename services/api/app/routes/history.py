@@ -394,6 +394,36 @@ def list_history(
     return items
 
 
+@router.get("/tags", dependencies=[require_role("viewer"), require_scope("read:classifications")])
+def list_tags(
+    request: Request,
+    q: str | None = Query(
+        None,
+        max_length=32,
+        description=(
+            "Optional case-insensitive substring filter on the tag name. "
+            "Whitespace is trimmed; empty/whitespace matches everything. "
+            "Tags themselves are already lowercased on write."
+        ),
+    ),
+    limit: int = Query(
+        100,
+        ge=1,
+        le=500,
+        description="Maximum number of distinct tags returned. Hard-capped at 500.",
+    ),
+) -> dict:
+    """List distinct tags in the current tenant with their usage counts.
+
+    Backs tag autocomplete on the history filter UI and any tag-cloud
+    widget. Sorted by count desc then tag asc so the most-used tags
+    surface first, with stable alphabetical tie-breaks.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    items = Repository().list_tags(tenant_id=tenant_id, q=q, limit=limit)
+    return {"items": items, "count": len(items)}
+
+
 @router.get("/stats", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def stats(request: Request):
     tenant_id = getattr(request.state, "tenant_id", None)

@@ -363,6 +363,43 @@ class Repository:
         with get_session() as s:
             return int(s.execute(stmt).scalar() or 0)
 
+    def list_tags(
+        self,
+        tenant_id: str | None = None,
+        q: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Return distinct tags in scope with their usage counts.
+
+        Powers tag autocomplete and tag-cloud UIs so users discover the
+        vocabulary that is already in use instead of guessing. Each item
+        is ``{"tag": str, "count": int}``, sorted by count desc then tag
+        asc. ``q`` filters tags by case-insensitive substring. ``limit``
+        is clamped to ``[1, 500]``. Tags are stored as a small JSON list
+        per row, so we aggregate in Python after a tenant-scoped scan,
+        which is fine for the small vocabularies this product targets.
+        """
+        capped = max(1, min(int(limit), 500))
+        needle = (q or "").strip().lower()
+        stmt = select(ClassificationRow.tags)
+        stmt = self._scope_tenant(stmt, tenant_id)
+        counts: dict[str, int] = {}
+        with get_session() as s:
+            for (raw,) in s.execute(stmt):
+                if not raw:
+                    continue
+                for t in raw:
+                    if not isinstance(t, str):
+                        continue
+                    norm = t.strip().lower()
+                    if not norm:
+                        continue
+                    if needle and needle not in norm:
+                        continue
+                    counts[norm] = counts.get(norm, 0) + 1
+        items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        return [{"tag": t, "count": c} for t, c in items[:capped]]
+
     def get(
         self, item_id: str, tenant_id: str | None = None
     ) -> ClassificationRecord | None:
