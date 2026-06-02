@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { DownloadSimple, CaretDown, FileCsv, BracketsCurly, Spinner } from "@phosphor-icons/react";
+import { DownloadSimple, CaretDown, FileCsv, BracketsCurly, ListBullets, Spinner } from "@phosphor-icons/react";
 import { ENDPOINTS } from "@/lib/api";
 
-type Format = "csv" | "json";
+type Format = "csv" | "json" | "ndjson";
 
 type Props = {
   category?: string;
@@ -142,6 +142,15 @@ export function ExportMenu({
           >
             <BracketsCurly weight="duotone" size={16} />
             <span>JSON (full records)</span>
+          </button>
+          <button
+            role="menuitem"
+            className="w-full text-left px-3 py-2 text-[13px] hover:bg-black/5 rounded-sm flex items-center gap-2 disabled:opacity-50"
+            disabled={!!busy}
+            onClick={() => run("ndjson")}
+          >
+            <ListBullets weight="duotone" size={16} />
+            <span>NDJSON (one record per line)</span>
           </button>
           <div className="px-3 py-2 text-[11px] opacity-60 num">
             Up to {limit.toLocaleString()} rows, current filters applied.

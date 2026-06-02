@@ -70,7 +70,7 @@ export const ENDPOINTS = {
   aggregate: (hours: number = 24) => `/api/aggregate?hours=${hours}`,
   classify: "/api/classify",
   historyExport: (params?: {
-    format?: "csv" | "json";
+    format?: "csv" | "json" | "ndjson";
     limit?: number;
     category?: string;
     q?: string;
