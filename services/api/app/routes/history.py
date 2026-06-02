@@ -37,6 +37,31 @@ EXPORT_COLUMNS = [
 ]
 
 
+def _validate_range_filters(
+    min_conf: float | None,
+    max_conf: float | None,
+    since: datetime | None,
+    until: datetime | None,
+) -> None:
+    """Reject filter ranges that can never match anything.
+
+    Previously the API silently returned an empty list when the caller
+    inverted a range (e.g. ``min_conf=0.9&max_conf=0.1`` from a fat-fingered
+    slider, or ``since`` after ``until`` from a misconfigured saved view).
+    That looks identical to "no results" and burns real debug time.
+    """
+    if min_conf is not None and max_conf is not None and min_conf > max_conf:
+        raise HTTPException(
+            status_code=400,
+            detail=f"min_conf ({min_conf}) must be <= max_conf ({max_conf}).",
+        )
+    if since is not None and until is not None and since > until:
+        raise HTTPException(
+            status_code=400,
+            detail="`since` must be earlier than or equal to `until`.",
+        )
+
+
 def _record_to_row(rec: ClassificationRecord) -> dict:
     return {
         "id": rec.id,
@@ -81,6 +106,7 @@ def export_history(
     Accepts the same filters as ``GET /v1/history`` so a download from the
     dashboard matches what the user is currently looking at.
     """
+    _validate_range_filters(min_conf, max_conf, since, until)
     tenant_id = getattr(request.state, "tenant_id", None)
     records = Repository().list(
         limit=limit,
@@ -178,6 +204,7 @@ def list_history(
     tag: str | None = Query(None, max_length=32, description="Filter by a single tag (case-insensitive)."),
     pinned: bool | None = Query(None, description="If true, only pinned; if false, only unpinned."),
 ) -> list[ClassificationRecord]:
+    _validate_range_filters(min_conf, max_conf, since, until)
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
     items = repo.list(
