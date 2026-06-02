@@ -34,6 +34,16 @@ def _scope(request: Request) -> tuple[str, str | None]:
     return principal, tenant_id
 
 
+_SORT_CHOICES = {
+    "updated_desc",
+    "updated_asc",
+    "created_desc",
+    "created_asc",
+    "name_asc",
+    "name_desc",
+}
+
+
 @router.get("", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def list_views(
     request: Request,
@@ -47,7 +57,24 @@ def list_views(
         ),
         max_length=200,
     ),
+    sort: str = Query(
+        "updated_desc",
+        description=(
+            "Sort order for the returned items. One of: "
+            "``updated_desc`` (default, most recently edited first), "
+            "``updated_asc``, ``created_desc``, ``created_asc``, "
+            "``name_asc`` (alphabetical, case-insensitive), "
+            "``name_desc``. Unknown values return 400 instead of "
+            "silently falling back, so the sidebar UI cannot drift out "
+            "of sync with what the API actually returned."
+        ),
+    ),
 ) -> dict:
+    if sort not in _SORT_CHOICES:
+        raise HTTPException(
+            400,
+            f"unknown sort '{sort}'; expected one of {sorted(_SORT_CHOICES)}",
+        )
     principal, tenant_id = _scope(request)
     repo = SavedViewRepository()
     items = repo.list(principal=principal, tenant_id=tenant_id)
@@ -59,7 +86,21 @@ def list_views(
             if isinstance(r, dict)
             and needle in (r.get("name") or "").lower()
         ]
+    if sort != "updated_desc":
+        items = _sort_views(items, sort)
     return {"items": items, "count": len(items)}
+
+
+def _sort_views(items: list[dict], sort: str) -> list[dict]:
+    if sort.startswith("name_"):
+        key = lambda r: (r.get("name") or "").lower()  # noqa: E731
+        return sorted(items, key=key, reverse=sort == "name_desc")
+    field = "created_at" if sort.startswith("created_") else "updated_at"
+    reverse = sort.endswith("_desc")
+    # Missing timestamps sort to the end regardless of direction so they
+    # never silently jump to the top when the field is null.
+    sentinel = "" if reverse else "\uffff"
+    return sorted(items, key=lambda r: (r.get(field) or sentinel), reverse=reverse)
 
 
 _EXPORT_MAX_IDS = 200

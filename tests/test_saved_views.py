@@ -586,3 +586,47 @@ def test_saved_views_list_name_query(monkeypatch, tmp_path):
     r = c.get("/v1/saved-views", params={"q": "zzz"}, headers=HEADERS)
     assert r.status_code == 200
     assert r.json() == {"items": [], "count": 0}
+
+
+def test_saved_views_list_sort(monkeypatch, tmp_path):
+    import time
+
+    c = _client(monkeypatch, tmp_path)
+    # Create in this order so updated_desc != name_asc and we can
+    # distinguish the two without relying on tie-breakers.
+    for n in ["banana", "Apple", "cherry"]:
+        r = c.post(
+            "/v1/saved-views",
+            json={"name": n, "filters": {}},
+            headers=HEADERS,
+        )
+        assert r.status_code == 200, r.text
+        time.sleep(0.01)
+
+    # Default: most recently created/updated first.
+    r = c.get("/v1/saved-views", headers=HEADERS)
+    assert [i["name"] for i in r.json()["items"]] == ["cherry", "Apple", "banana"]
+
+    # Alphabetical, case-insensitive.
+    r = c.get("/v1/saved-views", params={"sort": "name_asc"}, headers=HEADERS)
+    assert [i["name"] for i in r.json()["items"]] == ["Apple", "banana", "cherry"]
+
+    r = c.get("/v1/saved-views", params={"sort": "name_desc"}, headers=HEADERS)
+    assert [i["name"] for i in r.json()["items"]] == ["cherry", "banana", "Apple"]
+
+    # Oldest first.
+    r = c.get("/v1/saved-views", params={"sort": "created_asc"}, headers=HEADERS)
+    assert [i["name"] for i in r.json()["items"]] == ["banana", "Apple", "cherry"]
+
+    # q filter still applies before sort.
+    r = c.get(
+        "/v1/saved-views",
+        params={"q": "a", "sort": "name_asc"},
+        headers=HEADERS,
+    )
+    assert [i["name"] for i in r.json()["items"]] == ["Apple", "banana"]
+
+    # Unknown sort -> 400, not silent fallback.
+    r = c.get("/v1/saved-views", params={"sort": "bogus"}, headers=HEADERS)
+    assert r.status_code == 400
+    assert "bogus" in r.json()["detail"]
