@@ -529,6 +529,51 @@ def get_view_by_name(request: Request, name: str) -> dict:
     raise HTTPException(404, "saved view not found")
 
 
+@router.delete(
+    "/by-name/{name:path}",
+    dependencies=[require_role("operator"), require_scope("write:classifications")],
+)
+def delete_view_by_name(
+    request: Request, name: str, dry_run: bool = dry_run_query()
+) -> dict | object:
+    """Delete one of the caller's saved views by name.
+
+    Mirrors ``GET /v1/saved-views/by-name/{name}`` so CLI users and
+    scripts can remove a view they already know the name of without
+    first listing to resolve the id. Match is the same case-insensitive,
+    whitespace-trimmed comparison the create and lookup endpoints use,
+    so a name the UI accepted will always resolve here. Scope is
+    per-principal and per-tenant: a caller can only delete their own
+    rows in the current workspace. Honours ``?dry_run=true`` like the
+    id-based delete, returning what would be removed without mutating.
+    """
+    needle = (name or "").strip().lower()
+    if not needle:
+        raise HTTPException(422, "name is required")
+    principal, tenant_id = _scope(request)
+    repo = SavedViewRepository()
+    rows = repo.list(principal=principal, tenant_id=tenant_id)
+    match = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if (row.get("name") or "").strip().lower() == needle:
+            match = row
+            break
+    if match is None:
+        raise HTTPException(404, "saved view not found")
+    view_id = match.get("id")
+    if dry_run:
+        request.state.audit_target_id = view_id
+        return mark_dry_run(
+            request, would_delete={"id": view_id, "name": match.get("name")}
+        )
+    ok = repo.delete(view_id, principal=principal, tenant_id=tenant_id)
+    if not ok:
+        raise HTTPException(404, "saved view not found")
+    return {"ok": True, "id": view_id, "name": match.get("name")}
+
+
 @router.get(
     "/name-available",
     dependencies=[require_role("viewer"), require_scope("read:classifications")],
