@@ -481,6 +481,51 @@ def rename_tag(
         )
     return result
 
+@router.post("/tags/delete", dependencies=[require_role("operator"), require_scope("write:classifications")])
+def delete_tag(
+    request: Request,
+    payload: dict = Body(
+        ...,
+        examples=[{"tag": "obsolete"}],
+    ),
+    dry_run: bool = dry_run_query(),
+) -> dict:
+    """Remove a tag from every classification in the current tenant.
+
+    Mirror of ``/v1/history/tags/rename`` for retiring an obsolete tag
+    entirely instead of merging it into another. Saves an autocomplete
+    cleanup pass when a project ends or a tag taxonomy is reshuffled.
+
+    Body fields:
+      * ``tag`` (string, required): tag to remove. Normalized the same way
+        as on write (trim, lowercase, 32 char cap).
+
+    Returns the count of records that changed. Honours ``dry_run=true``.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Body must be a JSON object.")
+    allowed = {"tag"}
+    unknown = set(payload) - allowed
+    if unknown:
+        raise HTTPException(400, f"Unknown field(s): {sorted(unknown)}")
+    tag = payload.get("tag")
+    if not isinstance(tag, str):
+        raise HTTPException(400, "`tag` must be a string.")
+    tenant_id = getattr(request.state, "tenant_id", None)
+    try:
+        result = Repository().delete_tag(
+            tag=tag, tenant_id=tenant_id, dry_run=dry_run
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if dry_run:
+        return mark_dry_run(
+            request,
+            would_update=result["updated"],
+            tag=result["tag"],
+        )
+    return result
+
 @router.get("/stats", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def stats(request: Request):
     tenant_id = getattr(request.state, "tenant_id", None)

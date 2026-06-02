@@ -457,6 +457,44 @@ class Repository:
                 s.commit()
         return {"updated": updated, "old": old_norm, "new": new_norm}
 
+    def delete_tag(
+        self,
+        tag: str,
+        tenant_id: str | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Remove a tag from every classification in the tenant scope.
+
+        Mirror of :meth:`rename_tag` for retiring an obsolete tag entirely.
+        The tag name is normalized the same way as on write (trim, lowercase,
+        32 char cap). Other tags on each row are preserved in their original
+        order. Returns ``{"updated": int, "tag": str}``. When ``dry_run=True``
+        no rows are written and ``updated`` reflects what would have changed.
+        """
+        norm = (tag or "").strip().lower()[:32]
+        if not norm:
+            raise ValueError("`tag` must be a non-empty tag name.")
+        stmt = select(ClassificationRow)
+        stmt = self._scope_tenant(stmt, tenant_id)
+        updated = 0
+        with get_session() as s:
+            for row in s.execute(stmt).scalars():
+                tags = row.tags or []
+                if not isinstance(tags, list) or norm not in tags:
+                    continue
+                new_tags = [
+                    t for t in tags
+                    if isinstance(t, str) and t.strip().lower()[:32] != norm
+                ]
+                if new_tags == tags:
+                    continue
+                updated += 1
+                if not dry_run:
+                    row.tags = new_tags
+            if not dry_run:
+                s.commit()
+        return {"updated": updated, "tag": norm}
+
     def get(
         self, item_id: str, tenant_id: str | None = None
     ) -> ClassificationRecord | None:
