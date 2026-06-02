@@ -99,6 +99,30 @@ def test_tags_endpoint_empty(monkeypatch, tmp_path):
     assert r.json() == {"items": [], "count": 0}
 
 
+def test_tags_endpoint_min_count_filter(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance", "q1"])
+    _seed("b.png", ["finance", "q2"])
+    _seed("c.png", ["finance"])
+    _seed("d.png", ["ops"])
+
+    # min_count=2 drops the one-offs (ops, q1, q2), keeps finance.
+    r = c.get("/v1/history/tags?min_count=2", headers={"X-API-Key": "k"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 1
+    assert body["items"] == [{"tag": "finance", "count": 3}]
+
+    # min_count=4 drops everything.
+    r = c.get("/v1/history/tags?min_count=4", headers={"X-API-Key": "k"})
+    assert r.status_code == 200
+    assert r.json() == {"items": [], "count": 0}
+
+    # Values below 1 are rejected at the route layer.
+    r = c.get("/v1/history/tags?min_count=0", headers={"X-API-Key": "k"})
+    assert r.status_code == 422
+
+
 def test_tags_endpoint_requires_auth(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.get("/v1/history/tags")

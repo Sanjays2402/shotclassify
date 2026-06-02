@@ -412,6 +412,16 @@ def list_tags(
         le=500,
         description="Maximum number of distinct tags returned. Hard-capped at 500.",
     ),
+    min_count: int = Query(
+        1,
+        ge=1,
+        le=1_000_000,
+        description=(
+            "Only return tags used at least this many times. Defaults to 1 "
+            "(everything). Set to 2+ to hide one-off tags from tag clouds "
+            "and autocomplete."
+        ),
+    ),
 ) -> dict:
     """List distinct tags in the current tenant with their usage counts.
 
@@ -420,7 +430,7 @@ def list_tags(
     surface first, with stable alphabetical tie-breaks.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
-    items = Repository().list_tags(tenant_id=tenant_id, q=q, limit=limit)
+    items = Repository().list_tags(tenant_id=tenant_id, q=q, limit=limit, min_count=min_count)
     return {"items": items, "count": len(items)}
 
 

@@ -368,6 +368,7 @@ class Repository:
         tenant_id: str | None = None,
         q: str | None = None,
         limit: int = 100,
+        min_count: int = 1,
     ) -> list[dict]:
         """Return distinct tags in scope with their usage counts.
 
@@ -380,6 +381,7 @@ class Repository:
         which is fine for the small vocabularies this product targets.
         """
         capped = max(1, min(int(limit), 500))
+        floor = max(1, int(min_count))
         needle = (q or "").strip().lower()
         stmt = select(ClassificationRow.tags)
         stmt = self._scope_tenant(stmt, tenant_id)
@@ -397,6 +399,8 @@ class Repository:
                     if needle and needle not in norm:
                         continue
                     counts[norm] = counts.get(norm, 0) + 1
+        if floor > 1:
+            counts = {t: c for t, c in counts.items() if c >= floor}
         items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
         return [{"tag": t, "count": c} for t, c in items[:capped]]
 
