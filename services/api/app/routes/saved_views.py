@@ -18,7 +18,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import Response
 
 from shotclassify_store import SavedViewRepository
-from shotclassify_store.saved_views import DuplicateSavedViewName
+from shotclassify_store.saved_views import PER_USER_MAX, DuplicateSavedViewName
 
 from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.rbac import require_role, require_scope
@@ -101,6 +101,30 @@ def _sort_views(items: list[dict], sort: str) -> list[dict]:
     # never silently jump to the top when the field is null.
     sentinel = "" if reverse else "\uffff"
     return sorted(items, key=lambda r: (r.get(field) or sentinel), reverse=reverse)
+
+
+@router.get(
+    "/quota",
+    dependencies=[require_role("viewer"), require_scope("read:classifications")],
+)
+def get_quota(request: Request) -> dict:
+    """Return how many saved views the caller has used vs. the per-user cap.
+
+    Lets the UI show "47/50 used, 3 remaining" next to the New View button
+    and disable the button (with a clear reason) before the user types a
+    name only to hit a 422 on submit. Scope matches ``GET /v1/saved-views``:
+    only the calling principal's rows in the current tenant are counted.
+    """
+    principal, tenant_id = _scope(request)
+    items = SavedViewRepository().list(principal=principal, tenant_id=tenant_id)
+    used = len(items)
+    remaining = max(PER_USER_MAX - used, 0)
+    return {
+        "used": used,
+        "limit": PER_USER_MAX,
+        "remaining": remaining,
+        "at_limit": used >= PER_USER_MAX,
+    }
 
 
 _EXPORT_MAX_IDS = 200
