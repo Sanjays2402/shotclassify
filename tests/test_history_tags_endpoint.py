@@ -170,3 +170,43 @@ def test_tags_endpoint_sort_invalid(monkeypatch, tmp_path):
     _seed("a.png", ["x"])
     r = c.get("/v1/history/tags?sort=bogus", headers={"X-API-Key": "k"})
     assert r.status_code == 422
+
+
+def test_tags_endpoint_prefix_filter(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance", "final", "refined"])
+    _seed("b.png", ["finance", "ops"])
+
+    # Prefix matches 'finance' and 'final', not 'refined' (substring would).
+    r = c.get("/v1/history/tags?prefix=fin", headers={"X-API-Key": "k"})
+    assert r.status_code == 200, r.text
+    tags = sorted(it["tag"] for it in r.json()["items"])
+    assert tags == ["final", "finance"]
+
+    # Case-insensitive.
+    r = c.get("/v1/history/tags?prefix=FIN", headers={"X-API-Key": "k"})
+    assert r.status_code == 200
+    tags = sorted(it["tag"] for it in r.json()["items"])
+    assert tags == ["final", "finance"]
+
+    # No match returns empty.
+    r = c.get("/v1/history/tags?prefix=zzz", headers={"X-API-Key": "k"})
+    assert r.status_code == 200
+    assert r.json() == {"items": [], "count": 0}
+
+    # Length cap enforced at the route layer.
+    r = c.get("/v1/history/tags?prefix=" + "a" * 33, headers={"X-API-Key": "k"})
+    assert r.status_code == 422
+
+
+def test_tags_endpoint_prefix_combines_with_q(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance-q1", "finance-q2", "final", "refined-q1"])
+
+    # prefix='fin' AND substring 'q1' -> only 'finance-q1'.
+    r = c.get(
+        "/v1/history/tags?prefix=fin&q=q1", headers={"X-API-Key": "k"}
+    )
+    assert r.status_code == 200, r.text
+    tags = [it["tag"] for it in r.json()["items"]]
+    assert tags == ["finance-q1"]

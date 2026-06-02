@@ -398,20 +398,25 @@ class Repository:
         min_count: int = 1,
         sort: str = "count",
         order: str | None = None,
+        prefix: str | None = None,
     ) -> list[dict]:
         """Return distinct tags in scope with their usage counts.
 
         Powers tag autocomplete and tag-cloud UIs so users discover the
         vocabulary that is already in use instead of guessing. Each item
         is ``{"tag": str, "count": int}``, sorted by count desc then tag
-        asc. ``q`` filters tags by case-insensitive substring. ``limit``
-        is clamped to ``[1, 500]``. Tags are stored as a small JSON list
-        per row, so we aggregate in Python after a tenant-scoped scan,
-        which is fine for the small vocabularies this product targets.
+        asc. ``q`` filters tags by case-insensitive substring. ``prefix``
+        filters by case-insensitive prefix, which is what most typeahead
+        UIs actually want (typing "fin" should match "finance" but not
+        "refined"). When both are given, both must match. ``limit`` is
+        clamped to ``[1, 500]``. Tags are stored as a small JSON list per
+        row, so we aggregate in Python after a tenant-scoped scan, which
+        is fine for the small vocabularies this product targets.
         """
         capped = max(1, min(int(limit), 500))
         floor = max(1, int(min_count))
         needle = (q or "").strip().lower()
+        head = (prefix or "").strip().lower()
         stmt = select(ClassificationRow.tags)
         stmt = self._scope_tenant(stmt, tenant_id)
         counts: dict[str, int] = {}
@@ -426,6 +431,8 @@ class Repository:
                     if not norm:
                         continue
                     if needle and needle not in norm:
+                        continue
+                    if head and not norm.startswith(head):
                         continue
                     counts[norm] = counts.get(norm, 0) + 1
         if floor > 1:

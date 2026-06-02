@@ -460,6 +460,16 @@ def list_tags(
             "to surface rarest tags first when pruning."
         ),
     ),
+    prefix: str | None = Query(
+        None,
+        max_length=32,
+        description=(
+            "Optional case-insensitive prefix filter on the tag name. "
+            "Use this for typeahead autocomplete (typing 'fin' matches "
+            "'finance' but not 'refined'); use `q` for substring search. "
+            "Combines with `q` when both are given (both must match)."
+        ),
+    ),
 ) -> dict:
     """List distinct tags in the current tenant with their usage counts.
 
@@ -478,6 +488,7 @@ def list_tags(
             min_count=min_count,
             sort=sort,
             order=order,
+            prefix=prefix,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
