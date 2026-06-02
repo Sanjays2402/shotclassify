@@ -399,6 +399,7 @@ class Repository:
         sort: str = "count",
         order: str | None = None,
         prefix: str | None = None,
+        pinned: bool | None = None,
     ) -> list[dict]:
         """Return distinct tags in scope with their usage counts.
 
@@ -408,7 +409,12 @@ class Repository:
         asc. ``q`` filters tags by case-insensitive substring. ``prefix``
         filters by case-insensitive prefix, which is what most typeahead
         UIs actually want (typing "fin" should match "finance" but not
-        "refined"). When both are given, both must match. ``limit`` is
+        "refined"). When both are given, both must match. ``pinned``
+        narrows the scan to pinned or unpinned rows: ``True`` returns
+        only tags that appear on at least one pinned classification
+        (with counts limited to pinned rows), ``False`` returns the
+        opposite, and ``None`` (default) ignores the pin state.
+        ``limit`` is
         clamped to ``[1, 500]``. Tags are stored as a small JSON list per
         row, so we aggregate in Python after a tenant-scoped scan, which
         is fine for the small vocabularies this product targets.
@@ -419,6 +425,10 @@ class Repository:
         head = (prefix or "").strip().lower()
         stmt = select(ClassificationRow.tags)
         stmt = self._scope_tenant(stmt, tenant_id)
+        if pinned is True:
+            stmt = stmt.where(ClassificationRow.pinned.is_(True))
+        elif pinned is False:
+            stmt = stmt.where(ClassificationRow.pinned.is_(False))
         counts: dict[str, int] = {}
         with get_session() as s:
             for (raw,) in s.execute(stmt):

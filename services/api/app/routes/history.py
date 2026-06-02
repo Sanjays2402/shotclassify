@@ -470,6 +470,16 @@ def list_tags(
             "Combines with `q` when both are given (both must match)."
         ),
     ),
+    pinned: bool | None = Query(
+        None,
+        description=(
+            "Optional pinned filter. ``true`` returns only tags that "
+            "appear on at least one pinned classification (counts are "
+            "limited to pinned rows), backing a 'pinned-only' toggle on "
+            "the tag picker. ``false`` returns the opposite. Omit to "
+            "ignore pin state (default)."
+        ),
+    ),
 ) -> dict:
     """List distinct tags in the current tenant with their usage counts.
 
@@ -489,6 +499,7 @@ def list_tags(
             sort=sort,
             order=order,
             prefix=prefix,
+            pinned=pinned,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

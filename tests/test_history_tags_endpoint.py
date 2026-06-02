@@ -23,7 +23,7 @@ def _client(monkeypatch, tmp_path):
     return TestClient(create_app())
 
 
-def _seed(filename: str, tags: list[str], tenant_id: str | None = None) -> None:
+def _seed(filename: str, tags: list[str], tenant_id: str | None = None, pinned: bool = False) -> None:
     from shotclassify_store.db import ClassificationRow, get_session, init_db
     from shotclassify_common import Category
 
@@ -41,7 +41,7 @@ def _seed(filename: str, tags: list[str], tenant_id: str | None = None) -> None:
                 tenant_id=tenant_id,
                 label=None,
                 tags=tags,
-                pinned=False,
+                pinned=pinned,
             )
         )
         s.commit()
@@ -210,3 +210,48 @@ def test_tags_endpoint_prefix_combines_with_q(monkeypatch, tmp_path):
     assert r.status_code == 200, r.text
     tags = [it["tag"] for it in r.json()["items"]]
     assert tags == ["finance-q1"]
+
+
+def test_tags_endpoint_pinned_filter(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # finance: 2 pinned, 1 unpinned. ops: 1 unpinned. q1: 1 pinned.
+    _seed("a.png", ["finance", "q1"], pinned=True)
+    _seed("b.png", ["finance"], pinned=True)
+    _seed("c.png", ["finance"], pinned=False)
+    _seed("d.png", ["ops"], pinned=False)
+
+    # pinned=true returns only tags that appear on pinned rows, counts
+    # limited to pinned rows: finance=2, q1=1, ops dropped entirely.
+    r = c.get("/v1/history/tags?pinned=true", headers={"X-API-Key": "k"})
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    assert items == [{"tag": "finance", "count": 2}, {"tag": "q1", "count": 1}]
+
+    # pinned=false flips it: finance=1 (the one unpinned row), ops=1.
+    r = c.get("/v1/history/tags?pinned=false", headers={"X-API-Key": "k"})
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert items == [{"tag": "finance", "count": 1}, {"tag": "ops", "count": 1}]
+
+    # Omitting pinned returns the unfiltered totals.
+    r = c.get("/v1/history/tags", headers={"X-API-Key": "k"})
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert items[0] == {"tag": "finance", "count": 3}
+
+
+def test_tags_endpoint_pinned_combines_with_prefix_and_min_count(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance", "final"], pinned=True)
+    _seed("b.png", ["finance"], pinned=True)
+    _seed("c.png", ["refined"], pinned=True)
+    _seed("d.png", ["finance"], pinned=False)
+
+    # pinned=true + prefix=fin drops 'refined'; min_count=2 drops 'final'.
+    r = c.get(
+        "/v1/history/tags?pinned=true&prefix=fin&min_count=2",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["items"] == [{"tag": "finance", "count": 2}]
+
