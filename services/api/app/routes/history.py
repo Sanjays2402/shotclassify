@@ -121,6 +121,51 @@ def _record_to_row(rec: ClassificationRecord) -> dict:
     }
 
 
+def _build_link_header(
+    request: Request, *, offset: int, limit: int, total: int
+) -> str:
+    """Build an RFC 5988 ``Link`` header for cursor-free pagination.
+
+    Emits ``first``, ``prev``, ``next``, and ``last`` relations as applicable
+    so a script can walk pages without recomputing offsets. Preserves every
+    query param the caller sent (filters, sort, etc.) and only rewrites
+    ``offset`` and ``limit``.
+    """
+    if limit <= 0:
+        return ""
+    # Last page offset is the largest multiple of ``limit`` strictly less
+    # than ``total``. When ``total`` is 0 there is no last page.
+    last_offset = ((total - 1) // limit) * limit if total > 0 else 0
+    # Cap pagination targets at the same upper bound enforced on the query
+    # parameter so a generated link is never rejected by FastAPI validation.
+    OFFSET_MAX = 100_000
+    last_offset = min(last_offset, OFFSET_MAX)
+
+    base_qs = [
+        (k, v) for k, v in request.query_params.multi_items()
+        if k not in ("offset", "limit")
+    ]
+
+    def _url_for(new_offset: int) -> str:
+        from urllib.parse import urlencode
+
+        params = base_qs + [("limit", str(limit)), ("offset", str(new_offset))]
+        qs = urlencode(params, doseq=True)
+        return f"{request.url.path}?{qs}"
+
+    parts: list[str] = []
+    parts.append(f'<{_url_for(0)}>; rel="first"')
+    if offset > 0:
+        prev_offset = max(0, offset - limit)
+        parts.append(f'<{_url_for(prev_offset)}>; rel="prev"')
+    next_offset = offset + limit
+    if next_offset < total and next_offset <= OFFSET_MAX:
+        parts.append(f'<{_url_for(next_offset)}>; rel="next"')
+    if total > 0:
+        parts.append(f'<{_url_for(last_offset)}>; rel="last"')
+    return ", ".join(parts)
+
+
 @router.get("/export", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def export_history(
     request: Request,
@@ -323,7 +368,12 @@ def list_history(
     response.headers["x-total-count"] = str(total)
     response.headers["x-offset"] = str(offset)
     response.headers["x-limit"] = str(limit)
-    response.headers["access-control-expose-headers"] = "x-total-count, x-offset, x-limit"
+    link_header = _build_link_header(request, offset=offset, limit=limit, total=total)
+    if link_header:
+        response.headers["link"] = link_header
+    response.headers["access-control-expose-headers"] = (
+        "x-total-count, x-offset, x-limit, link"
+    )
     return items
 
 
