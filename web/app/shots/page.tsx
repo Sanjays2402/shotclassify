@@ -412,6 +412,12 @@ export default function ShotsPage() {
             category={cat || undefined}
             q={q || undefined}
             limit={Math.max(limit, 1000)}
+            since={toIsoStart(since)}
+            until={toIsoEnd(until)}
+            min_conf={minConfPct > 0 ? minConfPct / 100 : undefined}
+            sort={sort}
+            tag={tagDebounced || undefined}
+            pinned={pinnedOnly ? true : undefined}
             disabled={isSample}
           />
         </div>

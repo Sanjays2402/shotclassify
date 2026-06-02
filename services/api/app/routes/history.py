@@ -58,10 +58,33 @@ def export_history(
     limit: int = Query(1000, ge=1, le=EXPORT_MAX),
     category: Category | None = Query(None),
     q: str | None = Query(None, description="Full-text query over OCR text and filename"),
+    since: datetime | None = Query(None, description="Include records at or after this UTC timestamp"),
+    until: datetime | None = Query(None, description="Include records at or before this UTC timestamp"),
+    min_conf: float | None = Query(None, ge=0.0, le=1.0),
+    max_conf: float | None = Query(None, ge=0.0, le=1.0),
+    sort: str = Query("new", pattern="^(new|old|conf_asc|conf_desc)$"),
+    tag: str | None = Query(None, max_length=32, description="Filter by a single tag (case-insensitive)."),
+    pinned: bool | None = Query(None, description="If true, only pinned; if false, only unpinned."),
 ):
-    """Stream classification history as CSV or JSON for download."""
+    """Stream classification history as CSV or JSON for download.
+
+    Accepts the same filters as ``GET /v1/history`` so a download from the
+    dashboard matches what the user is currently looking at.
+    """
     tenant_id = getattr(request.state, "tenant_id", None)
-    records = Repository().list(limit=limit, category=category, query=q, tenant_id=tenant_id)
+    records = Repository().list(
+        limit=limit,
+        category=category,
+        query=q,
+        tenant_id=tenant_id,
+        since=since,
+        until=until,
+        min_conf=min_conf,
+        max_conf=max_conf,
+        sort=sort,
+        tag=tag,
+        pinned=pinned,
+    )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     if format == "json":
@@ -72,6 +95,13 @@ def export_history(
                 "category": category.value if category else None,
                 "q": q,
                 "limit": limit,
+                "since": since.isoformat() if since else None,
+                "until": until.isoformat() if until else None,
+                "min_conf": min_conf,
+                "max_conf": max_conf,
+                "sort": sort,
+                "tag": tag,
+                "pinned": pinned,
             },
             "records": [json.loads(r.model_dump_json()) for r in records],
         }

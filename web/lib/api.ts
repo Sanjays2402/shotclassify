@@ -74,12 +74,26 @@ export const ENDPOINTS = {
     limit?: number;
     category?: string;
     q?: string;
+    since?: string;
+    until?: string;
+    min_conf?: number;
+    max_conf?: number;
+    sort?: "new" | "old" | "conf_asc" | "conf_desc";
+    tag?: string;
+    pinned?: boolean;
   }) => {
     const sp = new URLSearchParams();
     sp.set("format", params?.format ?? "csv");
     if (params?.limit) sp.set("limit", String(params.limit));
     if (params?.category) sp.set("category", params.category);
     if (params?.q) sp.set("q", params.q);
+    if (params?.since) sp.set("since", params.since);
+    if (params?.until) sp.set("until", params.until);
+    if (params?.min_conf != null) sp.set("min_conf", String(params.min_conf));
+    if (params?.max_conf != null) sp.set("max_conf", String(params.max_conf));
+    if (params?.sort) sp.set("sort", params.sort);
+    if (params?.tag) sp.set("tag", params.tag);
+    if (params?.pinned != null) sp.set("pinned", params.pinned ? "true" : "false");
     return `/api/history/export?${sp.toString()}`;
   },
   savedViews: "/api/saved-views",

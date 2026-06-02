@@ -10,10 +10,29 @@ type Props = {
   category?: string;
   q?: string;
   limit?: number;
+  since?: string;
+  until?: string;
+  min_conf?: number;
+  max_conf?: number;
+  sort?: "new" | "old" | "conf_asc" | "conf_desc";
+  tag?: string;
+  pinned?: boolean;
   disabled?: boolean;
 };
 
-export function ExportMenu({ category, q, limit = 1000, disabled }: Props) {
+export function ExportMenu({
+  category,
+  q,
+  limit = 1000,
+  since,
+  until,
+  min_conf,
+  max_conf,
+  sort,
+  tag,
+  pinned,
+  disabled,
+}: Props) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<Format | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +60,19 @@ export function ExportMenu({ category, q, limit = 1000, disabled }: Props) {
     setError(null);
     setBusy(format);
     try {
-      const url = ENDPOINTS.historyExport({ format, category, q, limit });
+      const url = ENDPOINTS.historyExport({
+        format,
+        category,
+        q,
+        limit,
+        since,
+        until,
+        min_conf,
+        max_conf,
+        sort,
+        tag,
+        pinned,
+      });
       const res = await fetch(url, { credentials: "same-origin" });
       if (!res.ok) {
         throw new Error(`${res.status} ${res.statusText}`);

@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import csv
 import json
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
@@ -58,3 +59,51 @@ def test_history_export_rejects_bad_format(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.get("/v1/history/export?format=xml", headers={"X-API-Key": "k"})
     assert r.status_code == 422
+
+
+def _seed_one(name: str, confidence: float) -> None:
+    from shotclassify_store.db import ClassificationRow, get_session, init_db
+    from shotclassify_common import Category
+    import uuid
+
+    init_db()
+    with get_session() as s:
+        s.add(
+            ClassificationRow(
+                id=uuid.uuid4().hex,
+                created_at=datetime.now(timezone.utc),
+                filename=name,
+                primary_category=Category.receipt.value,
+                confidence=confidence,
+                ocr_text="",
+                image_path=None,
+                tenant_id=None,
+            )
+        )
+        s.commit()
+
+
+def test_history_export_honours_min_conf_filter(monkeypatch, tmp_path):
+    """Export must apply the same min_conf filter as the list view so the
+    download matches what the user sees on screen."""
+    c = _client(monkeypatch, tmp_path)
+    _seed_one("low.png", 0.42)
+
+    # Below the floor: empty export.
+    r = c.get(
+        "/v1/history/export?format=json&min_conf=0.9",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = json.loads(r.text)
+    assert body["count"] == 0
+    assert body["filters"]["min_conf"] == 0.9
+
+    # Within range: row comes back.
+    r = c.get(
+        "/v1/history/export?format=json&min_conf=0.1",
+        headers={"X-API-Key": "k"},
+    )
+    body = json.loads(r.text)
+    assert body["count"] == 1
+    assert body["records"][0]["filename"] == "low.png"
