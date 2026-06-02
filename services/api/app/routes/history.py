@@ -481,6 +481,58 @@ def rename_tag(
         )
     return result
 
+@router.post("/tags/merge", dependencies=[require_role("operator"), require_scope("write:classifications")])
+def merge_tags(
+    request: Request,
+    payload: dict = Body(
+        ...,
+        examples=[{"sources": ["finace", "financ", "fin"], "target": "finance"}],
+    ),
+    dry_run: bool = dry_run_query(),
+) -> dict:
+    """Merge several source tags into one target tag in a single call.
+
+    Saves N round trips when collapsing a cluster of near-duplicate tags
+    (typos, abbreviations, case variants) into a canonical name. Same
+    write-time normalization as ``PATCH /v1/history/{id}`` (trim,
+    lowercase, 32 char cap). Sources equal to the target, blanks, and
+    duplicates are ignored. If a row already has the target alongside one
+    or more sources, the sources are dropped and the target is kept once.
+
+    Body fields:
+      * ``sources`` (list[string], required): tags to merge away.
+      * ``target`` (string, required): canonical tag to keep.
+
+    Returns the count of records that changed. Honours ``dry_run=true``.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Body must be a JSON object.")
+    allowed = {"sources", "target"}
+    unknown = set(payload) - allowed
+    if unknown:
+        raise HTTPException(400, f"Unknown field(s): {sorted(unknown)}")
+    sources = payload.get("sources")
+    target = payload.get("target")
+    if not isinstance(sources, list):
+        raise HTTPException(400, "`sources` must be a list of strings.")
+    if not isinstance(target, str):
+        raise HTTPException(400, "`target` must be a string.")
+    tenant_id = getattr(request.state, "tenant_id", None)
+    try:
+        result = Repository().merge_tags(
+            sources=sources, target=target, tenant_id=tenant_id, dry_run=dry_run
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if dry_run:
+        return mark_dry_run(
+            request,
+            would_update=result["updated"],
+            sources=result["sources"],
+            target=result["target"],
+        )
+    return result
+
 @router.post("/tags/delete", dependencies=[require_role("operator"), require_scope("write:classifications")])
 def delete_tag(
     request: Request,

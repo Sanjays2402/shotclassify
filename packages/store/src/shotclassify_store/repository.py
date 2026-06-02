@@ -457,6 +457,74 @@ class Repository:
                 s.commit()
         return {"updated": updated, "old": old_norm, "new": new_norm}
 
+    def merge_tags(
+        self,
+        sources: list[str],
+        target: str,
+        tenant_id: str | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Merge several source tags into one target tag in a single pass.
+
+        Useful for taxonomy cleanup where many near-duplicate tags collapse
+        into one canonical name (e.g. ``["finace", "financ", "FIN"]`` ->
+        ``"finance"``) without issuing one rename call per source. All names
+        are normalized the same way as on write (trim, lowercase, 32 char cap).
+        Duplicate sources, blanks, and any source equal to the target are
+        ignored. If a row already has the target alongside one or more
+        sources, the sources are dropped and the target is kept once. Tag
+        order is preserved otherwise. Returns
+        ``{"updated": int, "sources": list[str], "target": str}``. When
+        ``dry_run=True`` no rows are written and ``updated`` reflects what
+        would have changed.
+        """
+        target_norm = (target or "").strip().lower()[:32]
+        if not target_norm:
+            raise ValueError("`target` must be a non-empty tag name.")
+        if not isinstance(sources, list) or not sources:
+            raise ValueError("`sources` must be a non-empty list of tag names.")
+        source_set: set[str] = set()
+        for s_ in sources:
+            if not isinstance(s_, str):
+                raise ValueError("`sources` entries must be strings.")
+            n = s_.strip().lower()[:32]
+            if not n or n == target_norm:
+                continue
+            source_set.add(n)
+        if not source_set:
+            return {"updated": 0, "sources": [], "target": target_norm}
+        sources_sorted = sorted(source_set)
+        stmt = select(ClassificationRow)
+        stmt = self._scope_tenant(stmt, tenant_id)
+        updated = 0
+        with get_session() as s:
+            for row in s.execute(stmt).scalars():
+                tags = row.tags or []
+                if not isinstance(tags, list):
+                    continue
+                if not any(t in source_set for t in tags if isinstance(t, str)):
+                    continue
+                seen: set[str] = set()
+                new_tags: list[str] = []
+                for t in tags:
+                    if not isinstance(t, str):
+                        continue
+                    norm = t.strip().lower()[:32]
+                    if norm in source_set:
+                        norm = target_norm
+                    if not norm or norm in seen:
+                        continue
+                    seen.add(norm)
+                    new_tags.append(norm)
+                if new_tags == tags:
+                    continue
+                updated += 1
+                if not dry_run:
+                    row.tags = new_tags
+            if not dry_run:
+                s.commit()
+        return {"updated": updated, "sources": sources_sorted, "target": target_norm}
+
     def delete_tag(
         self,
         tag: str,
