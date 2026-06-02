@@ -151,3 +151,32 @@ def test_history_export_csv_includes_label_tags_and_pinned(monkeypatch, tmp_path
     # Tags joined with comma so a spreadsheet user can split on the cell.
     parts = [p.strip() for p in row["tags"].split(",")]
     assert set(parts) == {"finance", "q1"}
+
+
+def test_history_export_ndjson_empty(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.get("/v1/history/export?format=ndjson", headers={"X-API-Key": "k"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/x-ndjson")
+    cd = r.headers.get("content-disposition", "")
+    assert "attachment" in cd and ".ndjson" in cd
+    assert r.headers["x-record-count"] == "0"
+    assert r.text == ""
+
+
+def test_history_export_ndjson_one_line_per_record(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed_one("a.png", 0.91)
+    _seed_one("b.png", 0.55)
+
+    r = c.get("/v1/history/export?format=ndjson", headers={"X-API-Key": "k"})
+    assert r.status_code == 200
+    assert r.headers["x-record-count"] == "2"
+    lines = [ln for ln in r.text.split("\n") if ln]
+    assert len(lines) == 2
+    # Each line must be standalone JSON (no wrapper object, no trailing comma).
+    parsed = [json.loads(ln) for ln in lines]
+    filenames = {p["filename"] for p in parsed}
+    assert filenames == {"a.png", "b.png"}
+    for p in parsed:
+        assert "id" in p and "primary_category" in p and "confidence" in p

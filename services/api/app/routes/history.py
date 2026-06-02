@@ -60,7 +60,7 @@ def _record_to_row(rec: ClassificationRecord) -> dict:
 @router.get("/export", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def export_history(
     request: Request,
-    format: str = Query("csv", pattern="^(csv|json)$"),
+    format: str = Query("csv", pattern="^(csv|json|ndjson)$"),
     limit: int = Query(1000, ge=1, le=EXPORT_MAX),
     category: Category | None = Query(None),
     q: str | None = Query(None, description="Full-text query over OCR text and filename"),
@@ -92,6 +92,22 @@ def export_history(
         pinned=pinned,
     )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    if format == "ndjson":
+        # Newline-delimited JSON: one record per line, no wrapper object.
+        # Streams cleanly into BigQuery / Snowflake / `jq` / `wc -l` pipelines.
+        def _ndjson_iter():
+            for rec in records:
+                yield rec.model_dump_json() + "\n"
+
+        return StreamingResponse(
+            _ndjson_iter(),
+            media_type="application/x-ndjson",
+            headers={
+                "content-disposition": f'attachment; filename="shotclassify-history-{stamp}.ndjson"',
+                "x-record-count": str(len(records)),
+            },
+        )
 
     if format == "json":
         payload = {
