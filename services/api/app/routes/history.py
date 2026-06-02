@@ -25,6 +25,9 @@ EXPORT_COLUMNS = [
     "primary_category",
     "confidence",
     "user_corrected_to",
+    "label",
+    "tags",
+    "pinned",
     "ocr_text",
     "blob_url",
 ]
@@ -46,6 +49,9 @@ def _record_to_row(rec: ClassificationRecord) -> dict:
             if rec.user_corrected_to and hasattr(rec.user_corrected_to, "value")
             else (str(rec.user_corrected_to) if rec.user_corrected_to else "")
         ),
+        "label": rec.label or "",
+        "tags": ",".join(rec.tags or []),
+        "pinned": "true" if rec.pinned else "false",
         "ocr_text": (rec.ocr_text or "").replace("\r", " ").replace("\n", " "),
         "blob_url": f"/v1/blobs/{rec.id}" if rec.image_path else "",
     }

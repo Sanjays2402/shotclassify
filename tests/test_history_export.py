@@ -107,3 +107,47 @@ def test_history_export_honours_min_conf_filter(monkeypatch, tmp_path):
     body = json.loads(r.text)
     assert body["count"] == 1
     assert body["records"][0]["filename"] == "low.png"
+
+
+def test_history_export_csv_includes_label_tags_and_pinned(monkeypatch, tmp_path):
+    """CSV export must surface label, tags, and pinned so a download lines
+    up with the dashboard filters that already use those fields."""
+    c = _client(monkeypatch, tmp_path)
+
+    from shotclassify_store.db import ClassificationRow, get_session, init_db
+    from shotclassify_common import Category
+    import uuid
+
+    init_db()
+    with get_session() as s:
+        s.add(
+            ClassificationRow(
+                id=uuid.uuid4().hex,
+                created_at=datetime.now(timezone.utc),
+                filename="invoice.png",
+                primary_category=Category.receipt.value,
+                confidence=0.95,
+                ocr_text="",
+                image_path=None,
+                tenant_id=None,
+                label="Q1 invoice",
+                tags=["finance", "q1"],
+                pinned=True,
+            )
+        )
+        s.commit()
+
+    r = c.get("/v1/history/export?format=csv", headers={"X-API-Key": "k"})
+    assert r.status_code == 200
+    reader = csv.DictReader(io.StringIO(r.text))
+    header = reader.fieldnames or []
+    for col in ("label", "tags", "pinned"):
+        assert col in header, f"missing {col} in CSV header"
+    rows = list(reader)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["label"] == "Q1 invoice"
+    assert row["pinned"] == "true"
+    # Tags joined with comma so a spreadsheet user can split on the cell.
+    parts = [p.strip() for p in row["tags"].split(",")]
+    assert set(parts) == {"finance", "q1"}
