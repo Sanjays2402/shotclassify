@@ -472,6 +472,33 @@ def duplicate_view(
     return row
 
 
+@router.get(
+    "/by-name/{name:path}",
+    dependencies=[require_role("viewer"), require_scope("read:classifications")],
+)
+def get_view_by_name(request: Request, name: str) -> dict:
+    """Look up one of the caller's saved views by name.
+
+    Lets the UI and CLI deep-link to a view (``/history?view=Receipts``)
+    or reference one from a script without first calling ``GET
+    /v1/saved-views`` and scanning for the id. Match is case-insensitive
+    and ignores surrounding whitespace, matching how the create endpoint
+    stores names. Scope is the same as ``GET /v1/saved-views``: only the
+    calling principal's rows in the current tenant are visible.
+    """
+    needle = (name or "").strip().lower()
+    if not needle:
+        raise HTTPException(422, "name is required")
+    principal, tenant_id = _scope(request)
+    items = SavedViewRepository().list(principal=principal, tenant_id=tenant_id)
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        if (row.get("name") or "").strip().lower() == needle:
+            return row
+    raise HTTPException(404, "saved view not found")
+
+
 @router.get("/{view_id}", dependencies=[require_role("viewer"), require_scope("read:classifications")])
 def get_view(request: Request, view_id: str) -> dict:
     principal, tenant_id = _scope(request)
