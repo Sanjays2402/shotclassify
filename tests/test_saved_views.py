@@ -315,3 +315,179 @@ def test_saved_views_export_requires_auth(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.get("/v1/saved-views/export")
     assert r.status_code in (401, 403)
+
+
+def test_saved_views_import_round_trip_from_export(monkeypatch, tmp_path):
+    """Export from one workspace, import into another, get the same set back."""
+    import json
+
+    c = _client(monkeypatch, tmp_path)
+    c.post(
+        "/v1/saved-views",
+        json={"name": "Receipts", "filters": {"category": "receipt"}},
+        headers=HEADERS,
+    )
+    c.post(
+        "/v1/saved-views",
+        json={"name": "High conf", "filters": {"min_conf": 0.9}},
+        headers=HEADERS,
+    )
+    dump = json.loads(c.get("/v1/saved-views/export", headers=HEADERS).content)
+
+    # Fresh tenant DB so we can re-import without collisions.
+    c2 = _client(monkeypatch, tmp_path / "second")
+    r = c2.post("/v1/saved-views/import", json=dump, headers=HEADERS)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 2
+    assert body["skipped"] == []
+    assert body["errors"] == []
+    imported_names = sorted(v["name"] for v in body["imported"])
+    assert imported_names == ["High conf", "Receipts"]
+    # Ids are re-issued, not copied.
+    src_ids = {v["id"] for v in dump["items"]}
+    new_ids = {v["id"] for v in body["imported"]}
+    assert src_ids.isdisjoint(new_ids)
+    # Listing reflects the import.
+    listed = c2.get("/v1/saved-views", headers=HEADERS).json()
+    assert listed["count"] == 2
+
+
+def test_saved_views_import_accepts_bare_list(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.post(
+        "/v1/saved-views/import",
+        json=[
+            {"name": "A", "filters": {"category": "receipt"}},
+            {"name": "B", "filters": {"min_conf": 0.5}},
+        ],
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["count"] == 2
+
+
+def test_saved_views_import_conflict_skip(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    c.post(
+        "/v1/saved-views",
+        json={"name": "Receipts", "filters": {"category": "receipt"}},
+        headers=HEADERS,
+    )
+    r = c.post(
+        "/v1/saved-views/import",
+        json={"items": [
+            {"name": "receipts", "filters": {"category": "invoice"}},
+            {"name": "Fresh", "filters": {"min_conf": 0.4}},
+        ]},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 1
+    assert body["imported"][0]["name"] == "Fresh"
+    assert body["skipped"] == [{"name": "receipts", "reason": "duplicate"}]
+    # Existing row untouched.
+    listed = c.get("/v1/saved-views", headers=HEADERS).json()
+    receipts = next(v for v in listed["items"] if v["name"] == "Receipts")
+    assert receipts["filters"]["category"] == "receipt"
+
+
+def test_saved_views_import_conflict_rename(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    c.post(
+        "/v1/saved-views",
+        json={"name": "Receipts", "filters": {"category": "receipt"}},
+        headers=HEADERS,
+    )
+    r = c.post(
+        "/v1/saved-views/import?on_conflict=rename",
+        json=[
+            {"name": "Receipts", "filters": {"category": "invoice"}},
+            {"name": "Receipts", "filters": {"category": "id_card"}},
+        ],
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    names = {v["name"] for v in r.json()["imported"]}
+    assert names == {"Receipts (imported)", "Receipts (imported 2)"}
+
+
+def test_saved_views_import_conflict_error(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    c.post(
+        "/v1/saved-views",
+        json={"name": "Receipts", "filters": {"category": "receipt"}},
+        headers=HEADERS,
+    )
+    r = c.post(
+        "/v1/saved-views/import?on_conflict=error",
+        json=[{"name": "Receipts", "filters": {}}],
+        headers=HEADERS,
+    )
+    assert r.status_code == 409
+
+
+def test_saved_views_import_dry_run_no_mutation(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.post(
+        "/v1/saved-views/import?dry_run=true",
+        json=[
+            {"name": "A", "filters": {"category": "receipt"}},
+            {"name": "B", "filters": {"min_conf": 0.5}},
+        ],
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body.get("dry_run") is True
+    assert r.headers.get("X-Dry-Run") == "true"
+    preview = body["would_import"]
+    assert preview["count"] == 2
+    # No rows actually written.
+    listed = c.get("/v1/saved-views", headers=HEADERS).json()
+    assert listed["count"] == 0
+
+
+def test_saved_views_import_rejects_bad_inputs(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+
+    # Bad on_conflict.
+    r = c.post(
+        "/v1/saved-views/import?on_conflict=overwrite",
+        json=[],
+        headers=HEADERS,
+    )
+    assert r.status_code == 422
+
+    # Missing items.
+    r = c.post(
+        "/v1/saved-views/import",
+        json={"schema": "shotclassify.saved_views.v1"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 422
+
+    # Per-item shape errors collected, valid ones still imported.
+    r = c.post(
+        "/v1/saved-views/import",
+        json=[
+            {"name": "  ", "filters": {}},
+            {"name": "Good", "filters": {"category": "receipt"}},
+            "not-an-object",
+            {"name": "Bad filters", "filters": "nope"},
+        ],
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 1
+    assert body["imported"][0]["name"] == "Good"
+    err_indexes = sorted(e["index"] for e in body["errors"])
+    assert err_indexes == [0, 2, 3]
+
+
+def test_saved_views_import_requires_auth(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.post("/v1/saved-views/import", json=[])
+    assert r.status_code in (401, 403)

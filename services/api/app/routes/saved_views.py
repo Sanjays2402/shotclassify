@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import Response
 
 from shotclassify_store import SavedViewRepository
@@ -75,6 +75,150 @@ def export_views(request: Request) -> Response:
             "Cache-Control": "no-store",
         },
     )
+
+
+_VALID_CONFLICT_MODES = ("skip", "rename", "error")
+_IMPORT_MAX_ITEMS = 200
+
+
+@router.post(
+    "/import",
+    dependencies=[require_role("operator"), require_scope("write:classifications")],
+)
+def import_views(
+    request: Request,
+    payload: dict | list = Body(...),
+    on_conflict: str = Query(
+        "skip",
+        description=(
+            "How to handle a saved view whose name already exists for this "
+            "principal+tenant: 'skip' (default) leaves the existing row "
+            "alone, 'rename' imports under an auto-suffixed name like "
+            "'Name (imported)', 'error' aborts the whole import with 409 "
+            "on the first collision."
+        ),
+    ),
+    dry_run: bool = dry_run_query(),
+) -> dict | object:
+    """Restore saved views from a prior ``GET /v1/saved-views/export`` dump.
+
+    Accepts either the wrapped export envelope (``{"schema": ..., "items": [...]}``)
+    or a bare list of view objects. Only ``name`` and ``filters`` are taken
+    from each item; everything else (ids, timestamps, principal) is
+    re-issued by the server so the import always belongs to the calling
+    principal in the current tenant. Repository-side coercion still runs,
+    so unknown filter keys and out-of-range values get cleaned the same
+    way as a manual create.
+
+    Use ``?dry_run=true`` to preview which rows would be imported,
+    skipped, or renamed without writing anything.
+    """
+    if on_conflict not in _VALID_CONFLICT_MODES:
+        raise HTTPException(
+            422,
+            f"on_conflict must be one of {_VALID_CONFLICT_MODES}",
+        )
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        items = payload.get("items")
+        if items is None:
+            raise HTTPException(422, "payload missing 'items' array")
+    else:
+        raise HTTPException(422, "payload must be an object or list")
+    if not isinstance(items, list):
+        raise HTTPException(422, "'items' must be a list")
+    if len(items) > _IMPORT_MAX_ITEMS:
+        raise HTTPException(
+            422,
+            f"too many items ({len(items)}); max {_IMPORT_MAX_ITEMS} per import",
+        )
+
+    principal, tenant_id = _scope(request)
+    repo = SavedViewRepository()
+
+    # Snapshot existing names (case-insensitive) so we can detect
+    # collisions without round-tripping the DB per item.
+    existing_rows = repo.list(principal=principal, tenant_id=tenant_id)
+    taken: set[str] = {
+        (r.get("name") or "").strip().lower()
+        for r in existing_rows
+        if isinstance(r, dict)
+    }
+
+    def _suffix(base: str) -> str:
+        candidate = f"{base} (imported)"
+        if candidate.lower() not in taken:
+            return candidate
+        n = 2
+        while f"{base} (imported {n})".lower() in taken:
+            n += 1
+        return f"{base} (imported {n})"
+
+    imported: list[dict] = []
+    skipped: list[dict] = []
+    errors: list[dict] = []
+
+    for idx, raw in enumerate(items):
+        if not isinstance(raw, dict):
+            errors.append({"index": idx, "error": "item must be an object"})
+            continue
+        name = raw.get("name")
+        filters = raw.get("filters") or {}
+        if not isinstance(name, str) or not name.strip():
+            errors.append({"index": idx, "error": "name is required"})
+            continue
+        if not isinstance(filters, dict):
+            errors.append({"index": idx, "error": "filters must be an object"})
+            continue
+        clean_name = name.strip()
+        target_name = clean_name
+        if clean_name.lower() in taken:
+            if on_conflict == "skip":
+                skipped.append({"name": clean_name, "reason": "duplicate"})
+                continue
+            if on_conflict == "error":
+                raise HTTPException(
+                    409,
+                    f"saved view name already exists: {clean_name!r}",
+                )
+            # rename
+            target_name = _suffix(clean_name)
+        if dry_run:
+            imported.append({"name": target_name, "source_name": clean_name})
+            taken.add(target_name.lower())
+            continue
+        try:
+            row = repo.create(
+                principal=principal,
+                name=target_name,
+                filters=filters,
+                tenant_id=tenant_id,
+            )
+        except DuplicateSavedViewName:
+            # Race against a concurrent create. Treat as skip rather than
+            # blowing up the whole import.
+            skipped.append({"name": target_name, "reason": "duplicate"})
+            continue
+        except ValueError as e:
+            # Per-user limit reached or filter coercion rejected the row.
+            # Stop here so the caller sees a clear partial-success state
+            # instead of silently dropping the tail of their backup.
+            errors.append({"index": idx, "name": clean_name, "error": str(e)})
+            break
+        imported.append(row)
+        taken.add(target_name.lower())
+
+    result = {
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors,
+        "count": len(imported),
+        "on_conflict": on_conflict,
+    }
+    if dry_run:
+        return mark_dry_run(request, would_import=result)
+    return result
 
 
 @router.post("", dependencies=[require_role("operator"), require_scope("write:classifications")])
