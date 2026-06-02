@@ -404,6 +404,60 @@ class Repository:
         items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
         return [{"tag": t, "count": c} for t, c in items[:capped]]
 
+    def related_tags(
+        self,
+        tag: str,
+        tenant_id: str | None = None,
+        limit: int = 50,
+        min_count: int = 1,
+    ) -> dict:
+        """Return tags that most often co-occur with ``tag`` in the tenant scope.
+
+        Powers a "related tags" sidebar on the tag detail UI and surfaces
+        merge candidates (typos, near-duplicates) when cleaning up a tag
+        taxonomy. The seed tag itself is excluded from the result. Each
+        item is ``{"tag": str, "count": int}`` where ``count`` is the
+        number of rows that carry both the seed tag and the related tag.
+        Sorted by count desc then tag asc. ``limit`` is clamped to
+        ``[1, 500]``. ``base_count`` reports how many rows carry the seed
+        tag at all, so the UI can show "X of N rows" without a second call.
+        """
+        norm = (tag or "").strip().lower()[:32]
+        if not norm:
+            raise ValueError("`tag` must be a non-empty tag name.")
+        capped = max(1, min(int(limit), 500))
+        floor = max(1, int(min_count))
+        stmt = select(ClassificationRow.tags)
+        stmt = self._scope_tenant(stmt, tenant_id)
+        base = 0
+        counts: dict[str, int] = {}
+        with get_session() as s:
+            for (raw,) in s.execute(stmt):
+                if not isinstance(raw, list):
+                    continue
+                normed: set[str] = set()
+                for t in raw:
+                    if not isinstance(t, str):
+                        continue
+                    n = t.strip().lower()
+                    if n:
+                        normed.add(n)
+                if norm not in normed:
+                    continue
+                base += 1
+                for n in normed:
+                    if n == norm:
+                        continue
+                    counts[n] = counts.get(n, 0) + 1
+        if floor > 1:
+            counts = {t: c for t, c in counts.items() if c >= floor}
+        items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        return {
+            "tag": norm,
+            "base_count": base,
+            "items": [{"tag": t, "count": c} for t, c in items[:capped]],
+        }
+
     def rename_tag(
         self,
         old: str,

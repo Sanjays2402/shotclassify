@@ -434,6 +434,45 @@ def list_tags(
     return {"items": items, "count": len(items)}
 
 
+@router.get(
+    "/tags/{tag}/related",
+    dependencies=[require_role("viewer"), require_scope("read:classifications")],
+)
+def related_tags(
+    tag: str,
+    request: Request,
+    limit: int = Query(
+        50,
+        ge=1,
+        le=500,
+        description="Maximum number of related tags returned. Hard-capped at 500.",
+    ),
+    min_count: int = Query(
+        1,
+        ge=1,
+        le=1_000_000,
+        description=(
+            "Only return related tags that co-occur with the seed at least "
+            "this many times. Defaults to 1. Set to 2+ to hide one-off pairs."
+        ),
+    ),
+) -> dict:
+    """List tags that co-occur with ``tag`` in the current tenant.
+
+    Backs the "related tags" sidebar on the tag detail UI and helps
+    surface merge candidates (typos, near-duplicates, abbreviations)
+    when cleaning up a tag taxonomy. ``base_count`` reports how many
+    rows carry the seed tag overall so the caller can render "X of N"
+    without an extra request. Sorted by count desc, then tag asc.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    try:
+        return Repository().related_tags(
+            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
 @router.post("/tags/rename", dependencies=[require_role("operator"), require_scope("write:classifications")])
 def rename_tag(
     request: Request,
