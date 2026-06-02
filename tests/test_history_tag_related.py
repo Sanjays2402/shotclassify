@@ -158,3 +158,76 @@ def test_related_tags_requires_auth(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.get("/v1/history/tags/finance/related")
     assert r.status_code in (401, 403)
+
+
+def _seed_pinned(filename: str, tags: list[str], pinned: bool) -> None:
+    from shotclassify_store.db import ClassificationRow, get_session, init_db
+    from shotclassify_common import Category
+
+    init_db()
+    with get_session() as s:
+        s.add(
+            ClassificationRow(
+                id=uuid.uuid4().hex,
+                created_at=datetime.now(timezone.utc),
+                filename=filename,
+                primary_category=Category.receipt.value,
+                confidence=0.9,
+                ocr_text="",
+                image_path=None,
+                tenant_id=None,
+                label=None,
+                tags=tags,
+                pinned=pinned,
+            )
+        )
+        s.commit()
+
+
+def test_related_tags_pinned_filter(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # Pinned rows with seed: q1 co-occurs twice, q2 once.
+    _seed_pinned("a.png", ["finance", "q1"], pinned=True)
+    _seed_pinned("b.png", ["finance", "q1"], pinned=True)
+    _seed_pinned("c.png", ["finance", "q2"], pinned=True)
+    # Unpinned rows with seed: only urgent co-occurs.
+    _seed_pinned("d.png", ["finance", "urgent"], pinned=False)
+    _seed_pinned("e.png", ["finance", "urgent"], pinned=False)
+
+    # pinned=true narrows to pinned rows only.
+    r = c.get(
+        "/v1/history/tags/finance/related?pinned=true",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["tag"] == "finance"
+    assert body["base_count"] == 3
+    assert body["items"] == [
+        {"tag": "q1", "count": 2},
+        {"tag": "q2", "count": 1},
+    ]
+
+    # pinned=false flips to the unpinned subset.
+    r = c.get(
+        "/v1/history/tags/finance/related?pinned=false",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["base_count"] == 2
+    assert body["items"] == [{"tag": "urgent", "count": 2}]
+
+    # Omitting pinned aggregates across both.
+    r = c.get(
+        "/v1/history/tags/finance/related",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["base_count"] == 5
+    assert body["items"] == [
+        {"tag": "q1", "count": 2},
+        {"tag": "urgent", "count": 2},
+        {"tag": "q2", "count": 1},
+    ]

@@ -622,6 +622,7 @@ class Repository:
         tenant_id: str | None = None,
         limit: int = 50,
         min_count: int = 1,
+        pinned: bool | None = None,
     ) -> dict:
         """Return tags that most often co-occur with ``tag`` in the tenant scope.
 
@@ -633,6 +634,10 @@ class Repository:
         Sorted by count desc then tag asc. ``limit`` is clamped to
         ``[1, 500]``. ``base_count`` reports how many rows carry the seed
         tag at all, so the UI can show "X of N rows" without a second call.
+        ``pinned`` narrows the scan to pinned or unpinned rows: ``True``
+        counts co-occurrences only across pinned rows (and ``base_count``
+        reflects pinned rows only), ``False`` counts the opposite, and
+        ``None`` (default) ignores pin state.
         """
         norm = (tag or "").strip().lower()[:32]
         if not norm:
@@ -641,6 +646,10 @@ class Repository:
         floor = max(1, int(min_count))
         stmt = select(ClassificationRow.tags)
         stmt = self._scope_tenant(stmt, tenant_id)
+        if pinned is True:
+            stmt = stmt.where(ClassificationRow.pinned.is_(True))
+        elif pinned is False:
+            stmt = stmt.where(ClassificationRow.pinned.is_(False))
         base = 0
         counts: dict[str, int] = {}
         with get_session() as s:

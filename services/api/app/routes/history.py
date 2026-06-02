@@ -824,6 +824,16 @@ def related_tags(
             "this many times. Defaults to 1. Set to 2+ to hide one-off pairs."
         ),
     ),
+    pinned: bool | None = Query(
+        None,
+        description=(
+            "Optional pinned filter. ``true`` counts co-occurrences only "
+            "across pinned rows (and ``base_count`` reflects pinned rows "
+            "only), backing a 'pinned-only' toggle on the related-tags "
+            "sidebar. ``false`` returns the opposite. Omit to ignore pin "
+            "state (default)."
+        ),
+    ),
 ) -> dict:
     """List tags that co-occur with ``tag`` in the current tenant.
 
@@ -832,11 +842,14 @@ def related_tags(
     when cleaning up a tag taxonomy. ``base_count`` reports how many
     rows carry the seed tag overall so the caller can render "X of N"
     without an extra request. Sorted by count desc, then tag asc.
+    The optional ``pinned`` filter narrows the sidebar to pinned or
+    unpinned rows so the UI can mirror the pinned-only toggle from the
+    rest of the tag detail page without a second round trip.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     try:
         return Repository().related_tags(
-            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count
+            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count, pinned=pinned
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
