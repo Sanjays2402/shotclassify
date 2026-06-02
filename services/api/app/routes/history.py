@@ -464,6 +464,133 @@ def list_tags(
     return {"items": items, "count": len(items)}
 
 
+TAGS_EXPORT_MAX = 10_000
+TAGS_EXPORT_COLUMNS = ["tag", "count"]
+
+
+@router.get(
+    "/tags/export",
+    dependencies=[require_role("viewer"), require_scope("read:classifications")],
+)
+def export_tags(
+    request: Request,
+    format: str = Query(
+        "csv",
+        pattern="^(csv|json)$",
+        description="Output format: ``csv`` (default, opens in any spreadsheet) or ``json``.",
+    ),
+    q: str | None = Query(
+        None,
+        max_length=32,
+        description=(
+            "Optional case-insensitive substring filter on the tag name, "
+            "matching ``GET /v1/history/tags``."
+        ),
+    ),
+    limit: int = Query(
+        TAGS_EXPORT_MAX,
+        ge=1,
+        le=TAGS_EXPORT_MAX,
+        description=(
+            "Maximum number of distinct tags emitted. Hard-capped at "
+            f"{TAGS_EXPORT_MAX} so taxonomy dumps fit cleanly in a spreadsheet."
+        ),
+    ),
+    min_count: int = Query(
+        1,
+        ge=1,
+        le=1_000_000,
+        description=(
+            "Only include tags used at least this many times. Defaults to 1. "
+            "Set to 2+ to drop one-off tags from a cleanup spreadsheet."
+        ),
+    ),
+    sort: str = Query(
+        "count",
+        pattern="^(count|name)$",
+        description="Sort field: 'count' (default) or 'name'.",
+    ),
+    order: str | None = Query(
+        None,
+        pattern="^(asc|desc)$",
+        description=(
+            "Sort direction. Defaults to 'desc' for sort=count and 'asc' for "
+            "sort=name, matching ``GET /v1/history/tags``."
+        ),
+    ),
+):
+    """Download the tenant's tag vocabulary as CSV or JSON.
+
+    Mirrors the filters on ``GET /v1/history/tags`` so admins doing taxonomy
+    cleanup can grab the same list they see in the autocomplete and open it
+    in a spreadsheet to plan renames, merges and deletions before reaching
+    for the bulk endpoints. The CSV has a stable ``tag,count`` schema and is
+    streamed with a ``content-disposition`` attachment header so browsers
+    save it instead of rendering it.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    try:
+        items = Repository().list_tags(
+            tenant_id=tenant_id,
+            q=q,
+            limit=limit,
+            min_count=min_count,
+            sort=sort,
+            order=order,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    common_headers = {
+        "x-record-count": str(len(items)),
+        "access-control-expose-headers": "x-record-count",
+    }
+
+    if format == "json":
+        payload = {
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "count": len(items),
+            "filters": {
+                "q": q,
+                "limit": limit,
+                "min_count": min_count,
+                "sort": sort,
+                "order": order,
+            },
+            "items": items,
+        }
+        body = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+        return StreamingResponse(
+            iter([body]),
+            media_type="application/json",
+            headers={
+                "content-disposition": f'attachment; filename="shotclassify-tags-{stamp}.json"',
+                **common_headers,
+            },
+        )
+
+    def _csv_iter():
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=TAGS_EXPORT_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        yield buf.getvalue()
+        for row in items:
+            buf.seek(0)
+            buf.truncate(0)
+            writer.writerow({"tag": row["tag"], "count": row["count"]})
+            yield buf.getvalue()
+
+    return StreamingResponse(
+        _csv_iter(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "content-disposition": f'attachment; filename="shotclassify-tags-{stamp}.csv"',
+            **common_headers,
+        },
+    )
+
+
 @router.get(
     "/tags/{tag}",
     dependencies=[require_role("viewer"), require_scope("read:classifications")],
