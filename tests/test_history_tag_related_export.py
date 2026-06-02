@@ -135,3 +135,87 @@ def test_export_requires_auth(monkeypatch, tmp_path):
     _seed_set(c)
     r = c.get("/v1/history/tags/finance/related/export")
     assert r.status_code in (401, 403)
+
+
+def _seed_pinned(filename: str, tags: list[str], pinned: bool) -> None:
+    from shotclassify_store.db import ClassificationRow, get_session, init_db
+    from shotclassify_common import Category
+
+    init_db()
+    with get_session() as s:
+        s.add(
+            ClassificationRow(
+                id=uuid.uuid4().hex,
+                created_at=datetime.now(timezone.utc),
+                filename=filename,
+                primary_category=Category.receipt.value,
+                confidence=0.9,
+                ocr_text="",
+                image_path=None,
+                tenant_id=None,
+                label=None,
+                tags=tags,
+                pinned=pinned,
+            )
+        )
+        s.commit()
+
+
+def test_export_pinned_filter_csv(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # Pinned rows: finance co-occurs with q1 (x2) and q2 (x1).
+    _seed_pinned("a.png", ["finance", "q1"], pinned=True)
+    _seed_pinned("b.png", ["finance", "q1"], pinned=True)
+    _seed_pinned("c.png", ["finance", "q2"], pinned=True)
+    # Unpinned rows: finance co-occurs with urgent only.
+    _seed_pinned("d.png", ["finance", "urgent"], pinned=False)
+    _seed_pinned("e.png", ["finance", "urgent"], pinned=False)
+
+    r = c.get(
+        "/v1/history/tags/finance/related/export?pinned=true",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200, r.text
+    rows = list(csv.DictReader(io.StringIO(r.text)))
+    assert [row["tag"] for row in rows] == ["q1", "q2"]
+    assert [int(row["count"]) for row in rows] == [2, 1]
+    # base_count reflects pinned rows only when pinned=true.
+    assert r.headers["x-base-count"] == "3"
+    assert r.headers["x-record-count"] == "2"
+
+    r = c.get(
+        "/v1/history/tags/finance/related/export?pinned=false",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200, r.text
+    rows = list(csv.DictReader(io.StringIO(r.text)))
+    assert [row["tag"] for row in rows] == ["urgent"]
+    assert [int(row["count"]) for row in rows] == [2]
+    assert r.headers["x-base-count"] == "2"
+
+
+def test_export_pinned_filter_json(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed_pinned("a.png", ["finance", "q1"], pinned=True)
+    _seed_pinned("b.png", ["finance", "q1"], pinned=True)
+    _seed_pinned("c.png", ["finance", "urgent"], pinned=False)
+
+    r = c.get(
+        "/v1/history/tags/finance/related/export?format=json&pinned=true",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200, r.text
+    body = json.loads(r.text)
+    assert body["tag"] == "finance"
+    assert body["base_count"] == 2
+    assert body["filters"]["pinned"] is True
+    assert [it["tag"] for it in body["items"]] == ["q1"]
+
+    # Omitted pinned param defaults to None in filters echo.
+    r = c.get(
+        "/v1/history/tags/finance/related/export?format=json",
+        headers={"X-API-Key": "k"},
+    )
+    body = json.loads(r.text)
+    assert body["filters"]["pinned"] is None
+    assert body["base_count"] == 3

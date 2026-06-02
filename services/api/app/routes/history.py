@@ -890,6 +890,17 @@ def export_related_tags(
             "from a cleanup spreadsheet."
         ),
     ),
+    pinned: bool | None = Query(
+        None,
+        description=(
+            "Optional pinned filter. ``true`` exports co-occurrences from "
+            "pinned rows only (and ``x-base-count`` reflects pinned rows "
+            "only); ``false`` flips to the unpinned subset. Omit to ignore "
+            "pin state (default). Mirrors the filter on "
+            "``GET /v1/history/tags/{tag}/related`` so the export matches "
+            "the pinned-only sidebar the operator was already looking at."
+        ),
+    ),
 ):
     """Download co-occurrence data for ``tag`` as CSV or JSON.
 
@@ -900,12 +911,13 @@ def export_related_tags(
     The CSV has a stable ``tag,count`` schema and is streamed with a
     ``content-disposition`` attachment header so browsers save it instead
     of rendering it. Sorted by count desc then tag asc, matching the JSON
-    endpoint.
+    endpoint. The optional ``pinned`` filter narrows the dump to pinned or
+    unpinned rows so the export matches a pinned-only sidebar view.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     try:
         result = Repository().related_tags(
-            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count
+            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count, pinned=pinned
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -933,6 +945,7 @@ def export_related_tags(
             "filters": {
                 "limit": limit,
                 "min_count": min_count,
+                "pinned": pinned,
             },
             "items": items,
         }
