@@ -71,6 +71,32 @@ def _validate_range_filters(
             )
 
 
+def _normalize_tags_filter(tags: list[str] | None) -> list[str] | None:
+    """Normalize a repeatable ``tags`` query filter.
+
+    Trims, lowercases, drops empties and duplicates, and validates each tag
+    against the same 32-char cap used on the single ``tag`` filter. Returns
+    ``None`` when no usable tags remain so the repo layer can skip the join.
+    """
+    if not tags:
+        return None
+    out: list[str] = []
+    for t in tags:
+        if not isinstance(t, str):
+            continue
+        norm = t.strip().lower()
+        if not norm:
+            continue
+        if len(norm) > 32:
+            raise HTTPException(
+                status_code=400,
+                detail=f"tag '{t}' exceeds 32 characters.",
+            )
+        if norm not in out:
+            out.append(norm)
+    return out or None
+
+
 def _record_to_row(rec: ClassificationRecord) -> dict:
     return {
         "id": rec.id,
@@ -108,6 +134,15 @@ def export_history(
     max_conf: float | None = Query(None, ge=0.0, le=1.0),
     sort: str = Query("new", pattern="^(new|old|conf_asc|conf_desc)$"),
     tag: str | None = Query(None, max_length=32, description="Filter by a single tag (case-insensitive)."),
+    tags: list[str] | None = Query(
+        None,
+        max_length=8,
+        description=(
+            "Filter by multiple tags (case-insensitive). All supplied tags must "
+            "be present on the record (AND match). Repeat the query parameter, "
+            "e.g. ?tags=finance&tags=q1. Combines with `tag` if both are given."
+        ),
+    ),
     pinned: bool | None = Query(None, description="If true, only pinned; if false, only unpinned."),
 ):
     """Stream classification history as CSV or JSON for download.
@@ -116,6 +151,7 @@ def export_history(
     dashboard matches what the user is currently looking at.
     """
     _validate_range_filters(min_conf, max_conf, since, until)
+    tags_norm = _normalize_tags_filter(tags)
     tenant_id = getattr(request.state, "tenant_id", None)
     records = Repository().list(
         limit=limit,
@@ -129,6 +165,7 @@ def export_history(
         sort=sort,
         tag=tag,
         pinned=pinned,
+        tags=tags_norm,
     )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -162,6 +199,7 @@ def export_history(
                 "max_conf": max_conf,
                 "sort": sort,
                 "tag": tag,
+                "tags": tags_norm,
                 "pinned": pinned,
             },
             "records": [json.loads(r.model_dump_json()) for r in records],
@@ -211,9 +249,19 @@ def list_history(
     max_conf: float | None = Query(None, ge=0.0, le=1.0),
     sort: str = Query("new", pattern="^(new|old|conf_asc|conf_desc)$"),
     tag: str | None = Query(None, max_length=32, description="Filter by a single tag (case-insensitive)."),
+    tags: list[str] | None = Query(
+        None,
+        max_length=8,
+        description=(
+            "Filter by multiple tags (case-insensitive). All supplied tags must "
+            "be present on the record (AND match). Repeat the query parameter, "
+            "e.g. ?tags=finance&tags=q1."
+        ),
+    ),
     pinned: bool | None = Query(None, description="If true, only pinned; if false, only unpinned."),
 ) -> list[ClassificationRecord]:
     _validate_range_filters(min_conf, max_conf, since, until)
+    tags_norm = _normalize_tags_filter(tags)
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
     items = repo.list(
@@ -229,6 +277,7 @@ def list_history(
         sort=sort,
         tag=tag,
         pinned=pinned,
+        tags=tags_norm,
     )
     total = repo.count_filtered(
         category=category,
@@ -240,6 +289,7 @@ def list_history(
         max_conf=max_conf,
         tag=tag,
         pinned=pinned,
+        tags=tags_norm,
     )
     response.headers["x-total-count"] = str(total)
     response.headers["x-offset"] = str(offset)

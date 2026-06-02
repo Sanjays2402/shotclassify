@@ -244,6 +244,7 @@ class Repository:
         sort: str = "new",
         tag: str | None = None,
         pinned: bool | None = None,
+        tags: list[str] | None = None,
     ):
         from sqlalchemy import asc, desc
 
@@ -273,11 +274,23 @@ class Repository:
             stmt = stmt.where(ClassificationRow.confidence >= float(min_conf))
         if max_conf is not None:
             stmt = stmt.where(ClassificationRow.confidence <= float(max_conf))
+        # JSON tag-membership match. SQLite stores JSON as text, so we
+        # fall back to a substring LIKE on a quoted token, which is
+        # adequate for the small, normalized tag vocabulary we write.
+        # `tag` is the legacy single-tag filter; `tags` is the multi-tag
+        # AND filter (every tag must be present on the record).
+        tag_terms: list[str] = []
         if tag:
-            # JSON tag-membership match. SQLite stores JSON as text, so we
-            # fall back to a substring LIKE on a quoted token, which is
-            # adequate for the small, normalized tag vocabulary we write.
-            needle = f'%"{tag.strip().lower()}"%'
+            tag_terms.append(tag.strip().lower())
+        if tags:
+            for t in tags:
+                if not isinstance(t, str):
+                    continue
+                norm = t.strip().lower()
+                if norm and norm not in tag_terms:
+                    tag_terms.append(norm)
+        for term in tag_terms:
+            needle = f'%"{term}"%'
             stmt = stmt.where(ClassificationRow.tags.cast(Text).ilike(needle))
         if pinned is not None:
             stmt = stmt.where(ClassificationRow.pinned == bool(pinned))
@@ -298,6 +311,7 @@ class Repository:
         sort: str = "new",
         tag: str | None = None,
         pinned: bool | None = None,
+        tags: list[str] | None = None,
     ) -> list[ClassificationRecord]:
         stmt = self._list_stmt(
             category=category,
@@ -310,6 +324,7 @@ class Repository:
             sort=sort,
             tag=tag,
             pinned=pinned,
+            tags=tags,
         )
         if offset:
             stmt = stmt.offset(int(offset))
@@ -329,6 +344,7 @@ class Repository:
         max_conf: float | None = None,
         tag: str | None = None,
         pinned: bool | None = None,
+        tags: list[str] | None = None,
     ) -> int:
         from sqlalchemy import func
 
@@ -342,6 +358,7 @@ class Repository:
             max_conf=max_conf,
             tag=tag,
             pinned=pinned,
+            tags=tags,
         ).order_by(None).with_only_columns(func.count(ClassificationRow.id))
         with get_session() as s:
             return int(s.execute(stmt).scalar() or 0)
