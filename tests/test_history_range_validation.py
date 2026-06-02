@@ -80,6 +80,32 @@ def test_list_accepts_equal_endpoints(monkeypatch, tmp_path):
     assert r.status_code == 200
 
 
+def test_list_rejects_inverted_mixed_tz_date_range(monkeypatch, tmp_path):
+    """Mixing a naive ``since`` with an aware ``until`` (or vice versa) used
+    to raise ``TypeError`` deep in the comparison and surface as a confusing
+    500. The guard now normalizes naive values to UTC and returns 400."""
+    c = _client(monkeypatch, tmp_path)
+    # naive since, aware until, inverted
+    r = c.get(
+        "/v1/history?since=2025-06-01T00:00:00&until=2025-01-01T00:00:00Z",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 400, r.text
+    assert "since" in r.json()["detail"]
+    # aware since, naive until, inverted
+    r = c.get(
+        "/v1/history?since=2025-06-01T00:00:00Z&until=2025-01-01T00:00:00",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 400, r.text
+    # mixed tz but valid (since <= until) is accepted
+    r = c.get(
+        "/v1/history?since=2025-01-01T00:00:00&until=2025-06-01T00:00:00Z",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_list_accepts_one_sided_range(monkeypatch, tmp_path):
     """A single bound must still be honoured; the guard only fires when both sides are set."""
     c = _client(monkeypatch, tmp_path)

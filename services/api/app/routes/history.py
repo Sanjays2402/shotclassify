@@ -55,11 +55,20 @@ def _validate_range_filters(
             status_code=400,
             detail=f"min_conf ({min_conf}) must be <= max_conf ({max_conf}).",
         )
-    if since is not None and until is not None and since > until:
-        raise HTTPException(
-            status_code=400,
-            detail="`since` must be earlier than or equal to `until`.",
-        )
+    if since is not None and until is not None:
+        # Both params are documented as UTC timestamps but FastAPI happily
+        # parses naive ISO strings (no trailing Z/offset) as tz-naive
+        # datetimes. Comparing a naive datetime to an aware one raises
+        # TypeError and surfaces to the caller as a confusing 500. Normalize
+        # naive values to UTC before comparing so a mixed pair (one with Z,
+        # one without) still gets the clear 400 the caller expects.
+        since_cmp = since if since.tzinfo is not None else since.replace(tzinfo=timezone.utc)
+        until_cmp = until if until.tzinfo is not None else until.replace(tzinfo=timezone.utc)
+        if since_cmp > until_cmp:
+            raise HTTPException(
+                status_code=400,
+                detail="`since` must be earlier than or equal to `until`.",
+            )
 
 
 def _record_to_row(rec: ClassificationRecord) -> dict:
