@@ -18,7 +18,12 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import Response
 
 from shotclassify_store import SavedViewRepository
-from shotclassify_store.saved_views import PER_USER_MAX, DuplicateSavedViewName
+from shotclassify_store.saved_views import (
+    NAME_MAX,
+    PER_USER_MAX,
+    DuplicateSavedViewName,
+    _clean_name,
+)
 
 from ..dryrun import dry_run_query, mark_dry_run
 from ..middleware.rbac import require_role, require_scope
@@ -522,6 +527,55 @@ def get_view_by_name(request: Request, name: str) -> dict:
         if (row.get("name") or "").strip().lower() == needle:
             return row
     raise HTTPException(404, "saved view not found")
+
+
+@router.get(
+    "/name-available",
+    dependencies=[require_role("viewer"), require_scope("read:classifications")],
+)
+def name_available(request: Request, name: str = Query(...)) -> dict:
+    """Preflight check: would ``POST /v1/saved-views`` accept this name?
+
+    Lets the New-View dialog show a red "name already in use" hint while
+    the user is still typing, instead of waiting for a 409 on submit.
+    Applies the same normalization as create (trim, collapse internal
+    whitespace, case-insensitive uniqueness) so the UI hint and the
+    server's actual decision cannot drift apart. Scope matches the rest
+    of the read surface: only the calling principal's rows in the
+    current tenant participate in the duplicate check.
+
+    Returns ``{name, normalized, available, reason?}``. ``available`` is
+    ``true`` when create would succeed (modulo the per-user quota, which
+    is surfaced separately via ``/quota``). Empty/whitespace names or
+    names longer than ``NAME_MAX`` after trimming return 422 so the
+    client sees the same validation it would on submit.
+    """
+    raw = name or ""
+    if not raw.strip():
+        raise HTTPException(422, "name is required")
+    if len(raw.strip()) > NAME_MAX:
+        raise HTTPException(
+            422, f"name must be at most {NAME_MAX} characters"
+        )
+    normalized = _clean_name(raw)
+    principal, tenant_id = _scope(request)
+    items = SavedViewRepository().list(principal=principal, tenant_id=tenant_id)
+    needle = normalized.lower()
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        if (row.get("name") or "").strip().lower() == needle:
+            return {
+                "name": raw,
+                "normalized": normalized,
+                "available": False,
+                "reason": "duplicate",
+            }
+    return {
+        "name": raw,
+        "normalized": normalized,
+        "available": True,
+    }
 
 
 @router.get("/{view_id}", dependencies=[require_role("viewer"), require_scope("read:classifications")])
