@@ -266,3 +266,52 @@ def test_saved_view_duplicate_copies_filters_and_auto_names(monkeypatch, tmp_pat
     # Sidebar now has source + 3 copies = 4 rows.
     r = c.get("/v1/saved-views", headers=HEADERS)
     assert r.json()["count"] == 4
+
+
+def test_saved_views_export_returns_json_attachment(monkeypatch, tmp_path):
+    import json
+
+    c = _client(monkeypatch, tmp_path)
+
+    # Empty export still succeeds and reports a count of zero.
+    r = c.get("/v1/saved-views/export", headers=HEADERS)
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/json")
+    cd = r.headers.get("content-disposition", "")
+    assert cd.startswith('attachment; filename="saved-views-')
+    assert cd.endswith('.json"')
+    body = json.loads(r.content)
+    assert body["schema"] == "shotclassify.saved_views.v1"
+    assert body["count"] == 0
+    assert body["items"] == []
+    assert "exported_at" in body
+
+    # Seed two views and re-export.
+    c.post(
+        "/v1/saved-views",
+        json={"name": "Receipts", "filters": {"category": "receipt"}},
+        headers=HEADERS,
+    )
+    c.post(
+        "/v1/saved-views",
+        json={"name": "High conf", "filters": {"min_conf": 0.9}},
+        headers=HEADERS,
+    )
+
+    r = c.get("/v1/saved-views/export", headers=HEADERS)
+    assert r.status_code == 200
+    body = json.loads(r.content)
+    assert body["count"] == 2
+    names = sorted(v["name"] for v in body["items"])
+    assert names == ["High conf", "Receipts"]
+    # Each row keeps the same shape the list endpoint returns.
+    for row in body["items"]:
+        assert set(row).issuperset(
+            {"id", "name", "filters", "created_at", "updated_at"}
+        )
+
+
+def test_saved_views_export_requires_auth(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.get("/v1/saved-views/export")
+    assert r.status_code in (401, 403)

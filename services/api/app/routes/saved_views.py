@@ -11,7 +11,11 @@ views, ``editor`` can create/update/delete. Rows are always scoped by
 """
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi.responses import Response
 
 from shotclassify_store import SavedViewRepository
 from shotclassify_store.saved_views import DuplicateSavedViewName
@@ -36,6 +40,41 @@ def list_views(request: Request) -> dict:
     repo = SavedViewRepository()
     items = repo.list(principal=principal, tenant_id=tenant_id)
     return {"items": items, "count": len(items)}
+
+
+@router.get(
+    "/export",
+    dependencies=[require_role("viewer"), require_scope("read:classifications")],
+)
+def export_views(request: Request) -> Response:
+    """Download the caller's saved views as a JSON file.
+
+    Lets a user back up or migrate their personal filter sidebar without
+    going through workspace-wide admin exports. Scope is the same as
+    ``GET /v1/saved-views``: only rows owned by the calling principal in
+    the current tenant are returned, with all repository-side coercion
+    already applied.
+    """
+    principal, tenant_id = _scope(request)
+    items = SavedViewRepository().list(principal=principal, tenant_id=tenant_id)
+    now = datetime.now(UTC)
+    body = {
+        "schema": "shotclassify.saved_views.v1",
+        "exported_at": now.isoformat(),
+        "principal": principal,
+        "tenant_id": tenant_id,
+        "count": len(items),
+        "items": items,
+    }
+    filename = f"saved-views-{now.strftime('%Y%m%dT%H%M%SZ')}.json"
+    return Response(
+        content=json.dumps(body, indent=2, sort_keys=True),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.post("", dependencies=[require_role("operator"), require_scope("write:classifications")])
