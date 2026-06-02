@@ -31,10 +31,38 @@ ALLOWED_FILTER_KEYS = {
     "since",
     "until",
     "min_conf",
+    "max_conf",
     "sort",
     "tag",
+    "tags",
+    "pinned",
     "limit",
 }
+
+# Deterministic processing order: ``min_conf`` must be coerced before
+# ``max_conf`` so the inverted-range guard below always drops ``max_conf``
+# (the later bound) rather than whichever key the set happened to yield
+# first. Order also fixes the public JSON shape on round-trip.
+_FILTER_KEY_ORDER: tuple[str, ...] = (
+    "category",
+    "q",
+    "since",
+    "until",
+    "min_conf",
+    "max_conf",
+    "sort",
+    "tag",
+    "tags",
+    "pinned",
+    "limit",
+)
+assert set(_FILTER_KEY_ORDER) == ALLOWED_FILTER_KEYS
+
+# Mirror of the per-record cap enforced on the history route's ``tags`` query
+# parameter. Keeps stored views from holding more tags than a list call would
+# accept on replay.
+MAX_TAGS_IN_VIEW = 8
+TAG_MAX_LEN = 32
 
 # Sort values mirror the history page UI. Keep in sync with web/app/shots.
 ALLOWED_SORTS = {"new", "old", "conf_desc", "conf_asc"}
@@ -44,10 +72,13 @@ def _coerce_filters(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("filters must be an object")
     out: dict[str, Any] = {}
-    for key in ALLOWED_FILTER_KEYS:
+    for key in _FILTER_KEY_ORDER:
         if key not in raw:
             continue
         v = raw[key]
+        # ``pinned=False`` and ``tags=[]`` are meaningful filters, so only
+        # treat ``None``/empty string as "unset" here. List/dict emptiness is
+        # handled inside the per-key branches.
         if v is None or v == "":
             continue
         if key in ("category", "q", "since", "until", "sort", "tag"):
@@ -59,12 +90,45 @@ def _coerce_filters(raw: Any) -> dict[str, Any]:
             if key == "sort" and v not in ALLOWED_SORTS:
                 continue
             out[key] = v[:128]
-        elif key == "min_conf":
+        elif key in ("min_conf", "max_conf"):
             try:
                 f = float(v)
             except (TypeError, ValueError):
                 continue
-            out[key] = max(0.0, min(1.0, f))
+            f = max(0.0, min(1.0, f))
+            # Drop an inverted range on save so a replay does not 400. The
+            # history route already rejects inverted ranges at request time;
+            # mirroring that here keeps a saved view always replayable.
+            if key == "max_conf" and "min_conf" in out and f < out["min_conf"]:
+                continue
+            if key == "min_conf" and "max_conf" in out and f > out["max_conf"]:
+                continue
+            out[key] = f
+        elif key == "pinned":
+            if isinstance(v, bool):
+                out[key] = v
+            elif isinstance(v, str):
+                low = v.strip().lower()
+                if low in ("true", "1", "yes"):
+                    out[key] = True
+                elif low in ("false", "0", "no"):
+                    out[key] = False
+        elif key == "tags":
+            if not isinstance(v, list):
+                continue
+            seen: list[str] = []
+            for t in v:
+                if not isinstance(t, str):
+                    continue
+                norm = t.strip().lower()
+                if not norm or len(norm) > TAG_MAX_LEN:
+                    continue
+                if norm not in seen:
+                    seen.append(norm)
+                if len(seen) >= MAX_TAGS_IN_VIEW:
+                    break
+            if seen:
+                out[key] = seen
         elif key == "limit":
             try:
                 n = int(v)

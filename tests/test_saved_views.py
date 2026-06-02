@@ -94,3 +94,49 @@ def test_saved_view_requires_auth(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.get("/v1/saved-views")
     assert r.status_code in (401, 403)
+
+
+def test_saved_view_persists_extended_filters(monkeypatch, tmp_path):
+    """max_conf, pinned, and multi-tag filters round-trip on save.
+
+    These keys were added to the history list/export route but were not in
+    the saved-views whitelist, so a view created from a UI that exposed them
+    would silently drop those filters on replay.
+    """
+    c = _client(monkeypatch, tmp_path)
+    payload = {
+        "name": "Pinned high-conf Q1",
+        "filters": {
+            "min_conf": 0.6,
+            "max_conf": 0.95,
+            "pinned": True,
+            "tags": ["Finance", "finance", "  Q1 ", "", "x" * 64],
+        },
+    }
+    r = c.post("/v1/saved-views", json=payload, headers=HEADERS)
+    assert r.status_code == 200, r.text
+    f = r.json()["filters"]
+    assert f["min_conf"] == 0.6
+    assert f["max_conf"] == 0.95
+    assert f["pinned"] is True
+    # Dedup on lowercase, trim, drop empties and oversized tags.
+    assert f["tags"] == ["finance", "q1"]
+
+
+def test_saved_view_drops_inverted_conf_range(monkeypatch, tmp_path):
+    """An inverted min/max range never reaches the row."""
+    c = _client(monkeypatch, tmp_path)
+    r = c.post(
+        "/v1/saved-views",
+        json={
+            "name": "bad range",
+            "filters": {"min_conf": 0.9, "max_conf": 0.1, "pinned": False},
+        },
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    f = r.json()["filters"]
+    assert f["min_conf"] == 0.9
+    assert "max_conf" not in f
+    # ``pinned=False`` is a real filter, not a synonym for "unset".
+    assert f["pinned"] is False
