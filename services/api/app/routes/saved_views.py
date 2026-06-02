@@ -147,6 +147,18 @@ def export_views(
             f"at {_EXPORT_MAX_IDS} ids per call."
         ),
     ),
+    q: str | None = Query(
+        None,
+        description=(
+            "Optional case-insensitive substring filter on the view "
+            "name, matching ``GET /v1/saved-views``. Lets users export "
+            "\"all my receipts views\" without first calling list to "
+            "collect ids. Mutually exclusive with ``ids``: combining "
+            "them returns 422 so the caller does not have to guess "
+            "whether the filters AND or OR."
+        ),
+        max_length=200,
+    ),
 ) -> Response:
     """Download the caller's saved views as a JSON file.
 
@@ -159,6 +171,12 @@ def export_views(
     workspaces instead of the whole sidebar.
     """
     principal, tenant_id = _scope(request)
+    needle = (q or "").strip().lower()
+    if ids is not None and needle:
+        raise HTTPException(
+            422,
+            "ids and q are mutually exclusive; pick one",
+        )
     wanted: set[str] | None = None
     if ids is not None:
         wanted = {tok.strip() for tok in ids.split(",") if tok.strip()}
@@ -173,6 +191,13 @@ def export_views(
             r
             for r in items
             if isinstance(r, dict) and r.get("id") in wanted
+        ]
+    elif needle:
+        items = [
+            r
+            for r in items
+            if isinstance(r, dict)
+            and needle in (r.get("name") or "").lower()
         ]
     now = datetime.now(UTC)
     body = {

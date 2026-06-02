@@ -380,6 +380,77 @@ def test_saved_views_export_rejects_too_many_ids(monkeypatch, tmp_path):
     assert "too many ids" in r.text
 
 
+def test_saved_views_export_filters_by_q_substring(monkeypatch, tmp_path):
+    """``?q=`` mirrors the list endpoint so users can export by name."""
+    import json
+
+    c = _client(monkeypatch, tmp_path)
+    for name, filters in (
+        ("Receipts", {"category": "receipt"}),
+        ("Receipts archived", {"category": "receipt", "pinned": False}),
+        ("High conf", {"min_conf": 0.9}),
+        ("Pinned only", {"pinned": True}),
+    ):
+        r = c.post(
+            "/v1/saved-views",
+            json={"name": name, "filters": filters},
+            headers=HEADERS,
+        )
+        assert r.status_code == 200, r.text
+
+    # Case-insensitive substring matches both Receipts views.
+    r = c.get(
+        "/v1/saved-views/export",
+        params={"q": "receipt"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    body = json.loads(r.content)
+    assert body["count"] == 2
+    got = sorted(v["name"] for v in body["items"])
+    assert got == ["Receipts", "Receipts archived"]
+
+    # Whitespace-only q acts like no filter (full export).
+    r = c.get(
+        "/v1/saved-views/export",
+        params={"q": "   "},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200
+    assert json.loads(r.content)["count"] == 4
+
+    # No matches -> empty but valid envelope.
+    r = c.get(
+        "/v1/saved-views/export",
+        params={"q": "nothing-matches"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200
+    body = json.loads(r.content)
+    assert body["count"] == 0
+    assert body["items"] == []
+
+
+def test_saved_views_export_rejects_q_with_ids(monkeypatch, tmp_path):
+    """Combining ``ids`` and ``q`` is ambiguous; refuse instead of guessing."""
+    c = _client(monkeypatch, tmp_path)
+    r = c.post(
+        "/v1/saved-views",
+        json={"name": "Receipts", "filters": {"category": "receipt"}},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200
+    view_id = r.json()["id"]
+
+    r = c.get(
+        "/v1/saved-views/export",
+        params={"ids": view_id, "q": "receipt"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 422
+    assert "mutually exclusive" in r.text
+
+
 def test_saved_views_import_round_trip_from_export(monkeypatch, tmp_path):
     """Export from one workspace, import into another, get the same set back."""
     import json
