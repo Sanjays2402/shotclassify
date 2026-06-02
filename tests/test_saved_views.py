@@ -554,3 +554,35 @@ def test_saved_views_import_requires_auth(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.post("/v1/saved-views/import", json=[])
     assert r.status_code in (401, 403)
+
+
+def test_saved_views_list_name_query(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    for n in ["Receipts last week", "Receipts low conf", "Invoices", "Misc"]:
+        r = c.post(
+            "/v1/saved-views",
+            json={"name": n, "filters": {}},
+            headers=HEADERS,
+        )
+        assert r.status_code == 200, r.text
+
+    # No filter returns all four.
+    r = c.get("/v1/saved-views", headers=HEADERS)
+    assert r.status_code == 200
+    assert r.json()["count"] == 4
+
+    # Case-insensitive substring match.
+    r = c.get("/v1/saved-views", params={"q": "receipt"}, headers=HEADERS)
+    body = r.json()
+    assert body["count"] == 2
+    names = sorted(item["name"] for item in body["items"])
+    assert names == ["Receipts last week", "Receipts low conf"]
+
+    # Whitespace-only behaves like no filter.
+    r = c.get("/v1/saved-views", params={"q": "   "}, headers=HEADERS)
+    assert r.json()["count"] == 4
+
+    # No match -> empty list, 200.
+    r = c.get("/v1/saved-views", params={"q": "zzz"}, headers=HEADERS)
+    assert r.status_code == 200
+    assert r.json() == {"items": [], "count": 0}

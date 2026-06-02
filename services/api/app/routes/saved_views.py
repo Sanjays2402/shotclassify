@@ -35,10 +35,30 @@ def _scope(request: Request) -> tuple[str, str | None]:
 
 
 @router.get("", dependencies=[require_role("viewer"), require_scope("read:classifications")])
-def list_views(request: Request) -> dict:
+def list_views(
+    request: Request,
+    q: str | None = Query(
+        None,
+        description=(
+            "Optional case-insensitive substring filter on the view name. "
+            "Whitespace is trimmed; an empty/whitespace value behaves like "
+            "no filter. Helps users with a long sidebar narrow down "
+            "without scrolling."
+        ),
+        max_length=200,
+    ),
+) -> dict:
     principal, tenant_id = _scope(request)
     repo = SavedViewRepository()
     items = repo.list(principal=principal, tenant_id=tenant_id)
+    needle = (q or "").strip().lower()
+    if needle:
+        items = [
+            r
+            for r in items
+            if isinstance(r, dict)
+            and needle in (r.get("name") or "").lower()
+        ]
     return {"items": items, "count": len(items)}
 
 
