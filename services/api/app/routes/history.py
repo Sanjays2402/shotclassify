@@ -1710,7 +1710,14 @@ def stats(
     dashboard can render a "needs triage" badge that routes operators
     to the unlabeled rows the model was also unsure about, without a
     third filtered list call. It is always
-    ``<= min(untagged, low_confidence)``.
+    ``<= min(untagged, low_confidence)``. ``tagged_low_confidence`` is
+    the intersection of tagged and low_confidence: rows with at least
+    one tag whose ``confidence`` sits at or below ``low_conf_threshold``,
+    so the dashboard can render a "tagged but unsure" badge that routes
+    operators to already-labelled rows the model was still unsure about,
+    without a third filtered list call. It is always
+    ``<= min(tagged, low_confidence)`` and
+    ``tagged_low_confidence + untagged_low_confidence == low_confidence``.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
@@ -1729,6 +1736,9 @@ def stats(
     untagged_low_confidence = repo.count_filtered(
         tenant_id=tenant_id, untagged=True, max_conf=low_conf_threshold
     )
+    tagged_low_confidence = repo.count_filtered(
+        tenant_id=tenant_id, untagged=False, max_conf=low_conf_threshold
+    )
     return {
         "count": total,
         "untagged": untagged,
@@ -1738,6 +1748,7 @@ def stats(
         "low_confidence": low_confidence,
         "pinned_low_confidence": pinned_low_confidence,
         "untagged_low_confidence": untagged_low_confidence,
+        "tagged_low_confidence": tagged_low_confidence,
     }
 
 

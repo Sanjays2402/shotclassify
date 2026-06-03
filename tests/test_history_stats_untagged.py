@@ -74,6 +74,7 @@ def test_stats_reports_untagged_and_tagged_split(monkeypatch, tmp_path):
     assert body["low_confidence"] == 0
     assert body["pinned_low_confidence"] == 0
     assert body["untagged_low_confidence"] == 0
+    assert body["tagged_low_confidence"] == 0
 
 
 def test_stats_all_untagged_when_no_tags(monkeypatch, tmp_path):
@@ -91,6 +92,7 @@ def test_stats_all_untagged_when_no_tags(monkeypatch, tmp_path):
         "low_confidence": 0,
         "pinned_low_confidence": 0,
         "untagged_low_confidence": 0,
+        "tagged_low_confidence": 0,
     }
 
 
@@ -109,6 +111,7 @@ def test_stats_all_tagged(monkeypatch, tmp_path):
         "low_confidence": 0,
         "pinned_low_confidence": 0,
         "untagged_low_confidence": 0,
+        "tagged_low_confidence": 0,
     }
 
 
@@ -127,6 +130,7 @@ def test_stats_empty(monkeypatch, tmp_path):
         "low_confidence": 0,
         "pinned_low_confidence": 0,
         "untagged_low_confidence": 0,
+        "tagged_low_confidence": 0,
     }
 
 
@@ -306,3 +310,54 @@ def test_stats_untagged_low_confidence_respects_threshold_query(monkeypatch, tmp
     ).json()
     # All three untagged rows sit at or below 0.9; the tagged 0.2 row is excluded.
     assert body["untagged_low_confidence"] == 3
+
+
+def test_stats_tagged_low_confidence_intersection(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # Tagged and low confidence: counted.
+    _seed("a.png", ["finance"], confidence=0.3)
+    _seed("b.png", ["q1", "q2"], confidence=0.7)
+    # Tagged but high confidence: excluded.
+    _seed("c.png", ["finance"], confidence=0.95)
+    # Low confidence but untagged: excluded.
+    _seed("d.png", None, confidence=0.4)
+    _seed("e.png", [], confidence=0.2)
+
+    body = c.get("/v1/history/stats", headers={"X-API-Key": "k"}).json()
+    assert body["count"] == 5
+    assert body["tagged"] == 3
+    assert body["low_confidence"] == 4
+    # Only a.png and b.png are both tagged and at-or-below the 0.7 cutoff.
+    assert body["tagged_low_confidence"] == 2
+    # Intersection never exceeds either side.
+    assert body["tagged_low_confidence"] <= body["tagged"]
+    assert body["tagged_low_confidence"] <= body["low_confidence"]
+    # The two low-confidence splits partition the low-confidence total.
+    assert (
+        body["tagged_low_confidence"] + body["untagged_low_confidence"]
+        == body["low_confidence"]
+    )
+
+
+def test_stats_tagged_low_confidence_respects_threshold_query(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["x"], confidence=0.4)
+    _seed("b.png", ["y"], confidence=0.6)
+    _seed("c.png", ["z"], confidence=0.8)
+    _seed("d.png", None, confidence=0.2)
+
+    body = c.get(
+        "/v1/history/stats",
+        params={"low_conf_threshold": 0.5},
+        headers={"X-API-Key": "k"},
+    ).json()
+    # Only the tagged 0.4 row sits at or below 0.5.
+    assert body["tagged_low_confidence"] == 1
+
+    body = c.get(
+        "/v1/history/stats",
+        params={"low_conf_threshold": 0.9},
+        headers={"X-API-Key": "k"},
+    ).json()
+    # All three tagged rows sit at or below 0.9; the untagged 0.2 row is excluded.
+    assert body["tagged_low_confidence"] == 3
