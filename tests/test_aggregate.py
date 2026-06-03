@@ -199,3 +199,61 @@ def test_aggregate_rejects_inverted_conf_band(tmp_path, monkeypatch):
         repo.aggregate(tenant_id=None, hours=24, min_conf=-0.1)
     with pytest.raises(ValueError):
         repo.aggregate(tenant_id=None, hours=24, max_conf=1.5)
+
+
+def test_aggregate_untagged_filter_narrows_rollups(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'agg_untagged.db'}")
+    monkeypatch.setenv("STORAGE_LOCAL_DIR", str(tmp_path / "storage"))
+
+    from shotclassify_common.settings import get_settings
+    from shotclassify_store import db
+    from shotclassify_store.db import ClassificationRow, get_session
+    from shotclassify_store.repository import Repository
+
+    get_settings.cache_clear()
+    db.get_engine.cache_clear()
+    db._session_factory.cache_clear()
+
+    now = datetime.now(timezone.utc)
+    repo = Repository()
+    # 6 rows: even indices are tagged ("receipt"), odd are untagged ([]).
+    rows = [
+        ClassificationRow(
+            id=f"u{i}",
+            filename=f"u{i}.png",
+            created_at=now - timedelta(hours=i % 4),
+            primary_category="receipt" if i % 2 == 0 else "code_snippet",
+            confidence=0.5,
+            ocr_text="",
+            ocr_lang="en",
+            extracted={},
+            route={"action": "none"},
+            elapsed_ms=200,
+            user_corrected_to=None,
+            pinned=False,
+            tags=["food"] if i % 2 == 0 else [],
+        )
+        for i in range(6)
+    ]
+    with get_session() as s:
+        for r in rows:
+            s.add(r)
+        s.commit()
+
+    all_agg = repo.aggregate(tenant_id=None, hours=24)
+    untagged_agg = repo.aggregate(tenant_id=None, hours=24, untagged=True)
+    tagged_agg = repo.aggregate(tenant_id=None, hours=24, untagged=False)
+
+    assert all_agg["total"] == 6
+    assert all_agg["untagged"] is None
+    assert untagged_agg["total"] == 3
+    assert untagged_agg["untagged"] is True
+    assert tagged_agg["total"] == 3
+    assert tagged_agg["untagged"] is False
+    # Splits must sum back to the unfiltered total.
+    assert untagged_agg["total"] + tagged_agg["total"] == all_agg["total"]
+    # Untagged rollup must only see the odd-indexed category.
+    untagged_cats = {p["category"] for p in untagged_agg["per_class"]}
+    assert untagged_cats == {"code_snippet"}
+    tagged_cats = {p["category"] for p in tagged_agg["per_class"]}
+    assert tagged_cats == {"receipt"}

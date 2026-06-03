@@ -972,6 +972,7 @@ class Repository:
         pinned: bool | None = None,
         min_conf: float | None = None,
         max_conf: float | None = None,
+        untagged: bool | None = None,
     ) -> dict:
         """Return rich rollups for the analytics dashboard.
 
@@ -986,6 +987,10 @@ class Repository:
         and ``max_conf`` (each in [0.0, 1.0], inclusive) scope the
         rollup to a confidence band so the dashboard can mirror a
         low-confidence drilldown without a second round trip.
+        ``untagged`` narrows the rollup to rows with no tags
+        (``True``) or rows with at least one tag (``False``), so the
+        dashboard can mirror the unlabeled-queue toggle without a
+        second round trip; ``None`` (default) ignores tag presence.
         """
         from datetime import datetime, timedelta, timezone
 
@@ -1011,6 +1016,19 @@ class Repository:
             stmt = stmt.where(ClassificationRow.confidence >= float(min_conf))
         if max_conf is not None:
             stmt = stmt.where(ClassificationRow.confidence <= float(max_conf))
+        if untagged is not None:
+            tags_text = ClassificationRow.tags.cast(Text)
+            empty_payload = tags_text.in_(("null", "[]"))
+            if untagged:
+                stmt = stmt.where(
+                    or_(
+                        ClassificationRow.tags.is_(None),
+                        empty_payload,
+                    )
+                )
+            else:
+                stmt = stmt.where(ClassificationRow.tags.is_not(None))
+                stmt = stmt.where(~empty_payload)
         with get_session() as s:
             rows = list(s.execute(stmt).scalars())
 
@@ -1080,6 +1098,7 @@ class Repository:
             "pinned": pinned,
             "min_conf": min_conf,
             "max_conf": max_conf,
+            "untagged": untagged,
             "window_count": len(recent_rows),
             "corrections": corrections,
             "correction_rate": round(corrections / total, 4) if total else 0.0,

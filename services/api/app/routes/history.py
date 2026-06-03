@@ -1701,6 +1701,16 @@ def aggregate(
             "band."
         ),
     ),
+    untagged: bool | None = Query(
+        None,
+        description=(
+            "Optional tag-presence filter. ``true`` computes the "
+            "dashboard rollups over rows with no tags only, so the "
+            "analytics dashboard can mirror an unlabeled-queue toggle "
+            "without a second round trip; ``false`` flips to rows with "
+            "at least one tag. Omit to ignore tag presence."
+        ),
+    ),
 ):
     if min_conf is not None and max_conf is not None and min_conf > max_conf:
         raise HTTPException(400, "`min_conf` must be <= `max_conf`.")
@@ -1711,6 +1721,7 @@ def aggregate(
         pinned=pinned,
         min_conf=min_conf,
         max_conf=max_conf,
+        untagged=untagged,
     )
 
 
