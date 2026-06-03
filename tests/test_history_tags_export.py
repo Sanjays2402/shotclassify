@@ -32,7 +32,7 @@ def _client(monkeypatch, tmp_path):
     return TestClient(create_app())
 
 
-def _seed(filename: str, tags: list[str], tenant_id: str | None = None) -> None:
+def _seed(filename: str, tags: list[str], tenant_id: str | None = None, pinned: bool = False) -> None:
     from shotclassify_common import Category
     from shotclassify_store.db import ClassificationRow, get_session, init_db
 
@@ -50,7 +50,7 @@ def _seed(filename: str, tags: list[str], tenant_id: str | None = None) -> None:
                 tenant_id=tenant_id,
                 label=None,
                 tags=tags,
-                pinned=False,
+                pinned=pinned,
             )
         )
         s.commit()
@@ -182,3 +182,73 @@ def test_tags_export_does_not_shadow_tag_detail(monkeypatch, tmp_path):
     r_detail = c.get("/v1/history/tags/finance", headers={"X-API-Key": "k"})
     assert r_detail.status_code == 200
     assert r_detail.json()["tag"] == "finance"
+
+
+def test_tags_export_pinned_filter_csv(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance", "q1"], pinned=True)
+    _seed("b.png", ["finance"], pinned=True)
+    _seed("c.png", ["ops"], pinned=False)
+    _seed("d.png", ["archive"], pinned=False)
+
+    r = c.get(
+        "/v1/history/tags/export?pinned=true",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200, r.text
+    rows = list(csv.DictReader(io.StringIO(r.text)))
+    # Only tags appearing on at least one pinned row, with pinned-only counts.
+    assert {row["tag"] for row in rows} == {"finance", "q1"}
+    by_tag = {row["tag"]: int(row["count"]) for row in rows}
+    assert by_tag["finance"] == 2
+    assert by_tag["q1"] == 1
+
+    r_unpinned = c.get(
+        "/v1/history/tags/export?pinned=false",
+        headers={"X-API-Key": "k"},
+    )
+    assert r_unpinned.status_code == 200
+    rows_un = list(csv.DictReader(io.StringIO(r_unpinned.text)))
+    assert {row["tag"] for row in rows_un} == {"ops", "archive"}
+
+
+def test_tags_export_pinned_filter_json_echoes_in_filters(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance"], pinned=True)
+    _seed("b.png", ["ops"], pinned=False)
+
+    r = c.get(
+        "/v1/history/tags/export?format=json&pinned=true",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = json.loads(r.text)
+    assert body["filters"]["pinned"] is True
+    assert [it["tag"] for it in body["items"]] == ["finance"]
+
+    # Default (param omitted) echoes as None and includes everything.
+    r_all = c.get(
+        "/v1/history/tags/export?format=json",
+        headers={"X-API-Key": "k"},
+    )
+    assert r_all.status_code == 200
+    body_all = json.loads(r_all.text)
+    assert body_all["filters"]["pinned"] is None
+    assert {it["tag"] for it in body_all["items"]} == {"finance", "ops"}
+
+
+def test_tags_export_pinned_combines_with_prefix(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance"], pinned=True)
+    _seed("b.png", ["finalize"], pinned=False)
+    _seed("c.png", ["ops"], pinned=True)
+
+    r = c.get(
+        "/v1/history/tags/export?prefix=fin&pinned=true&format=json",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = json.loads(r.text)
+    assert body["filters"]["prefix"] == "fin"
+    assert body["filters"]["pinned"] is True
+    assert [it["tag"] for it in body["items"]] == ["finance"]

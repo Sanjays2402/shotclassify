@@ -571,6 +571,17 @@ def export_tags(
             "with ``q`` when both are given (both must match)."
         ),
     ),
+    pinned: bool | None = Query(
+        None,
+        description=(
+            "Optional pinned filter, mirroring ``GET /v1/history/tags``. "
+            "``true`` exports only tags appearing on at least one pinned "
+            "row (counts limited to the pinned subset); ``false`` flips "
+            "to the unpinned subset. Omit to ignore pin state (default). "
+            "Use this to dump a pinned-only taxonomy for review without "
+            "hand-filtering the full export."
+        ),
+    ),
 ):
     """Download the tenant's tag vocabulary as CSV or JSON.
 
@@ -591,6 +602,7 @@ def export_tags(
             sort=sort,
             order=order,
             prefix=prefix,
+            pinned=pinned,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -612,6 +624,7 @@ def export_tags(
                 "sort": sort,
                 "order": order,
                 "prefix": prefix,
+                "pinned": pinned,
             },
             "items": items,
         }
