@@ -1587,7 +1587,22 @@ def delete_tag(
     return result
 
 @router.get("/stats", dependencies=[require_role("viewer"), require_scope("read:classifications")])
-def stats(request: Request):
+def stats(
+    request: Request,
+    low_conf_threshold: float = Query(
+        0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Upper bound (inclusive) used to compute the "
+            "``low_confidence`` badge: rows whose ``confidence`` is at "
+            "or below this value. Defaults to ``0.7``, the same cutoff "
+            "the dashboard uses for its \"needs review\" pill. Lets an "
+            "operator tune the badge without a second filtered list "
+            "call."
+        ),
+    ),
+):
     """Tenant-scoped row counts for the history dashboard.
 
     ``count`` is the total number of classification rows. ``untagged`` and
@@ -1601,7 +1616,12 @@ def stats(request: Request):
     the user pinned but never tagged, so the dashboard can surface an
     "incomplete pins" badge and route operators to finish labelling rows
     they already cared enough about to pin, without a third filtered list
-    call. It is always ``<= min(pinned, untagged)``.
+    call. It is always ``<= min(pinned, untagged)``. ``low_confidence``
+    is the count of rows whose ``confidence`` is at or below
+    ``low_conf_threshold`` (default ``0.7``), so the dashboard can render
+    a "needs review" badge that routes operators to the low-confidence
+    drilldown without a third filtered list call. It is always
+    ``<= count``.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
@@ -1611,12 +1631,16 @@ def stats(request: Request):
     pinned_untagged = repo.count_filtered(
         tenant_id=tenant_id, pinned=True, untagged=True
     )
+    low_confidence = repo.count_filtered(
+        tenant_id=tenant_id, max_conf=low_conf_threshold
+    )
     return {
         "count": total,
         "untagged": untagged,
         "tagged": total - untagged,
         "pinned": pinned,
         "pinned_untagged": pinned_untagged,
+        "low_confidence": low_confidence,
     }
 
 

@@ -23,7 +23,12 @@ def _client(monkeypatch, tmp_path):
     return TestClient(create_app())
 
 
-def _seed(filename: str, tags: list[str] | None, pinned: bool = False) -> None:
+def _seed(
+    filename: str,
+    tags: list[str] | None,
+    pinned: bool = False,
+    confidence: float = 0.9,
+) -> None:
     from shotclassify_store.db import ClassificationRow, get_session, init_db
     from shotclassify_common import Category
 
@@ -35,7 +40,7 @@ def _seed(filename: str, tags: list[str] | None, pinned: bool = False) -> None:
                 created_at=datetime.now(timezone.utc),
                 filename=filename,
                 primary_category=Category.receipt.value,
-                confidence=0.9,
+                confidence=confidence,
                 ocr_text="",
                 image_path=None,
                 tenant_id=None,
@@ -65,6 +70,8 @@ def test_stats_reports_untagged_and_tagged_split(monkeypatch, tmp_path):
     # Nothing was pinned in this fixture.
     assert body["pinned"] == 0
     assert body["pinned_untagged"] == 0
+    # All rows seeded at confidence 0.9, above the 0.7 default cutoff.
+    assert body["low_confidence"] == 0
 
 
 def test_stats_all_untagged_when_no_tags(monkeypatch, tmp_path):
@@ -79,6 +86,7 @@ def test_stats_all_untagged_when_no_tags(monkeypatch, tmp_path):
         "tagged": 0,
         "pinned": 0,
         "pinned_untagged": 0,
+        "low_confidence": 0,
     }
 
 
@@ -94,6 +102,7 @@ def test_stats_all_tagged(monkeypatch, tmp_path):
         "tagged": 2,
         "pinned": 0,
         "pinned_untagged": 0,
+        "low_confidence": 0,
     }
 
 
@@ -109,7 +118,56 @@ def test_stats_empty(monkeypatch, tmp_path):
         "tagged": 0,
         "pinned": 0,
         "pinned_untagged": 0,
+        "low_confidence": 0,
     }
+
+
+def test_stats_low_confidence_uses_default_cutoff(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # Below default 0.7 cutoff (inclusive): both count as low-confidence.
+    _seed("a.png", ["x"], confidence=0.4)
+    _seed("b.png", None, confidence=0.7)
+    # Above cutoff: excluded.
+    _seed("c.png", ["y"], confidence=0.71)
+    _seed("d.png", ["z"], confidence=0.95)
+
+    body = c.get("/v1/history/stats", headers={"X-API-Key": "k"}).json()
+    assert body["count"] == 4
+    # Independent of tagged/pinned splits; just confidence-bounded.
+    assert body["low_confidence"] == 2
+    assert body["low_confidence"] <= body["count"]
+
+
+def test_stats_low_confidence_respects_threshold_query(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["x"], confidence=0.4)
+    _seed("b.png", ["x"], confidence=0.6)
+    _seed("c.png", ["x"], confidence=0.8)
+
+    body = c.get(
+        "/v1/history/stats",
+        params={"low_conf_threshold": 0.5},
+        headers={"X-API-Key": "k"},
+    ).json()
+    # Only the 0.4 row sits at or below 0.5.
+    assert body["low_confidence"] == 1
+
+    body = c.get(
+        "/v1/history/stats",
+        params={"low_conf_threshold": 0.9},
+        headers={"X-API-Key": "k"},
+    ).json()
+    assert body["low_confidence"] == 3
+
+
+def test_stats_rejects_threshold_out_of_range(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.get(
+        "/v1/history/stats",
+        params={"low_conf_threshold": 1.5},
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 422
 
 
 def test_stats_reports_pinned_count_independent_of_tagged(monkeypatch, tmp_path):
