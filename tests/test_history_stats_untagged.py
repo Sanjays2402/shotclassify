@@ -72,6 +72,7 @@ def test_stats_reports_untagged_and_tagged_split(monkeypatch, tmp_path):
     assert body["pinned_untagged"] == 0
     # All rows seeded at confidence 0.9, above the 0.7 default cutoff.
     assert body["low_confidence"] == 0
+    assert body["pinned_low_confidence"] == 0
 
 
 def test_stats_all_untagged_when_no_tags(monkeypatch, tmp_path):
@@ -87,6 +88,7 @@ def test_stats_all_untagged_when_no_tags(monkeypatch, tmp_path):
         "pinned": 0,
         "pinned_untagged": 0,
         "low_confidence": 0,
+        "pinned_low_confidence": 0,
     }
 
 
@@ -103,6 +105,7 @@ def test_stats_all_tagged(monkeypatch, tmp_path):
         "pinned": 0,
         "pinned_untagged": 0,
         "low_confidence": 0,
+        "pinned_low_confidence": 0,
     }
 
 
@@ -119,6 +122,7 @@ def test_stats_empty(monkeypatch, tmp_path):
         "pinned": 0,
         "pinned_untagged": 0,
         "low_confidence": 0,
+        "pinned_low_confidence": 0,
     }
 
 
@@ -208,3 +212,48 @@ def test_stats_pinned_untagged_zero_when_all_pinned_are_tagged(monkeypatch, tmp_
     assert body["pinned"] == 2
     assert body["untagged"] == 1
     assert body["pinned_untagged"] == 0
+
+
+def test_stats_pinned_low_confidence_intersection(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # Pinned and low confidence: counted.
+    _seed("a.png", ["x"], pinned=True, confidence=0.3)
+    _seed("b.png", None, pinned=True, confidence=0.7)
+    # Pinned but high confidence: excluded.
+    _seed("c.png", ["y"], pinned=True, confidence=0.95)
+    # Low confidence but unpinned: excluded.
+    _seed("d.png", ["z"], pinned=False, confidence=0.4)
+
+    body = c.get("/v1/history/stats", headers={"X-API-Key": "k"}).json()
+    assert body["count"] == 4
+    assert body["pinned"] == 3
+    assert body["low_confidence"] == 3
+    # Only a.png and b.png are both pinned and at-or-below the 0.7 cutoff.
+    assert body["pinned_low_confidence"] == 2
+    # Intersection never exceeds either side.
+    assert body["pinned_low_confidence"] <= body["pinned"]
+    assert body["pinned_low_confidence"] <= body["low_confidence"]
+
+
+def test_stats_pinned_low_confidence_respects_threshold_query(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["x"], pinned=True, confidence=0.4)
+    _seed("b.png", ["x"], pinned=True, confidence=0.6)
+    _seed("c.png", ["x"], pinned=True, confidence=0.8)
+    _seed("d.png", ["x"], pinned=False, confidence=0.2)
+
+    body = c.get(
+        "/v1/history/stats",
+        params={"low_conf_threshold": 0.5},
+        headers={"X-API-Key": "k"},
+    ).json()
+    # Only the pinned 0.4 row sits at or below 0.5.
+    assert body["pinned_low_confidence"] == 1
+
+    body = c.get(
+        "/v1/history/stats",
+        params={"low_conf_threshold": 0.9},
+        headers={"X-API-Key": "k"},
+    ).json()
+    # All three pinned rows sit at or below 0.9.
+    assert body["pinned_low_confidence"] == 3

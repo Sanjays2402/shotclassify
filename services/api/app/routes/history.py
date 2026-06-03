@@ -1621,7 +1621,13 @@ def stats(
     ``low_conf_threshold`` (default ``0.7``), so the dashboard can render
     a "needs review" badge that routes operators to the low-confidence
     drilldown without a third filtered list call. It is always
-    ``<= count``.
+    ``<= count``. ``pinned_low_confidence`` is the intersection of
+    pinned and low_confidence: rows the user pinned whose ``confidence``
+    sits at or below ``low_conf_threshold``, so the dashboard can render
+    a "pinned but unsure" badge that routes operators to rows they
+    flagged for follow-up and the model also flagged as low-confidence,
+    without a third filtered list call. It is always
+    ``<= min(pinned, low_confidence)``.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
@@ -1634,6 +1640,9 @@ def stats(
     low_confidence = repo.count_filtered(
         tenant_id=tenant_id, max_conf=low_conf_threshold
     )
+    pinned_low_confidence = repo.count_filtered(
+        tenant_id=tenant_id, pinned=True, max_conf=low_conf_threshold
+    )
     return {
         "count": total,
         "untagged": untagged,
@@ -1641,6 +1650,7 @@ def stats(
         "pinned": pinned,
         "pinned_untagged": pinned_untagged,
         "low_confidence": low_confidence,
+        "pinned_low_confidence": pinned_low_confidence,
     }
 
 
