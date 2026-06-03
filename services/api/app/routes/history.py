@@ -802,6 +802,114 @@ def tag_timeseries(
         raise HTTPException(400, str(e))
 
 
+TAG_TIMESERIES_EXPORT_COLUMNS = ["date", "count"]
+
+
+@router.get(
+    "/tags/{tag}/timeseries/export",
+    dependencies=[require_role("viewer"), require_scope("read:classifications")],
+)
+def export_tag_timeseries(
+    tag: str,
+    request: Request,
+    format: str = Query(
+        "csv",
+        pattern="^(csv|json)$",
+        description="Output format: ``csv`` (default, opens in any spreadsheet) or ``json``.",
+    ),
+    days: int = Query(
+        30,
+        ge=1,
+        le=365,
+        description=(
+            "Length of the trailing window in UTC days. Defaults to 30, "
+            "hard-capped at 365. Each bucket is one calendar day."
+        ),
+    ),
+    pinned: bool | None = Query(
+        None,
+        description=(
+            "Optional pinned filter. ``true`` exports counts over pinned "
+            "rows only; ``false`` flips to the unpinned subset. Omit to "
+            "ignore pin state (default). Mirrors the filter on "
+            "``GET /v1/history/tags/{tag}/timeseries`` so the export matches "
+            "a pinned-only sparkline the operator was already looking at."
+        ),
+    ),
+):
+    """Download per-day usage for ``tag`` as CSV or JSON.
+
+    Mirrors the filters on ``GET /v1/history/tags/{tag}/timeseries`` so an
+    operator can pull the same sparkline data into a spreadsheet or notebook
+    for offline trend analysis without scraping the chart endpoint. The CSV
+    has a stable ``date,count`` schema (oldest first, dense zero-filled) and
+    is streamed with a ``content-disposition`` attachment header so browsers
+    save it instead of rendering it.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    try:
+        result = Repository().tag_timeseries(
+            tag=tag, tenant_id=tenant_id, days=days, pinned=pinned
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    series = result["series"]
+    seed = result["tag"]
+    total = result["total"]
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe_seed = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in seed) or "tag"
+    common_headers = {
+        "x-record-count": str(len(series)),
+        "x-total-count": str(total),
+        "access-control-expose-headers": "x-record-count, x-total-count",
+    }
+
+    if format == "json":
+        payload = {
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "tag": seed,
+            "start": result["start"],
+            "end": result["end"],
+            "days": result["days"],
+            "total": total,
+            "filters": {
+                "days": days,
+                "pinned": pinned,
+            },
+            "series": series,
+        }
+        body = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+        return StreamingResponse(
+            iter([body]),
+            media_type="application/json",
+            headers={
+                "content-disposition": f'attachment; filename="shotclassify-timeseries-{safe_seed}-{stamp}.json"',
+                **common_headers,
+            },
+        )
+
+    def _csv_iter():
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=TAG_TIMESERIES_EXPORT_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        yield buf.getvalue()
+        for row in series:
+            buf.seek(0)
+            buf.truncate(0)
+            writer.writerow({"date": row["date"], "count": row["count"]})
+            yield buf.getvalue()
+
+    return StreamingResponse(
+        _csv_iter(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "content-disposition": f'attachment; filename="shotclassify-timeseries-{safe_seed}-{stamp}.csv"',
+            **common_headers,
+        },
+    )
+
+
 @router.get(
     "/tags/{tag}/related",
     dependencies=[require_role("viewer"), require_scope("read:classifications")],
