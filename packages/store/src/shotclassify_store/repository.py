@@ -524,6 +524,7 @@ class Repository:
         pinned_low_conf_count = 0
         first_seen: datetime | None = None
         last_seen: datetime | None = None
+        last_low_confidence: datetime | None = None
         with get_session() as s:
             for raw, created, pinned, confidence in s.execute(stmt):
                 if not isinstance(raw, list):
@@ -546,6 +547,10 @@ class Repository:
                     low_conf_count += 1
                     if is_pinned:
                         pinned_low_conf_count += 1
+                    if created is not None and (
+                        last_low_confidence is None or created > last_low_confidence
+                    ):
+                        last_low_confidence = created
                 if created is None:
                     continue
                 if first_seen is None or created < first_seen:
@@ -567,6 +572,7 @@ class Repository:
             "pinned_low_confidence": pinned_low_conf_count,
             "first_seen": _iso(first_seen),
             "last_seen": _iso(last_seen),
+            "last_low_confidence": _iso(last_low_confidence),
         }
 
     def tag_timeseries(

@@ -755,9 +755,17 @@ def tag_detail(
     call. ``pinned_low_confidence`` is the intersection of pinned and
     low_confidence for the tag, so the page can render a "pinned but
     unsure" badge alongside it. Both are always ``<= count`` and
-    ``pinned_low_confidence <= min(pinned, low_confidence)``. Unknown
-    tags return all counts as ``0`` with ``first_seen`` and
-    ``last_seen`` set to ``null`` rather than 404, so the UI can render
+    ``pinned_low_confidence <= min(pinned, low_confidence)``.
+    ``last_low_confidence`` is the ISO 8601 UTC timestamp of the most
+    recent row carrying the tag whose ``confidence`` sits at or below
+    ``low_conf_threshold``, so the detail page can render a "last
+    needs-review hit" line next to the low-confidence badge and
+    operators can tell at a glance whether the review backlog for this
+    tag is fresh or stale without opening the low-confidence drilldown.
+    It is ``null`` when ``low_confidence`` is ``0``. Unknown
+    tags return all counts as ``0`` with ``first_seen``,
+    ``last_seen`` and ``last_low_confidence`` set to ``null`` rather
+    than 404, so the UI can render
     an empty state without a second round trip. Tag input is normalized
     (trim, lowercase, 32 char cap) to match write-time rules.
     """
