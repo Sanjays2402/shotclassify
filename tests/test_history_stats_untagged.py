@@ -93,6 +93,7 @@ def test_stats_all_untagged_when_no_tags(monkeypatch, tmp_path):
         "pinned_low_confidence": 0,
         "untagged_low_confidence": 0,
         "tagged_low_confidence": 0,
+        "last_low_confidence": None,
     }
 
 
@@ -112,6 +113,7 @@ def test_stats_all_tagged(monkeypatch, tmp_path):
         "pinned_low_confidence": 0,
         "untagged_low_confidence": 0,
         "tagged_low_confidence": 0,
+        "last_low_confidence": None,
     }
 
 
@@ -131,6 +133,7 @@ def test_stats_empty(monkeypatch, tmp_path):
         "pinned_low_confidence": 0,
         "untagged_low_confidence": 0,
         "tagged_low_confidence": 0,
+        "last_low_confidence": None,
     }
 
 
@@ -361,3 +364,60 @@ def test_stats_tagged_low_confidence_respects_threshold_query(monkeypatch, tmp_p
     ).json()
     # All three tagged rows sit at or below 0.9; the untagged 0.2 row is excluded.
     assert body["tagged_low_confidence"] == 3
+
+
+def test_stats_last_low_confidence_timestamp(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    base = datetime(2025, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+    from datetime import timedelta
+    from shotclassify_store.db import ClassificationRow, get_session, init_db
+    from shotclassify_common import Category
+
+    def _seed_at(filename, conf, when):
+        init_db()
+        with get_session() as s:
+            s.add(
+                ClassificationRow(
+                    id=uuid.uuid4().hex,
+                    created_at=when,
+                    filename=filename,
+                    primary_category=Category.receipt.value,
+                    confidence=conf,
+                    ocr_text="",
+                    image_path=None,
+                    tenant_id=None,
+                    label=None,
+                    tags=[],
+                    pinned=False,
+                )
+            )
+            s.commit()
+
+    # Two low-conf rows at different times; the newer one wins.
+    _seed_at("a.png", 0.3, base)
+    _seed_at("b.png", 0.5, base + timedelta(days=2))
+    # A later high-conf row must not move the watermark.
+    _seed_at("c.png", 0.95, base + timedelta(days=5))
+
+    body = c.get("/v1/history/stats", headers={"X-API-Key": "k"}).json()
+    assert body["low_confidence"] == 2
+    assert body["last_low_confidence"] == (base + timedelta(days=2)).isoformat()
+
+    # Tightening the threshold drops the 0.5 row; watermark moves back.
+    body = c.get(
+        "/v1/history/stats",
+        params={"low_conf_threshold": 0.4},
+        headers={"X-API-Key": "k"},
+    ).json()
+    assert body["low_confidence"] == 1
+    assert body["last_low_confidence"] == base.isoformat()
+
+    # Threshold that excludes every row -> null watermark, count 0.
+    body = c.get(
+        "/v1/history/stats",
+        params={"low_conf_threshold": 0.0},
+        headers={"X-API-Key": "k"},
+    ).json()
+    assert body["low_confidence"] == 0
+    assert body["last_low_confidence"] is None

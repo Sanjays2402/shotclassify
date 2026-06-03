@@ -1746,6 +1746,13 @@ def stats(
     without a third filtered list call. It is always
     ``<= min(tagged, low_confidence)`` and
     ``tagged_low_confidence + untagged_low_confidence == low_confidence``.
+    ``last_low_confidence`` is the ISO 8601 UTC timestamp of the most
+    recent row whose ``confidence`` sits at or below
+    ``low_conf_threshold``, so the dashboard header can render a
+    "last needs-review hit" freshness line next to the low-confidence
+    badge and operators can tell at a glance whether the review backlog
+    is fresh or stale without opening the low-confidence drilldown. It
+    is ``null`` when ``low_confidence`` is ``0``.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
@@ -1767,6 +1774,19 @@ def stats(
     tagged_low_confidence = repo.count_filtered(
         tenant_id=tenant_id, untagged=False, max_conf=low_conf_threshold
     )
+    last_low_confidence_dt = (
+        repo.latest_filtered(tenant_id=tenant_id, max_conf=low_conf_threshold)
+        if low_confidence
+        else None
+    )
+    if last_low_confidence_dt is not None and last_low_confidence_dt.tzinfo is None:
+        from datetime import timezone as _tz
+        last_low_confidence_dt = last_low_confidence_dt.replace(tzinfo=_tz.utc)
+    last_low_confidence = (
+        last_low_confidence_dt.isoformat()
+        if last_low_confidence_dt is not None
+        else None
+    )
     return {
         "count": total,
         "untagged": untagged,
@@ -1777,6 +1797,7 @@ def stats(
         "pinned_low_confidence": pinned_low_confidence,
         "untagged_low_confidence": untagged_low_confidence,
         "tagged_low_confidence": tagged_low_confidence,
+        "last_low_confidence": last_low_confidence,
     }
 
 

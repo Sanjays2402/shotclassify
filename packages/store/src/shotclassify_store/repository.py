@@ -390,6 +390,58 @@ class Repository:
         with get_session() as s:
             return int(s.execute(stmt).scalar() or 0)
 
+    def latest_filtered(
+        self,
+        category: Category | None = None,
+        query: str | None = None,
+        tenant_id: str | None = None,
+        since: "datetime | None" = None,
+        until: "datetime | None" = None,
+        min_conf: float | None = None,
+        max_conf: float | None = None,
+        tag: str | None = None,
+        pinned: bool | None = None,
+        tags: list[str] | None = None,
+        untagged: bool | None = None,
+    ) -> "datetime | None":
+        """Return ``max(created_at)`` over the same scope as
+        :meth:`count_filtered`, or ``None`` when the scope is empty.
+
+        Lets dashboards render a "last seen" freshness line next to a
+        count badge (for example "needs review: 12, last 3 minutes ago")
+        without a second filtered list call. Uses a SQL ``max()`` so it
+        stays O(filtered rows) at the database rather than streaming
+        rows back to Python.
+        """
+        from sqlalchemy import func
+
+        stmt = self._list_stmt(
+            category=category,
+            query=query,
+            tenant_id=tenant_id,
+            since=since,
+            until=until,
+            min_conf=min_conf,
+            max_conf=max_conf,
+            tag=tag,
+            pinned=pinned,
+            tags=tags,
+            untagged=untagged,
+        ).order_by(None).with_only_columns(
+            func.max(ClassificationRow.created_at)
+        )
+        with get_session() as s:
+            value = s.execute(stmt).scalar()
+        if value is None:
+            return None
+        if isinstance(value, str):
+            # SQLite returns ISO strings for DATETIME columns.
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                return None
+        return value
+
     def list_tags(
         self,
         tenant_id: str | None = None,
