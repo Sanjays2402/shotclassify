@@ -400,6 +400,8 @@ class Repository:
         order: str | None = None,
         prefix: str | None = None,
         pinned: bool | None = None,
+        min_conf: float | None = None,
+        max_conf: float | None = None,
     ) -> list[dict]:
         """Return distinct tags in scope with their usage counts.
 
@@ -414,11 +416,25 @@ class Repository:
         only tags that appear on at least one pinned classification
         (with counts limited to pinned rows), ``False`` returns the
         opposite, and ``None`` (default) ignores the pin state.
+        ``min_conf`` and ``max_conf`` (each in ``[0.0, 1.0]``) narrow
+        the scan to rows whose ``confidence`` falls in the inclusive
+        band, so taxonomy cleanup UIs can surface tags that only ever
+        appear on low-confidence (or high-confidence) rows.
         ``limit`` is
         clamped to ``[1, 500]``. Tags are stored as a small JSON list per
         row, so we aggregate in Python after a tenant-scoped scan, which
         is fine for the small vocabularies this product targets.
         """
+        if min_conf is not None and not (0.0 <= float(min_conf) <= 1.0):
+            raise ValueError("`min_conf` must be in [0.0, 1.0].")
+        if max_conf is not None and not (0.0 <= float(max_conf) <= 1.0):
+            raise ValueError("`max_conf` must be in [0.0, 1.0].")
+        if (
+            min_conf is not None
+            and max_conf is not None
+            and float(min_conf) > float(max_conf)
+        ):
+            raise ValueError("`min_conf` must be <= `max_conf`.")
         capped = max(1, min(int(limit), 500))
         floor = max(1, int(min_count))
         needle = (q or "").strip().lower()
@@ -429,6 +445,10 @@ class Repository:
             stmt = stmt.where(ClassificationRow.pinned.is_(True))
         elif pinned is False:
             stmt = stmt.where(ClassificationRow.pinned.is_(False))
+        if min_conf is not None:
+            stmt = stmt.where(ClassificationRow.confidence >= float(min_conf))
+        if max_conf is not None:
+            stmt = stmt.where(ClassificationRow.confidence <= float(max_conf))
         counts: dict[str, int] = {}
         with get_session() as s:
             for (raw,) in s.execute(stmt):

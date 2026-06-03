@@ -480,6 +480,27 @@ def list_tags(
             "ignore pin state (default)."
         ),
     ),
+    min_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional lower bound (inclusive) on ``confidence``. Counts "
+            "are limited to rows in the band, so the tag picker can "
+            "surface a 'tags that show up on low-confidence rows' "
+            "slice for taxonomy cleanup without a second round trip."
+        ),
+    ),
+    max_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional upper bound (inclusive) on ``confidence``. Pair "
+            "with ``min_conf`` to scope the tag list to a confidence "
+            "band."
+        ),
+    ),
 ) -> dict:
     """List distinct tags in the current tenant with their usage counts.
 
@@ -500,6 +521,8 @@ def list_tags(
             order=order,
             prefix=prefix,
             pinned=pinned,
+            min_conf=min_conf,
+            max_conf=max_conf,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -582,6 +605,27 @@ def export_tags(
             "hand-filtering the full export."
         ),
     ),
+    min_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional lower bound (inclusive) on ``confidence``, "
+            "mirroring ``GET /v1/history/tags``. Use this to dump only "
+            "the slice of taxonomy that shows up on rows in the band, "
+            "e.g. tags that only appear on low-confidence rows."
+        ),
+    ),
+    max_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional upper bound (inclusive) on ``confidence``. Pair "
+            "with ``min_conf`` to scope the taxonomy dump to a "
+            "confidence band."
+        ),
+    ),
 ):
     """Download the tenant's tag vocabulary as CSV or JSON.
 
@@ -603,6 +647,8 @@ def export_tags(
             order=order,
             prefix=prefix,
             pinned=pinned,
+            min_conf=min_conf,
+            max_conf=max_conf,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -625,6 +671,8 @@ def export_tags(
                 "order": order,
                 "prefix": prefix,
                 "pinned": pinned,
+                "min_conf": min_conf,
+                "max_conf": max_conf,
             },
             "items": items,
         }
