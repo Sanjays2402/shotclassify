@@ -115,3 +115,87 @@ def test_aggregate_pinned_filter_narrows_rollups(tmp_path, monkeypatch):
     assert unpinned_agg["corrections"] == 1
     # Splits sum back to the unfiltered total.
     assert pinned_agg["total"] + unpinned_agg["total"] == all_agg["total"]
+
+
+def test_aggregate_conf_band_filter_narrows_rollups(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'agg_conf.db'}")
+    monkeypatch.setenv("STORAGE_LOCAL_DIR", str(tmp_path / "storage"))
+
+    from shotclassify_common.settings import get_settings
+    from shotclassify_store import db
+    from shotclassify_store.db import ClassificationRow, get_session
+    from shotclassify_store.repository import Repository
+
+    get_settings.cache_clear()
+    db.get_engine.cache_clear()
+    db._session_factory.cache_clear()
+
+    now = datetime.now(timezone.utc)
+    repo = Repository()
+    # Confidences: 0.10, 0.20, ..., 1.00 (ten rows).
+    rows = [
+        ClassificationRow(
+            id=f"r{i}",
+            filename=f"f{i}.png",
+            created_at=now - timedelta(hours=i % 6),
+            primary_category="receipt" if i % 2 == 0 else "code_snippet",
+            confidence=round((i + 1) / 10, 2),
+            ocr_text="",
+            ocr_lang="en",
+            extracted={},
+            route={"action": "none"},
+            elapsed_ms=200 + i * 10,
+            user_corrected_to=None,
+            pinned=False,
+        )
+        for i in range(10)
+    ]
+    with get_session() as s:
+        for r in rows:
+            s.add(r)
+        s.commit()
+
+    all_agg = repo.aggregate(tenant_id=None, hours=24)
+    low_agg = repo.aggregate(tenant_id=None, hours=24, max_conf=0.30)
+    high_agg = repo.aggregate(tenant_id=None, hours=24, min_conf=0.80)
+    band_agg = repo.aggregate(
+        tenant_id=None, hours=24, min_conf=0.40, max_conf=0.60
+    )
+
+    assert all_agg["total"] == 10
+    # 0.10, 0.20, 0.30 -> 3 rows
+    assert low_agg["total"] == 3
+    assert low_agg["min_conf"] is None
+    assert low_agg["max_conf"] == 0.30
+    # 0.80, 0.90, 1.00 -> 3 rows
+    assert high_agg["total"] == 3
+    assert high_agg["min_conf"] == 0.80
+    # 0.40, 0.50, 0.60 -> 3 rows
+    assert band_agg["total"] == 3
+    assert band_agg["min_conf"] == 0.40
+    assert band_agg["max_conf"] == 0.60
+    # Confidence histogram bucket counts stay consistent with the filtered total.
+    assert sum(b["count"] for b in band_agg["confidence_histogram"]) == 3
+
+
+def test_aggregate_rejects_inverted_conf_band(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'agg_bad.db'}")
+    monkeypatch.setenv("STORAGE_LOCAL_DIR", str(tmp_path / "storage"))
+
+    from shotclassify_common.settings import get_settings
+    from shotclassify_store import db
+    from shotclassify_store.repository import Repository
+
+    get_settings.cache_clear()
+    db.get_engine.cache_clear()
+    db._session_factory.cache_clear()
+
+    repo = Repository()
+    import pytest
+
+    with pytest.raises(ValueError):
+        repo.aggregate(tenant_id=None, hours=24, min_conf=0.8, max_conf=0.2)
+    with pytest.raises(ValueError):
+        repo.aggregate(tenant_id=None, hours=24, min_conf=-0.1)
+    with pytest.raises(ValueError):
+        repo.aggregate(tenant_id=None, hours=24, max_conf=1.5)

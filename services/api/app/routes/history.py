@@ -1635,9 +1635,39 @@ def aggregate(
             "second round trip."
         ),
     ),
+    min_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional lower bound (inclusive) on ``confidence``. Lets the "
+            "analytics dashboard mirror a low-confidence drilldown so an "
+            "operator can see the per-class, latency, and hourly rollups "
+            "computed over just the low-confidence subset without a "
+            "second round trip."
+        ),
+    ),
+    max_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional upper bound (inclusive) on ``confidence``. Pair with "
+            "``min_conf`` to scope the dashboard rollups to a confidence "
+            "band."
+        ),
+    ),
 ):
+    if min_conf is not None and max_conf is not None and min_conf > max_conf:
+        raise HTTPException(400, "`min_conf` must be <= `max_conf`.")
     tenant_id = getattr(request.state, "tenant_id", None)
-    return Repository().aggregate(tenant_id=tenant_id, hours=hours, pinned=pinned)
+    return Repository().aggregate(
+        tenant_id=tenant_id,
+        hours=hours,
+        pinned=pinned,
+        min_conf=min_conf,
+        max_conf=max_conf,
+    )
 
 
 @router.get("/{item_id}", response_model=ClassificationRecord, dependencies=[require_role("viewer"), require_scope("read:classifications")])

@@ -970,6 +970,8 @@ class Repository:
         tenant_id: str | None = None,
         hours: int = 24,
         pinned: bool | None = None,
+        min_conf: float | None = None,
+        max_conf: float | None = None,
     ) -> dict:
         """Return rich rollups for the analytics dashboard.
 
@@ -980,9 +982,23 @@ class Repository:
         the rollup to pinned or unpinned rows: ``True`` returns the
         analytics computed only over pinned classifications, ``False``
         flips to the unpinned subset, and ``None`` (the default)
-        ignores pin state so the dashboard sees every row.
+        ignores pin state so the dashboard sees every row. ``min_conf``
+        and ``max_conf`` (each in [0.0, 1.0], inclusive) scope the
+        rollup to a confidence band so the dashboard can mirror a
+        low-confidence drilldown without a second round trip.
         """
         from datetime import datetime, timedelta, timezone
+
+        if min_conf is not None and not (0.0 <= float(min_conf) <= 1.0):
+            raise ValueError("`min_conf` must be in [0.0, 1.0].")
+        if max_conf is not None and not (0.0 <= float(max_conf) <= 1.0):
+            raise ValueError("`max_conf` must be in [0.0, 1.0].")
+        if (
+            min_conf is not None
+            and max_conf is not None
+            and float(min_conf) > float(max_conf)
+        ):
+            raise ValueError("`min_conf` must be <= `max_conf`.")
 
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         stmt = select(ClassificationRow)
@@ -991,6 +1007,10 @@ class Repository:
             stmt = stmt.where(ClassificationRow.pinned.is_(True))
         elif pinned is False:
             stmt = stmt.where(ClassificationRow.pinned.is_(False))
+        if min_conf is not None:
+            stmt = stmt.where(ClassificationRow.confidence >= float(min_conf))
+        if max_conf is not None:
+            stmt = stmt.where(ClassificationRow.confidence <= float(max_conf))
         with get_session() as s:
             rows = list(s.execute(stmt).scalars())
 
@@ -1058,6 +1078,8 @@ class Repository:
             "total": total,
             "window_hours": hours,
             "pinned": pinned,
+            "min_conf": min_conf,
+            "max_conf": max_conf,
             "window_count": len(recent_rows),
             "corrections": corrections,
             "correction_rate": round(corrections / total, 4) if total else 0.0,
