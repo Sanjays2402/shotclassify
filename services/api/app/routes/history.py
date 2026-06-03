@@ -992,6 +992,26 @@ def tag_timeseries(
             "behind the pinned badge without a second round trip."
         ),
     ),
+    min_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional lower bound (inclusive) on ``confidence``. Lets the "
+            "tag detail UI render a low-confidence sparkline so an operator "
+            "can see whether shaky uses of the tag are trending up before "
+            "renaming, merging, or deleting it."
+        ),
+    ),
+    max_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional upper bound (inclusive) on ``confidence``. Pair with "
+            "``min_conf`` to scope the sparkline to a confidence band."
+        ),
+    ),
 ) -> dict:
     """Per-day usage counts for ``tag`` over a trailing window.
 
@@ -1015,12 +1035,17 @@ def tag_timeseries(
     Unknown tags return ``total=0`` with a fully zero-filled series
     rather than 404, so the chart can render an empty state without a
     second round trip. Tag input is normalized (trim, lowercase, 32
-    char cap) to match write-time rules.
+    char cap) to match write-time rules. The optional
+    ``min_conf``/``max_conf`` filters scope the sparkline to a
+    confidence band so an operator can drill into low-confidence trends.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
+    if min_conf is not None and max_conf is not None and min_conf > max_conf:
+        raise HTTPException(400, "`min_conf` must be <= `max_conf`.")
     try:
         return Repository().tag_timeseries(
-            tag=tag, tenant_id=tenant_id, days=days, pinned=pinned
+            tag=tag, tenant_id=tenant_id, days=days, pinned=pinned,
+            min_conf=min_conf, max_conf=max_conf,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -1060,6 +1085,27 @@ def export_tag_timeseries(
             "a pinned-only sparkline the operator was already looking at."
         ),
     ),
+    min_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional lower bound (inclusive) on ``confidence``, mirrors "
+            "GET /v1/history/tags/{tag}/timeseries. Lets an operator dump "
+            "the low-confidence trend of a tag into a spreadsheet for "
+            "review before renaming, merging, or deleting it."
+        ),
+    ),
+    max_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional upper bound (inclusive) on ``confidence``, mirrors "
+            "GET /v1/history/tags/{tag}/timeseries. Pair with ``min_conf`` "
+            "to scope the export to a confidence band."
+        ),
+    ),
 ):
     """Download per-day usage for ``tag`` as CSV or JSON.
 
@@ -1071,9 +1117,12 @@ def export_tag_timeseries(
     save it instead of rendering it.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
+    if min_conf is not None and max_conf is not None and min_conf > max_conf:
+        raise HTTPException(400, "`min_conf` must be <= `max_conf`.")
     try:
         result = Repository().tag_timeseries(
-            tag=tag, tenant_id=tenant_id, days=days, pinned=pinned
+            tag=tag, tenant_id=tenant_id, days=days, pinned=pinned,
+            min_conf=min_conf, max_conf=max_conf,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -1100,6 +1149,8 @@ def export_tag_timeseries(
             "filters": {
                 "days": days,
                 "pinned": pinned,
+                "min_conf": min_conf,
+                "max_conf": max_conf,
             },
             "series": series,
         }

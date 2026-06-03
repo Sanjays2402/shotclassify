@@ -538,6 +538,8 @@ class Repository:
         days: int = 30,
         until: "datetime | None" = None,
         pinned: bool | None = None,
+        min_conf: float | None = None,
+        max_conf: float | None = None,
     ) -> dict:
         """Per-day usage counts for ``tag`` over a trailing window.
 
@@ -568,6 +570,12 @@ class Repository:
         norm = (tag or "").strip().lower()[:32]
         if not norm:
             raise ValueError("`tag` must be a non-empty tag name.")
+        if min_conf is not None and not (0.0 <= float(min_conf) <= 1.0):
+            raise ValueError("`min_conf` must be in [0.0, 1.0].")
+        if max_conf is not None and not (0.0 <= float(max_conf) <= 1.0):
+            raise ValueError("`max_conf` must be in [0.0, 1.0].")
+        if min_conf is not None and max_conf is not None and float(min_conf) > float(max_conf):
+            raise ValueError("`min_conf` must be <= `max_conf`.")
         window = max(1, min(int(days), 365))
         if until is None:
             end_day = datetime.now(_tz.utc).date()
@@ -584,6 +592,10 @@ class Repository:
         )
         if pinned is not None:
             stmt = stmt.where(ClassificationRow.pinned == bool(pinned))
+        if min_conf is not None:
+            stmt = stmt.where(ClassificationRow.confidence >= float(min_conf))
+        if max_conf is not None:
+            stmt = stmt.where(ClassificationRow.confidence <= float(max_conf))
         stmt = self._scope_tenant(stmt, tenant_id)
         buckets: dict[_date, int] = {}
         with get_session() as s:

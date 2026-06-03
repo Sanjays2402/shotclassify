@@ -224,3 +224,83 @@ def test_timeseries_pinned_filter(monkeypatch, tmp_path):
     assert body["total"] == 2
     assert body["series"][-1]["count"] == 1
     assert body["series"][-2]["count"] == 1
+
+
+def _seed_conf(filename: str, tags: list[str], confidence: float, created_at):
+    """Like _seed but lets the test control the ``confidence`` value."""
+    from shotclassify_store.db import ClassificationRow, get_session, init_db
+    from shotclassify_common import Category
+
+    init_db()
+    with get_session() as s:
+        s.add(
+            ClassificationRow(
+                id=uuid.uuid4().hex,
+                created_at=created_at,
+                filename=filename,
+                primary_category=Category.receipt.value,
+                confidence=confidence,
+                ocr_text="",
+                image_path=None,
+                tenant_id=None,
+                label=None,
+                tags=tags,
+                pinned=False,
+            )
+        )
+        s.commit()
+
+
+def test_timeseries_confidence_band_filter(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    today = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    _seed_conf("lo1.png", ["finance"], 0.20, today)
+    _seed_conf("lo2.png", ["finance"], 0.35, today - timedelta(days=2))
+    _seed_conf("mid.png", ["finance"], 0.65, today)
+    _seed_conf("hi.png", ["finance"], 0.95, today - timedelta(days=1))
+
+    # No filter: all four counted.
+    r = c.get(
+        "/v1/history/tags/finance/timeseries?days=7",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    assert r.json()["total"] == 4
+
+    # Low-confidence band: only the two below 0.5.
+    r = c.get(
+        "/v1/history/tags/finance/timeseries?days=7&max_conf=0.5",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    assert body["series"][-1]["count"] == 1
+    assert body["series"][-3]["count"] == 1
+
+    # High-confidence band: only the 0.95 row.
+    r = c.get(
+        "/v1/history/tags/finance/timeseries?days=7&min_conf=0.9",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["series"][-2]["count"] == 1
+
+    # Inclusive bounds: 0.65 mid-row is included at the edge.
+    r = c.get(
+        "/v1/history/tags/finance/timeseries?days=7&min_conf=0.65&max_conf=0.65",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    assert r.json()["total"] == 1
+
+
+def test_timeseries_confidence_band_inverted_is_400(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.get(
+        "/v1/history/tags/finance/timeseries?days=7&min_conf=0.9&max_conf=0.1",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 400
