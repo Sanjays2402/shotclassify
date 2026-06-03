@@ -828,6 +828,27 @@ def export_tag_items(
             "subset behind the tag-detail pinned badge for review."
         ),
     ),
+    min_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional lower bound (inclusive) on ``confidence``, mirrors "
+            "GET /v1/history/tags/{tag}/items. Lets an operator dump the "
+            "low-confidence subset of a tag's uses into a spreadsheet for "
+            "review before renaming, merging or deleting it."
+        ),
+    ),
+    max_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional upper bound (inclusive) on ``confidence``, mirrors "
+            "GET /v1/history/tags/{tag}/items. Pair with ``min_conf`` to "
+            "scope the export to a confidence band."
+        ),
+    ),
 ):
     """Stream the recent-uses panel for ``tag`` as CSV/JSON/NDJSON.
 
@@ -837,11 +858,15 @@ def export_tag_items(
     or delete the tag. Unknown tags return an empty export rather than
     404, so the UI can wire the button up without a second round trip.
     Tag input is normalized (trim, lowercase, 32 char cap) to match the
-    write path.
+    write path. The optional ``min_conf``/``max_conf`` filters scope the
+    export to a confidence band so an operator can dump just the low-
+    confidence uses for review.
     """
     norm = (tag or "").strip().lower()[:32]
     if not norm:
         raise HTTPException(400, "`tag` must be a non-empty tag name.")
+    if min_conf is not None and max_conf is not None and min_conf > max_conf:
+        raise HTTPException(400, "`min_conf` must be <= `max_conf`.")
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
     records = repo.list(
@@ -851,9 +876,15 @@ def export_tag_items(
         tag=norm,
         sort=sort,
         pinned=pinned,
+        min_conf=min_conf,
+        max_conf=max_conf,
     )
     total_matched = repo.count_filtered(
-        tenant_id=tenant_id, tag=norm, pinned=pinned
+        tenant_id=tenant_id,
+        tag=norm,
+        pinned=pinned,
+        min_conf=min_conf,
+        max_conf=max_conf,
     )
     truncated = (offset + len(records)) < total_matched
     next_offset = offset + len(records) if truncated else None
@@ -900,6 +931,8 @@ def export_tag_items(
                 "offset": offset,
                 "sort": sort,
                 "pinned": pinned,
+                "min_conf": min_conf,
+                "max_conf": max_conf,
             },
             "records": [json.loads(r.model_dump_json()) for r in records],
         }

@@ -220,3 +220,35 @@ def test_export_filename_sanitized(monkeypatch, tmp_path):
     fname = r.headers["content-disposition"].split("filename=")[1]
     for ch in (" ", "!", "/", "\\"):
         assert ch not in fname
+
+
+def test_export_confidence_band_filter(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("low.png", ["finance"], confidence=0.2)
+    _seed("mid.png", ["finance"], confidence=0.5)
+    _seed("high.png", ["finance"], confidence=0.9)
+
+    r = c.get(
+        "/v1/history/tags/finance/items/export?format=json&max_conf=0.4",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = json.loads(r.text)
+    assert [rec["filename"] for rec in body["records"]] == ["low.png"]
+    assert body["filters"]["max_conf"] == 0.4
+    assert body["filters"]["min_conf"] is None
+
+    r = c.get(
+        "/v1/history/tags/finance/items/export?format=json&min_conf=0.4&max_conf=0.8",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = json.loads(r.text)
+    assert [rec["filename"] for rec in body["records"]] == ["mid.png"]
+
+    # Inverted range rejected.
+    r = c.get(
+        "/v1/history/tags/finance/items/export?min_conf=0.9&max_conf=0.1",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 400
