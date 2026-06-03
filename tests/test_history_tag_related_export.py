@@ -219,3 +219,95 @@ def test_export_pinned_filter_json(monkeypatch, tmp_path):
     body = json.loads(r.text)
     assert body["filters"]["pinned"] is None
     assert body["base_count"] == 3
+
+
+def _seed_conf(filename: str, tags: list[str], confidence: float) -> None:
+    from shotclassify_store.db import ClassificationRow, get_session, init_db
+    from shotclassify_common import Category
+
+    init_db()
+    with get_session() as s:
+        s.add(
+            ClassificationRow(
+                id=uuid.uuid4().hex,
+                created_at=datetime.now(timezone.utc),
+                filename=filename,
+                primary_category=Category.receipt.value,
+                confidence=confidence,
+                ocr_text="",
+                image_path=None,
+                tenant_id=None,
+                label=None,
+                tags=tags,
+                pinned=False,
+            )
+        )
+        s.commit()
+
+
+def test_export_confidence_band_filter_csv(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # Low-confidence seed rows: q1 co-occurs twice, q2 once.
+    _seed_conf("a.png", ["finance", "q1"], confidence=0.30)
+    _seed_conf("b.png", ["finance", "q1"], confidence=0.40)
+    _seed_conf("c.png", ["finance", "q2"], confidence=0.45)
+    # High-confidence seed rows: only urgent co-occurs.
+    _seed_conf("d.png", ["finance", "urgent"], confidence=0.95)
+    _seed_conf("e.png", ["finance", "urgent"], confidence=0.99)
+
+    r = c.get(
+        "/v1/history/tags/finance/related/export?max_conf=0.5",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200, r.text
+    rows = list(csv.DictReader(io.StringIO(r.text)))
+    assert [row["tag"] for row in rows] == ["q1", "q2"]
+    assert [int(row["count"]) for row in rows] == [2, 1]
+    assert r.headers["x-base-count"] == "3"
+    assert r.headers["x-record-count"] == "2"
+
+    r = c.get(
+        "/v1/history/tags/finance/related/export?min_conf=0.9",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    rows = list(csv.DictReader(io.StringIO(r.text)))
+    assert [row["tag"] for row in rows] == ["urgent"]
+    assert r.headers["x-base-count"] == "2"
+
+
+def test_export_confidence_band_filter_json(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed_conf("a.png", ["finance", "q1"], confidence=0.30)
+    _seed_conf("b.png", ["finance", "urgent"], confidence=0.95)
+
+    r = c.get(
+        "/v1/history/tags/finance/related/export?format=json&min_conf=0.9",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200, r.text
+    body = json.loads(r.text)
+    assert body["base_count"] == 1
+    assert body["filters"]["min_conf"] == 0.9
+    assert body["filters"]["max_conf"] is None
+    assert [it["tag"] for it in body["items"]] == ["urgent"]
+
+
+def test_export_confidence_band_inverted_returns_400(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed_conf("a.png", ["finance", "q1"], confidence=0.5)
+    r = c.get(
+        "/v1/history/tags/finance/related/export?min_conf=0.9&max_conf=0.1",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 400
+
+
+def test_export_confidence_band_out_of_range_returns_422(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed_conf("a.png", ["finance", "q1"], confidence=0.5)
+    r = c.get(
+        "/v1/history/tags/finance/related/export?min_conf=1.5",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 422

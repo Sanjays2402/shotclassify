@@ -1335,6 +1335,28 @@ def export_related_tags(
             "but not 'refined') without hand-filtering the spreadsheet."
         ),
     ),
+    min_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional lower bound (inclusive) on ``confidence``. Mirrors "
+            "the band filter on ``GET /v1/history/tags/{tag}/related`` so "
+            "the export matches a low-confidence cleanup review the "
+            "operator was already scanning in the sidebar. "
+            "``x-base-count`` reflects the band too."
+        ),
+    ),
+    max_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional upper bound (inclusive) on ``confidence``. Pair with "
+            "``min_conf`` to scope the related-tags dump to a confidence "
+            "band."
+        ),
+    ),
 ):
     """Download co-occurrence data for ``tag`` as CSV or JSON.
 
@@ -1349,9 +1371,12 @@ def export_related_tags(
     unpinned rows so the export matches a pinned-only sidebar view.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
+    if min_conf is not None and max_conf is not None and min_conf > max_conf:
+        raise HTTPException(400, "`min_conf` must be <= `max_conf`.")
     try:
         result = Repository().related_tags(
-            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count, pinned=pinned, prefix=prefix
+            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count,
+            pinned=pinned, prefix=prefix, min_conf=min_conf, max_conf=max_conf,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -1381,6 +1406,8 @@ def export_related_tags(
                 "min_count": min_count,
                 "pinned": pinned,
                 "prefix": prefix,
+                "min_conf": min_conf,
+                "max_conf": max_conf,
             },
             "items": items,
         }
