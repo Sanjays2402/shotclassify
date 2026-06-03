@@ -623,6 +623,7 @@ class Repository:
         limit: int = 50,
         min_count: int = 1,
         pinned: bool | None = None,
+        prefix: str | None = None,
     ) -> dict:
         """Return tags that most often co-occur with ``tag`` in the tenant scope.
 
@@ -637,13 +638,20 @@ class Repository:
         ``pinned`` narrows the scan to pinned or unpinned rows: ``True``
         counts co-occurrences only across pinned rows (and ``base_count``
         reflects pinned rows only), ``False`` counts the opposite, and
-        ``None`` (default) ignores pin state.
+        ``None`` (default) ignores pin state. ``prefix`` filters the
+        returned related tags by case-insensitive prefix, mirroring the
+        prefix filter on ``list_tags``. Useful for namespace-scoped
+        merge cleanup (``prefix="finance/"``) so an operator scanning a
+        seed tag's neighbourhood sees only the candidates inside one
+        taxonomy branch. ``base_count`` is unaffected by ``prefix``
+        because the seed itself defines the row set.
         """
         norm = (tag or "").strip().lower()[:32]
         if not norm:
             raise ValueError("`tag` must be a non-empty tag name.")
         capped = max(1, min(int(limit), 500))
         floor = max(1, int(min_count))
+        head = (prefix or "").strip().lower()
         stmt = select(ClassificationRow.tags)
         stmt = self._scope_tenant(stmt, tenant_id)
         if pinned is True:
@@ -672,6 +680,8 @@ class Repository:
                     counts[n] = counts.get(n, 0) + 1
         if floor > 1:
             counts = {t: c for t, c in counts.items() if c >= floor}
+        if head:
+            counts = {t: c for t, c in counts.items() if t.startswith(head)}
         items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
         return {
             "tag": norm,

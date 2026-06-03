@@ -968,6 +968,18 @@ def related_tags(
             "state (default)."
         ),
     ),
+    prefix: str | None = Query(
+        None,
+        max_length=32,
+        description=(
+            "Optional case-insensitive prefix filter on the returned "
+            "related tags, mirroring ``GET /v1/history/tags``. Use this "
+            "to narrow the sidebar to one taxonomy namespace (typing "
+            "'fin' matches 'finance' but not 'refined') when scanning a "
+            "seed tag for merge candidates. ``base_count`` is unaffected: "
+            "the seed still defines the row set."
+        ),
+    ),
 ) -> dict:
     """List tags that co-occur with ``tag`` in the current tenant.
 
@@ -978,12 +990,15 @@ def related_tags(
     without an extra request. Sorted by count desc, then tag asc.
     The optional ``pinned`` filter narrows the sidebar to pinned or
     unpinned rows so the UI can mirror the pinned-only toggle from the
-    rest of the tag detail page without a second round trip.
+    rest of the tag detail page without a second round trip. The
+    optional ``prefix`` filter narrows the sidebar to one taxonomy
+    namespace so operators cleaning up a large vocabulary can scope a
+    seed tag's neighbours to a single branch.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     try:
         return Repository().related_tags(
-            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count, pinned=pinned
+            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count, pinned=pinned, prefix=prefix
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -1035,6 +1050,17 @@ def export_related_tags(
             "the pinned-only sidebar the operator was already looking at."
         ),
     ),
+    prefix: str | None = Query(
+        None,
+        max_length=32,
+        description=(
+            "Optional case-insensitive prefix filter on the related tags, "
+            "mirroring ``GET /v1/history/tags/{tag}/related``. Use this to "
+            "dump only the slice of the seed's neighbourhood that lives "
+            "in one taxonomy namespace (typing 'fin' matches 'finance' "
+            "but not 'refined') without hand-filtering the spreadsheet."
+        ),
+    ),
 ):
     """Download co-occurrence data for ``tag`` as CSV or JSON.
 
@@ -1051,7 +1077,7 @@ def export_related_tags(
     tenant_id = getattr(request.state, "tenant_id", None)
     try:
         result = Repository().related_tags(
-            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count, pinned=pinned
+            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count, pinned=pinned, prefix=prefix
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -1080,6 +1106,7 @@ def export_related_tags(
                 "limit": limit,
                 "min_count": min_count,
                 "pinned": pinned,
+                "prefix": prefix,
             },
             "items": items,
         }

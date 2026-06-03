@@ -231,3 +231,41 @@ def test_related_tags_pinned_filter(monkeypatch, tmp_path):
         {"tag": "urgent", "count": 2},
         {"tag": "q2", "count": 1},
     ]
+
+
+def test_related_tags_prefix_filter(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance", "fin/q1", "fin/q2"])
+    _seed("b.png", ["finance", "fin/q1", "ops/q1"])
+    _seed("c.png", ["finance", "ops/q2"])
+
+    # prefix narrows the result set; base_count unchanged.
+    r = c.get(
+        "/v1/history/tags/finance/related?prefix=fin/",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["base_count"] == 3
+    assert body["items"] == [
+        {"tag": "fin/q1", "count": 2},
+        {"tag": "fin/q2", "count": 1},
+    ]
+
+    # Case-insensitive.
+    r = c.get(
+        "/v1/history/tags/finance/related?prefix=FIN/",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    assert [it["tag"] for it in r.json()["items"]] == ["fin/q1", "fin/q2"]
+
+    # Non-matching prefix returns empty items but keeps base_count.
+    r = c.get(
+        "/v1/history/tags/finance/related?prefix=zzz",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["base_count"] == 3
+    assert body["items"] == []
