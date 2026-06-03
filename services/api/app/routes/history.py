@@ -770,6 +770,140 @@ def tag_items(
 
 
 @router.get(
+    "/tags/{tag}/items/export",
+    dependencies=[require_role("viewer"), require_scope("read:classifications")],
+)
+def export_tag_items(
+    tag: str,
+    request: Request,
+    format: str = Query("csv", pattern="^(csv|json|ndjson)$"),
+    limit: int = Query(1000, ge=1, le=EXPORT_MAX),
+    offset: int = Query(0, ge=0, le=1_000_000),
+    sort: str = Query(
+        "new",
+        pattern="^(new|old|conf_desc|conf_asc)$",
+        description=(
+            "Sort order, mirrors GET /v1/history/tags/{tag}/items. "
+            "``new`` (default) and ``old`` order by ``created_at``; "
+            "``conf_desc`` and ``conf_asc`` order by ``confidence``."
+        ),
+    ),
+    pinned: bool | None = Query(
+        None,
+        description=(
+            "Optional pinned filter, mirrors GET /v1/history/tags/{tag}/items. "
+            "``true`` exports only pinned records, ``false`` only unpinned, "
+            "omit to include both. Lets an operator dump just the pinned "
+            "subset behind the tag-detail pinned badge for review."
+        ),
+    ),
+):
+    """Stream the recent-uses panel for ``tag`` as CSV/JSON/NDJSON.
+
+    Mirror of ``GET /v1/history/tags/{tag}/items`` for download. Backs a
+    "export uses" button on the tag detail UI so an operator can pull the
+    matching records into a spreadsheet before deciding to rename, merge
+    or delete the tag. Unknown tags return an empty export rather than
+    404, so the UI can wire the button up without a second round trip.
+    Tag input is normalized (trim, lowercase, 32 char cap) to match the
+    write path.
+    """
+    norm = (tag or "").strip().lower()[:32]
+    if not norm:
+        raise HTTPException(400, "`tag` must be a non-empty tag name.")
+    tenant_id = getattr(request.state, "tenant_id", None)
+    repo = Repository()
+    records = repo.list(
+        limit=limit,
+        offset=offset,
+        tenant_id=tenant_id,
+        tag=norm,
+        sort=sort,
+        pinned=pinned,
+    )
+    total_matched = repo.count_filtered(
+        tenant_id=tenant_id, tag=norm, pinned=pinned
+    )
+    truncated = (offset + len(records)) < total_matched
+    next_offset = offset + len(records) if truncated else None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe_tag = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in norm) or "tag"
+    common_headers = {
+        "x-record-count": str(len(records)),
+        "x-total-matched": str(total_matched),
+        "x-offset": str(offset),
+        "x-truncated": "true" if truncated else "false",
+        "access-control-expose-headers": (
+            "x-record-count, x-total-matched, x-offset, x-next-offset, x-truncated"
+        ),
+    }
+    if next_offset is not None:
+        common_headers["x-next-offset"] = str(next_offset)
+
+    if format == "ndjson":
+        def _ndjson_iter():
+            for rec in records:
+                yield rec.model_dump_json() + "\n"
+
+        return StreamingResponse(
+            _ndjson_iter(),
+            media_type="application/x-ndjson",
+            headers={
+                "content-disposition": f'attachment; filename="shotclassify-tag-{safe_tag}-items-{stamp}.ndjson"',
+                **common_headers,
+            },
+        )
+
+    if format == "json":
+        payload = {
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "tag": norm,
+            "count": len(records),
+            "total_matched": total_matched,
+            "offset": offset,
+            "next_offset": next_offset,
+            "truncated": truncated,
+            "filters": {
+                "tag": norm,
+                "limit": limit,
+                "offset": offset,
+                "sort": sort,
+                "pinned": pinned,
+            },
+            "records": [json.loads(r.model_dump_json()) for r in records],
+        }
+        body = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+        return StreamingResponse(
+            iter([body]),
+            media_type="application/json",
+            headers={
+                "content-disposition": f'attachment; filename="shotclassify-tag-{safe_tag}-items-{stamp}.json"',
+                **common_headers,
+            },
+        )
+
+    def _csv_iter():
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        yield buf.getvalue()
+        for rec in records:
+            buf.seek(0)
+            buf.truncate(0)
+            writer.writerow(_record_to_row(rec))
+            yield buf.getvalue()
+
+    return StreamingResponse(
+        _csv_iter(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "content-disposition": f'attachment; filename="shotclassify-tag-{safe_tag}-items-{stamp}.csv"',
+            **common_headers,
+        },
+    )
+
+
+@router.get(
     "/tags/{tag}/timeseries",
     dependencies=[require_role("viewer"), require_scope("read:classifications")],
 )
