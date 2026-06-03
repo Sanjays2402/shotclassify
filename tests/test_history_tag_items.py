@@ -212,3 +212,56 @@ def test_tag_items_pinned_bad_value_rejected(monkeypatch, tmp_path):
         headers={"X-API-Key": "k"},
     )
     assert r.status_code == 422
+
+
+def test_tag_items_confidence_band_filter(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    _seed("low.png", ["finance"], created_at=base, confidence=0.35)
+    _seed("mid.png", ["finance"], created_at=base + timedelta(days=1), confidence=0.55)
+    _seed("high.png", ["finance"], created_at=base + timedelta(days=2), confidence=0.92)
+
+    # min_conf alone keeps mid + high.
+    r = c.get(
+        "/v1/history/tags/finance/items?min_conf=0.5",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    assert {row["filename"] for row in r.json()} == {"mid.png", "high.png"}
+    assert r.headers["x-total-count"] == "2"
+
+    # max_conf alone keeps low + mid.
+    r = c.get(
+        "/v1/history/tags/finance/items?max_conf=0.6",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    assert {row["filename"] for row in r.json()} == {"low.png", "mid.png"}
+    assert r.headers["x-total-count"] == "2"
+
+    # Band keeps only mid.
+    r = c.get(
+        "/v1/history/tags/finance/items?min_conf=0.4&max_conf=0.7",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    assert {row["filename"] for row in r.json()} == {"mid.png"}
+    assert r.headers["x-total-count"] == "1"
+
+
+def test_tag_items_confidence_inverted_band_rejected(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.get(
+        "/v1/history/tags/finance/items?min_conf=0.8&max_conf=0.2",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 400
+
+
+def test_tag_items_confidence_out_of_range_rejected(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.get(
+        "/v1/history/tags/finance/items?min_conf=1.5",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 422

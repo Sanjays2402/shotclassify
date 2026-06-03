@@ -733,6 +733,25 @@ def tag_items(
             "pinned badge without a second round trip."
         ),
     ),
+    min_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional lower bound (inclusive) on ``confidence``. Lets the "
+            "tag detail UI drill into low-confidence uses of a tag for "
+            "review before renaming, merging, or deleting it."
+        ),
+    ),
+    max_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional upper bound (inclusive) on ``confidence``. Pair with "
+            "``min_conf`` to scope the panel to a confidence band."
+        ),
+    ),
 ) -> list[ClassificationRecord]:
     """List classification records that carry ``tag`` in the current tenant.
 
@@ -744,11 +763,15 @@ def tag_items(
     second round trip. ``x-total-count``, ``x-offset``, and ``x-limit``
     response headers expose pagination state for the UI. The optional
     ``pinned`` filter narrows the panel to pinned or unpinned records so
-    the UI can render a pinned-only view from the tag detail badge.
+    the UI can render a pinned-only view from the tag detail badge. The
+    optional ``min_conf``/``max_conf`` filters scope to a confidence band
+    so an operator can drill into low-confidence uses for review.
     """
     norm = (tag or "").strip().lower()[:32]
     if not norm:
         raise HTTPException(400, "`tag` must be a non-empty tag name.")
+    if min_conf is not None and max_conf is not None and min_conf > max_conf:
+        raise HTTPException(400, "`min_conf` must be <= `max_conf`.")
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
     items = repo.list(
@@ -758,8 +781,16 @@ def tag_items(
         tag=norm,
         sort=sort,
         pinned=pinned,
+        min_conf=min_conf,
+        max_conf=max_conf,
     )
-    total = repo.count_filtered(tenant_id=tenant_id, tag=norm, pinned=pinned)
+    total = repo.count_filtered(
+        tenant_id=tenant_id,
+        tag=norm,
+        pinned=pinned,
+        min_conf=min_conf,
+        max_conf=max_conf,
+    )
     response.headers["x-total-count"] = str(total)
     response.headers["x-offset"] = str(offset)
     response.headers["x-limit"] = str(limit)
