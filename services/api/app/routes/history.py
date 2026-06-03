@@ -768,10 +768,16 @@ def tag_detail(
     pinned" line next to the pinned badge and operators can tell at a
     glance whether the tag is still actively curated or a stale pin from
     months ago, without opening a pinned-only drilldown. It is ``null``
-    when ``pinned`` is ``0``. Unknown
+    when ``pinned`` is ``0``. ``first_pinned`` is the ISO 8601 UTC
+    timestamp of the oldest row carrying the tag that the user has
+    pinned, so the detail page can render a "pinned since" line next to
+    the pinned badge and operators can tell at a glance how long the
+    tag has been actively curated, without opening a pinned-only
+    drilldown. It is ``null`` when ``pinned`` is ``0`` and is always
+    ``<= last_pinned``. Unknown
     tags return all counts as ``0`` with ``first_seen``,
-    ``last_seen``, ``last_low_confidence`` and ``last_pinned`` set to
-    ``null`` rather than 404, so the UI can render
+    ``last_seen``, ``last_low_confidence``, ``last_pinned`` and
+    ``first_pinned`` set to ``null`` rather than 404, so the UI can render
     an empty state without a second round trip. Tag input is normalized
     (trim, lowercase, 32 char cap) to match write-time rules.
     """
