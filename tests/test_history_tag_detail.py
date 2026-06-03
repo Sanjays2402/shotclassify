@@ -84,6 +84,7 @@ def test_tag_detail_unknown_tag_returns_empty(monkeypatch, tmp_path):
         "first_seen": None,
         "last_seen": None,
         "last_low_confidence": None,
+        "first_low_confidence": None,
         "last_pinned": None,
         "first_pinned": None,
     }
@@ -321,6 +322,70 @@ def test_tag_detail_last_pinned_timestamp(monkeypatch, tmp_path):
     body = r.json()
     assert body["pinned"] == 0
     assert body["last_pinned"] is None
+
+
+def test_tag_detail_first_low_confidence_timestamp(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    base = datetime(2025, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+    from shotclassify_store.db import ClassificationRow, get_session, init_db
+    from shotclassify_common import Category
+
+    def _seed_at(filename, conf, when, tags=("finance",)):
+        init_db()
+        with get_session() as s:
+            s.add(
+                ClassificationRow(
+                    id=uuid.uuid4().hex,
+                    created_at=when,
+                    filename=filename,
+                    primary_category=Category.receipt.value,
+                    confidence=conf,
+                    ocr_text="",
+                    image_path=None,
+                    tenant_id=None,
+                    label=None,
+                    tags=list(tags),
+                    pinned=False,
+                )
+            )
+            s.commit()
+
+    # 3 low-conf rows on finance at different times; oldest wins for
+    # first_low_confidence.
+    _seed_at("a.png", 0.5, base + timedelta(days=2))
+    _seed_at("b.png", 0.3, base)
+    _seed_at("c.png", 0.6, base + timedelta(days=1))
+    # A high-conf row earlier in time must not move the watermark.
+    _seed_at("d.png", 0.95, base - timedelta(days=5))
+    # Low-conf row on a different tag must not leak.
+    _seed_at("e.png", 0.1, base - timedelta(days=9), tags=("ops",))
+
+    r = c.get("/v1/history/tags/finance", headers={"X-API-Key": "k"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["low_confidence"] == 3
+    assert body["first_low_confidence"] == base.isoformat()
+    assert body["last_low_confidence"] == (base + timedelta(days=2)).isoformat()
+
+    # Tightening the threshold drops the 0.6 and 0.5 rows; first watermark
+    # stays on the 0.3 row which is the only low-conf row in band.
+    r = c.get(
+        "/v1/history/tags/finance?low_conf_threshold=0.4",
+        headers={"X-API-Key": "k"},
+    )
+    body = r.json()
+    assert body["low_confidence"] == 1
+    assert body["first_low_confidence"] == base.isoformat()
+
+    # Threshold that excludes every row -> null watermark.
+    r = c.get(
+        "/v1/history/tags/finance?low_conf_threshold=0.0",
+        headers={"X-API-Key": "k"},
+    )
+    body = r.json()
+    assert body["low_confidence"] == 0
+    assert body["first_low_confidence"] is None
 
 
 def test_tag_detail_first_pinned_timestamp(monkeypatch, tmp_path):

@@ -525,6 +525,7 @@ class Repository:
         first_seen: datetime | None = None
         last_seen: datetime | None = None
         last_low_confidence: datetime | None = None
+        first_low_confidence: datetime | None = None
         last_pinned: datetime | None = None
         first_pinned: datetime | None = None
         with get_session() as s:
@@ -561,6 +562,10 @@ class Repository:
                         last_low_confidence is None or created > last_low_confidence
                     ):
                         last_low_confidence = created
+                    if created is not None and (
+                        first_low_confidence is None or created < first_low_confidence
+                    ):
+                        first_low_confidence = created
                 if created is None:
                     continue
                 if first_seen is None or created < first_seen:
@@ -583,6 +588,7 @@ class Repository:
             "first_seen": _iso(first_seen),
             "last_seen": _iso(last_seen),
             "last_low_confidence": _iso(last_low_confidence),
+            "first_low_confidence": _iso(first_low_confidence),
             "last_pinned": _iso(last_pinned),
             "first_pinned": _iso(first_pinned),
         }
