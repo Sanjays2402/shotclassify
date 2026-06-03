@@ -121,6 +121,38 @@ def test_tags_export_substring_filter(monkeypatch, tmp_path):
     assert [row["tag"] for row in rows] == ["finance"]
 
 
+def test_tags_export_prefix_filter(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance", "q1"])
+    _seed("b.png", ["finalize"])
+    _seed("c.png", ["refined"])
+    _seed("d.png", ["ops"])
+
+    r = c.get(
+        "/v1/history/tags/export?prefix=FIN",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    rows = list(csv.DictReader(io.StringIO(r.text)))
+    assert sorted(row["tag"] for row in rows) == ["finalize", "finance"]
+
+
+def test_tags_export_prefix_combines_with_q(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _seed("a.png", ["finance"])
+    _seed("b.png", ["finalize"])
+    _seed("c.png", ["final-cut"])
+
+    r = c.get(
+        "/v1/history/tags/export?prefix=fin&q=ance&format=json",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = json.loads(r.text)
+    assert body["filters"]["prefix"] == "fin"
+    assert [it["tag"] for it in body["items"]] == ["finance"]
+
+
 def test_tags_export_rejects_bad_format(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.get(

@@ -560,6 +560,17 @@ def export_tags(
             "sort=name, matching ``GET /v1/history/tags``."
         ),
     ),
+    prefix: str | None = Query(
+        None,
+        max_length=32,
+        description=(
+            "Optional case-insensitive prefix filter on the tag name, "
+            "matching ``GET /v1/history/tags``. Use this to export only "
+            "the slice of taxonomy that starts with a given namespace "
+            "(typing 'fin' matches 'finance' but not 'refined'). Combines "
+            "with ``q`` when both are given (both must match)."
+        ),
+    ),
 ):
     """Download the tenant's tag vocabulary as CSV or JSON.
 
@@ -579,6 +590,7 @@ def export_tags(
             min_count=min_count,
             sort=sort,
             order=order,
+            prefix=prefix,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -599,6 +611,7 @@ def export_tags(
                 "min_count": min_count,
                 "sort": sort,
                 "order": order,
+                "prefix": prefix,
             },
             "items": items,
         }
