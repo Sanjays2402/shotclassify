@@ -84,6 +84,7 @@ def test_tag_detail_unknown_tag_returns_empty(monkeypatch, tmp_path):
         "first_seen": None,
         "last_seen": None,
         "last_low_confidence": None,
+        "last_pinned": None,
     }
 
 
@@ -268,3 +269,54 @@ def test_tag_detail_requires_auth(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.get("/v1/history/tags/finance")
     assert r.status_code in (401, 403)
+
+
+def test_tag_detail_last_pinned_timestamp(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    base = datetime(2025, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+    from shotclassify_store.db import ClassificationRow, get_session, init_db
+    from shotclassify_common import Category
+
+    def _seed_at(filename, when, pinned, tags=("finance",)):
+        init_db()
+        with get_session() as s:
+            s.add(
+                ClassificationRow(
+                    id=uuid.uuid4().hex,
+                    created_at=when,
+                    filename=filename,
+                    primary_category=Category.receipt.value,
+                    confidence=0.9,
+                    ocr_text="",
+                    image_path=None,
+                    tenant_id=None,
+                    label=None,
+                    tags=list(tags),
+                    pinned=pinned,
+                )
+            )
+            s.commit()
+
+    # 3 pinned rows on finance at different times; newest pinned wins.
+    _seed_at("a.png", base, pinned=True)
+    _seed_at("b.png", base + timedelta(days=2), pinned=True)
+    _seed_at("c.png", base + timedelta(days=1), pinned=True)
+    # An unpinned row later in time must not move the watermark.
+    _seed_at("d.png", base + timedelta(days=5), pinned=False)
+    # A pinned row on a different tag must not leak.
+    _seed_at("e.png", base + timedelta(days=9), pinned=True, tags=("ops",))
+
+    r = c.get("/v1/history/tags/finance", headers={"X-API-Key": "k"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["pinned"] == 3
+    assert body["last_pinned"] == (base + timedelta(days=2)).isoformat()
+    # last_seen still reflects the unpinned row.
+    assert body["last_seen"] == (base + timedelta(days=5)).isoformat()
+
+    # Tag with no pinned rows -> null watermark, pinned count 0.
+    r = c.get("/v1/history/tags/unpinnedonly", headers={"X-API-Key": "k"})
+    body = r.json()
+    assert body["pinned"] == 0
+    assert body["last_pinned"] is None
