@@ -636,6 +636,8 @@ class Repository:
         min_count: int = 1,
         pinned: bool | None = None,
         prefix: str | None = None,
+        min_conf: float | None = None,
+        max_conf: float | None = None,
     ) -> dict:
         """Return tags that most often co-occur with ``tag`` in the tenant scope.
 
@@ -656,11 +658,23 @@ class Repository:
         merge cleanup (``prefix="finance/"``) so an operator scanning a
         seed tag's neighbourhood sees only the candidates inside one
         taxonomy branch. ``base_count`` is unaffected by ``prefix``
-        because the seed itself defines the row set.
+        because the seed itself defines the row set. ``min_conf``
+        and ``max_conf`` (each in ``[0.0, 1.0]``) scope the scan to a
+        confidence band on the seed row, mirroring the band filter on
+        ``tag_timeseries`` and ``tag_items`` so an operator can drill
+        into low-confidence neighbours of a tag before merging or
+        deleting. ``base_count`` reflects the band too so the sidebar
+        shows accurate "X of N rows".
         """
         norm = (tag or "").strip().lower()[:32]
         if not norm:
             raise ValueError("`tag` must be a non-empty tag name.")
+        if min_conf is not None and not (0.0 <= float(min_conf) <= 1.0):
+            raise ValueError("`min_conf` must be in [0.0, 1.0].")
+        if max_conf is not None and not (0.0 <= float(max_conf) <= 1.0):
+            raise ValueError("`max_conf` must be in [0.0, 1.0].")
+        if min_conf is not None and max_conf is not None and float(min_conf) > float(max_conf):
+            raise ValueError("`min_conf` must be <= `max_conf`.")
         capped = max(1, min(int(limit), 500))
         floor = max(1, int(min_count))
         head = (prefix or "").strip().lower()
@@ -670,6 +684,10 @@ class Repository:
             stmt = stmt.where(ClassificationRow.pinned.is_(True))
         elif pinned is False:
             stmt = stmt.where(ClassificationRow.pinned.is_(False))
+        if min_conf is not None:
+            stmt = stmt.where(ClassificationRow.confidence >= float(min_conf))
+        if max_conf is not None:
+            stmt = stmt.where(ClassificationRow.confidence <= float(max_conf))
         base = 0
         counts: dict[str, int] = {}
         with get_session() as s:

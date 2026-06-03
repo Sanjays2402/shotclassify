@@ -1229,6 +1229,28 @@ def related_tags(
             "the seed still defines the row set."
         ),
     ),
+    min_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional lower bound (inclusive) on ``confidence``. Mirrors "
+            "the band filter on ``GET /v1/history/tags/{tag}/timeseries`` "
+            "and ``/items`` so the related-tags sidebar can drill into "
+            "low-confidence neighbours of a seed tag for cleanup review. "
+            "``base_count`` reflects the band too."
+        ),
+    ),
+    max_conf: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional upper bound (inclusive) on ``confidence``. Pair with "
+            "``min_conf`` to scope the related-tags sidebar to a confidence "
+            "band."
+        ),
+    ),
 ) -> dict:
     """List tags that co-occur with ``tag`` in the current tenant.
 
@@ -1245,9 +1267,12 @@ def related_tags(
     seed tag's neighbours to a single branch.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
+    if min_conf is not None and max_conf is not None and min_conf > max_conf:
+        raise HTTPException(400, "`min_conf` must be <= `max_conf`.")
     try:
         return Repository().related_tags(
-            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count, pinned=pinned, prefix=prefix
+            tag=tag, tenant_id=tenant_id, limit=limit, min_count=min_count,
+            pinned=pinned, prefix=prefix, min_conf=min_conf, max_conf=max_conf,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

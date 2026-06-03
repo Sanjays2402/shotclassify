@@ -269,3 +269,75 @@ def test_related_tags_prefix_filter(monkeypatch, tmp_path):
     body = r.json()
     assert body["base_count"] == 3
     assert body["items"] == []
+
+
+def _seed_conf(filename: str, tags: list[str], confidence: float) -> None:
+    from shotclassify_store.db import ClassificationRow, get_session, init_db
+    from shotclassify_common import Category
+
+    init_db()
+    with get_session() as s:
+        s.add(
+            ClassificationRow(
+                id=uuid.uuid4().hex,
+                created_at=datetime.now(timezone.utc),
+                filename=filename,
+                primary_category=Category.receipt.value,
+                confidence=confidence,
+                ocr_text="",
+                image_path=None,
+                tenant_id=None,
+                label=None,
+                tags=tags,
+                pinned=False,
+            )
+        )
+        s.commit()
+
+
+def test_related_tags_confidence_band_filter(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # Low-confidence seed rows: q1 co-occurs twice, q2 once.
+    _seed_conf("a.png", ["finance", "q1"], confidence=0.30)
+    _seed_conf("b.png", ["finance", "q1"], confidence=0.40)
+    _seed_conf("c.png", ["finance", "q2"], confidence=0.45)
+    # High-confidence seed rows: only urgent co-occurs.
+    _seed_conf("d.png", ["finance", "urgent"], confidence=0.95)
+    _seed_conf("e.png", ["finance", "urgent"], confidence=0.99)
+
+    # Low band scopes to low-confidence neighbours.
+    r = c.get(
+        "/v1/history/tags/finance/related?max_conf=0.5",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["base_count"] == 3
+    assert body["items"] == [
+        {"tag": "q1", "count": 2},
+        {"tag": "q2", "count": 1},
+    ]
+
+    # High band scopes to high-confidence neighbours.
+    r = c.get(
+        "/v1/history/tags/finance/related?min_conf=0.9",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["base_count"] == 2
+    assert body["items"] == [{"tag": "urgent", "count": 2}]
+
+    # Inverted band returns 400.
+    r = c.get(
+        "/v1/history/tags/finance/related?min_conf=0.9&max_conf=0.1",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 400
+
+    # Out-of-range band returns 422 (FastAPI Query validation).
+    r = c.get(
+        "/v1/history/tags/finance/related?min_conf=1.5",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 422
