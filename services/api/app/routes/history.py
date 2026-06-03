@@ -711,7 +711,22 @@ def export_tags(
     "/tags/{tag}",
     dependencies=[require_role("viewer"), require_scope("read:classifications")],
 )
-def tag_detail(tag: str, request: Request) -> dict:
+def tag_detail(
+    tag: str,
+    request: Request,
+    low_conf_threshold: float = Query(
+        0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Upper bound (inclusive) used to compute the "
+            "``low_confidence`` and ``pinned_low_confidence`` counts on "
+            "the tag detail response: rows carrying the tag whose "
+            "``confidence`` is at or below this value. Defaults to "
+            "``0.7`` to match the dashboard \"needs review\" cutoff."
+        ),
+    ),
+) -> dict:
     """Return usage summary for a single tag in the current tenant.
 
     Backs a tag detail page that shows how often the tag is used and when
@@ -724,21 +739,35 @@ def tag_detail(tag: str, request: Request) -> dict:
           "tag": "finance",
           "count": 42,
           "pinned": 7,
+          "low_confidence": 9,
+          "pinned_low_confidence": 2,
           "first_seen": "2025-01-04T18:22:11+00:00",
           "last_seen":  "2025-03-19T08:05:00+00:00"
         }
 
     ``pinned`` is the number of records carrying the tag that the user
     has pinned, so the detail page can render a "pinned" badge next to
-    the usage count without a second round trip. Unknown tags return
-    ``count=0`` and ``pinned=0`` with ``first_seen`` and ``last_seen``
-    set to ``null`` rather than 404, so the UI can render an empty state
-    without a second round trip. Tag input is normalized (trim, lowercase,
-    32 char cap) to match write-time rules.
+    the usage count without a second round trip. ``low_confidence`` is
+    the number of records carrying the tag whose ``confidence`` is at or
+    below ``low_conf_threshold`` (default ``0.7``), so the detail page
+    can render a "needs review" badge that routes operators to the
+    low-confidence drilldown for the tag without a second filtered list
+    call. ``pinned_low_confidence`` is the intersection of pinned and
+    low_confidence for the tag, so the page can render a "pinned but
+    unsure" badge alongside it. Both are always ``<= count`` and
+    ``pinned_low_confidence <= min(pinned, low_confidence)``. Unknown
+    tags return all counts as ``0`` with ``first_seen`` and
+    ``last_seen`` set to ``null`` rather than 404, so the UI can render
+    an empty state without a second round trip. Tag input is normalized
+    (trim, lowercase, 32 char cap) to match write-time rules.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     try:
-        return Repository().tag_detail(tag=tag, tenant_id=tenant_id)
+        return Repository().tag_detail(
+            tag=tag,
+            tenant_id=tenant_id,
+            low_conf_threshold=low_conf_threshold,
+        )
     except ValueError as e:
         raise HTTPException(400, str(e))
 

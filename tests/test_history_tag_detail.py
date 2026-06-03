@@ -79,9 +79,79 @@ def test_tag_detail_unknown_tag_returns_empty(monkeypatch, tmp_path):
         "tag": "nope",
         "count": 0,
         "pinned": 0,
+        "low_confidence": 0,
+        "pinned_low_confidence": 0,
         "first_seen": None,
         "last_seen": None,
     }
+
+
+def _seed_conf(
+    filename: str,
+    tags: list[str],
+    confidence: float,
+    pinned: bool = False,
+    tenant_id: str | None = None,
+) -> None:
+    from shotclassify_store.db import ClassificationRow, get_session, init_db
+    from shotclassify_common import Category
+
+    init_db()
+    with get_session() as s:
+        s.add(
+            ClassificationRow(
+                id=uuid.uuid4().hex,
+                created_at=datetime.now(timezone.utc),
+                filename=filename,
+                primary_category=Category.receipt.value,
+                confidence=confidence,
+                ocr_text="",
+                image_path=None,
+                tenant_id=tenant_id,
+                label=None,
+                tags=tags,
+                pinned=pinned,
+            )
+        )
+        s.commit()
+
+
+def test_tag_detail_low_confidence_counts(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    # tag = finance: 4 total, 2 low-conf (<=0.7), 1 pinned-low-conf
+    _seed_conf("a.png", ["finance"], confidence=0.95, pinned=True)
+    _seed_conf("b.png", ["finance"], confidence=0.6, pinned=True)   # low + pinned
+    _seed_conf("c.png", ["finance"], confidence=0.4, pinned=False)  # low
+    _seed_conf("d.png", ["finance"], confidence=0.8, pinned=False)
+    # other tag, low-conf -- must not leak into finance counts
+    _seed_conf("e.png", ["ops"], confidence=0.1, pinned=True)
+
+    r = c.get("/v1/history/tags/finance", headers={"X-API-Key": "k"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 4
+    assert body["pinned"] == 2
+    assert body["low_confidence"] == 2
+    assert body["pinned_low_confidence"] == 1
+
+    # Custom threshold tightens the band: only conf <= 0.5 counts.
+    r = c.get(
+        "/v1/history/tags/finance?low_conf_threshold=0.5",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["low_confidence"] == 1
+    assert body["pinned_low_confidence"] == 0
+
+
+def test_tag_detail_low_conf_threshold_validation(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.get(
+        "/v1/history/tags/finance?low_conf_threshold=1.5",
+        headers={"X-API-Key": "k"},
+    )
+    assert r.status_code == 422
 
 
 def test_tag_detail_pinned_count(monkeypatch, tmp_path):

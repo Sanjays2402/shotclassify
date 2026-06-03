@@ -491,6 +491,7 @@ class Repository:
         self,
         tag: str,
         tenant_id: str | None = None,
+        low_conf_threshold: float = 0.7,
     ) -> dict:
         """Return usage summary for a single tag in the tenant scope.
 
@@ -504,18 +505,27 @@ class Repository:
         norm = (tag or "").strip().lower()[:32]
         if not norm:
             raise ValueError("`tag` must be a non-empty tag name.")
+        try:
+            threshold = float(low_conf_threshold)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("`low_conf_threshold` must be a number in [0, 1].") from exc
+        if not (0.0 <= threshold <= 1.0):
+            raise ValueError("`low_conf_threshold` must be in [0, 1].")
         stmt = select(
             ClassificationRow.tags,
             ClassificationRow.created_at,
             ClassificationRow.pinned,
+            ClassificationRow.confidence,
         )
         stmt = self._scope_tenant(stmt, tenant_id)
         count = 0
         pinned_count = 0
+        low_conf_count = 0
+        pinned_low_conf_count = 0
         first_seen: datetime | None = None
         last_seen: datetime | None = None
         with get_session() as s:
-            for raw, created, pinned in s.execute(stmt):
+            for raw, created, pinned, confidence in s.execute(stmt):
                 if not isinstance(raw, list):
                     continue
                 hit = False
@@ -528,8 +538,14 @@ class Repository:
                 if not hit:
                     continue
                 count += 1
-                if bool(pinned):
+                is_pinned = bool(pinned)
+                if is_pinned:
                     pinned_count += 1
+                is_low_conf = confidence is not None and float(confidence) <= threshold
+                if is_low_conf:
+                    low_conf_count += 1
+                    if is_pinned:
+                        pinned_low_conf_count += 1
                 if created is None:
                     continue
                 if first_seen is None or created < first_seen:
@@ -547,6 +563,8 @@ class Repository:
             "tag": norm,
             "count": count,
             "pinned": pinned_count,
+            "low_confidence": low_conf_count,
+            "pinned_low_confidence": pinned_low_conf_count,
             "first_seen": _iso(first_seen),
             "last_seen": _iso(last_seen),
         }
