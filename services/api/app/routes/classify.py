@@ -5,6 +5,24 @@ import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
+
+try:  # Pillow is a transitive dep; guard import so the route module still loads
+    from PIL import UnidentifiedImageError as _PILUnidentifiedImageError
+
+    _IMAGE_DECODE_ERRORS: tuple[type[BaseException], ...] = (
+        OSError,
+        _PILUnidentifiedImageError,
+    )
+except Exception:  # pragma: no cover - Pillow always available in prod
+    _IMAGE_DECODE_ERRORS = (OSError,)
+
+
+def _discard_upload(path: str) -> None:
+    """Best-effort cleanup of a saved upload that failed to decode."""
+    try:
+        Path(path).unlink()
+    except OSError:
+        pass
 from shotclassify_common import Category, ProcessResult, get_settings
 from shotclassify_common.pipeline import process_image
 from shotclassify_common.utils import ensure_dir, new_id
@@ -182,9 +200,21 @@ async def classify(
     cap = _resolve_upload_cap(tenant_id)
     _enforce_upload_cap(file, cap)
     rid, path = _save_upload(file, cap)
-    result = await asyncio.to_thread(
-        process_image, path, note, True, rid, principal, tenant_id
-    )
+    try:
+        result = await asyncio.to_thread(
+            process_image, path, note, True, rid, principal, tenant_id
+        )
+    except _IMAGE_DECODE_ERRORS as exc:
+        _discard_upload(path)
+        raise HTTPException(
+            400,
+            {
+                "error": "invalid_image",
+                "detail": "Upload could not be decoded as an image.",
+                "filename": file.filename,
+                "reason": str(exc)[:200],
+            },
+        ) from exc
     background.add_task(
         _dispatch_classify_event,
         result,
