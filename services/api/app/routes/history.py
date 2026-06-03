@@ -1627,7 +1627,13 @@ def stats(
     a "pinned but unsure" badge that routes operators to rows they
     flagged for follow-up and the model also flagged as low-confidence,
     without a third filtered list call. It is always
-    ``<= min(pinned, low_confidence)``.
+    ``<= min(pinned, low_confidence)``. ``untagged_low_confidence`` is
+    the intersection of untagged and low_confidence: rows with no tags
+    whose ``confidence`` sits at or below ``low_conf_threshold``, so the
+    dashboard can render a "needs triage" badge that routes operators
+    to the unlabeled rows the model was also unsure about, without a
+    third filtered list call. It is always
+    ``<= min(untagged, low_confidence)``.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = Repository()
@@ -1643,6 +1649,9 @@ def stats(
     pinned_low_confidence = repo.count_filtered(
         tenant_id=tenant_id, pinned=True, max_conf=low_conf_threshold
     )
+    untagged_low_confidence = repo.count_filtered(
+        tenant_id=tenant_id, untagged=True, max_conf=low_conf_threshold
+    )
     return {
         "count": total,
         "untagged": untagged,
@@ -1651,6 +1660,7 @@ def stats(
         "pinned_untagged": pinned_untagged,
         "low_confidence": low_confidence,
         "pinned_low_confidence": pinned_low_confidence,
+        "untagged_low_confidence": untagged_low_confidence,
     }
 
 
