@@ -188,15 +188,53 @@ def _parse_items(text: str) -> list[ReceiptLine]:
     return items[:30]
 
 
+def _compute_tip_percent(
+    tip: float | None, subtotal: float | None, total: float | None
+) -> float | None:
+    """Return tip as a percentage of subtotal (preferred) or pre-tip total.
+
+    Returns ``None`` when:
+      * no tip was found, OR
+      * neither a subtotal nor a usable total is available, OR
+      * the inferred base (subtotal / total - tip) is non-positive.
+
+    The result is rounded to one decimal place because two decimals
+    are spurious precision on top of OCR noise.
+
+    Subtotal is preferred over total because it excludes tax (and on
+    most US receipts the customer tips on the pre-tax subtotal). If
+    only the total is available, we approximate by subtracting the tip
+    (``base = total - tip``) and accepting whatever tax distortion
+    that introduces — the percentage is still useful for dashboards
+    that want to bucket "15% / 18% / 20% / generous" tippers.
+    """
+    if tip is None or tip <= 0:
+        return None
+    base: float | None = None
+    if subtotal is not None and subtotal > 0:
+        base = subtotal
+    elif total is not None and total > tip:
+        base = total - tip
+    if base is None or base <= 0:
+        return None
+    pct = (tip / base) * 100.0
+    return round(pct, 1)
+
+
 def parse_receipt_text(text: str) -> ReceiptFields:
+    subtotal = _find_amount_after(text, "subtotal")
+    tax = _find_amount_after(text, "tax") or _find_amount_after(text, "vat")
+    tip = _find_tip(text)
+    total = _find_amount_after(text, "total")
     return ReceiptFields(
         vendor=_guess_vendor(text),
         date=_guess_date(text),
-        subtotal=_find_amount_after(text, "subtotal"),
-        tax=_find_amount_after(text, "tax") or _find_amount_after(text, "vat"),
-        tip=_find_tip(text),
+        subtotal=subtotal,
+        tax=tax,
+        tip=tip,
+        tip_percent=_compute_tip_percent(tip, subtotal, total),
         discount=_find_discount(text),
-        total=_find_amount_after(text, "total"),
+        total=total,
         currency=_detect_currency(text),
         payment_method=_detect_payment_method(text),
         items=_parse_items(text),
@@ -216,4 +254,11 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
             setattr(merged, f, getattr(parsed, f))
     if not merged.items:
         merged.items = parsed.items
+    # Recompute tip_percent against the merged tip + subtotal/total so a
+    # caller that only supplied a subtotal still gets a derived percent
+    # when the OCR pass discovered the tip.
+    if merged.tip_percent in (None, 0):
+        merged.tip_percent = _compute_tip_percent(
+            merged.tip, merged.subtotal, merged.total
+        )
     return merged

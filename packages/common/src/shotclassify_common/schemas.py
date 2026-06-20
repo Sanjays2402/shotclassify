@@ -62,6 +62,7 @@ class ReceiptFields(BaseModel):
     subtotal: float | None = None
     tax: float | None = None
     tip: float | None = None
+    tip_percent: float | None = None
     discount: float | None = None
     total: float | None = None
     currency: str | None = None
