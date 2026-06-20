@@ -61,8 +61,10 @@ class ReceiptFields(BaseModel):
     date: str | None = None
     subtotal: float | None = None
     tax: float | None = None
+    tip: float | None = None
     total: float | None = None
     currency: str | None = None
+    payment_method: str | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 

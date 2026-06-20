@@ -30,6 +30,28 @@ def _find_amount_after(text: str, keyword: str) -> float | None:
     return float(matches[-1].group(1).replace(",", "."))
 
 
+# Tip keywords ordered loosely by specificity. We try each in turn so a
+# receipt that prints both "Gratuity" and "Tip" lines (the European bar
+# tab pattern) still resolves to the same number.
+_TIP_KEYWORDS = ("gratuity", "tip", "service charge", "service")
+
+
+def _find_tip(text: str) -> float | None:
+    """Return the gratuity amount in the receipt, or None.
+
+    Looks for "Tip", "Gratuity", "Service charge" (and bare "Service")
+    followed by an amount. A keyword that appears more than once (e.g.
+    "Tip suggested" then the real "Tip 5.00") uses the LAST occurrence
+    so a printed suggestion table never overrides the line the customer
+    actually paid.
+    """
+    for keyword in _TIP_KEYWORDS:
+        value = _find_amount_after(text, keyword)
+        if value is not None:
+            return value
+    return None
+
+
 def _detect_currency(text: str) -> str | None:
     for symbol, code in [("$", "USD"), ("€", "EUR"), ("£", "GBP"), ("¥", "JPY")]:
         if symbol in text:
@@ -77,7 +99,10 @@ def _parse_items(text: str) -> list[ReceiptLine]:
         if not line:
             continue
         low = line.lower()
-        if any(k in low for k in ["subtotal", "total", "tax", "vat", "tip", "change", "cash"]):
+        if any(k in low for k in [
+            "subtotal", "total", "tax", "vat", "tip", "gratuity", "service",
+            "change", "cash",
+        ]):
             continue
         m = re.search(r"^(.*?)\s+(\d+(?:[.,]\d{2}))$", line)
         if not m:
@@ -98,6 +123,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         date=_guess_date(text),
         subtotal=_find_amount_after(text, "subtotal"),
         tax=_find_amount_after(text, "tax") or _find_amount_after(text, "vat"),
+        tip=_find_tip(text),
         total=_find_amount_after(text, "total"),
         currency=_detect_currency(text),
         items=_parse_items(text),
@@ -109,7 +135,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     if existing is None:
         return parsed
     merged = existing.model_copy()
-    for f in ("vendor", "date", "subtotal", "tax", "total", "currency"):
+    for f in ("vendor", "date", "subtotal", "tax", "tip", "total", "currency"):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
     if not merged.items:
