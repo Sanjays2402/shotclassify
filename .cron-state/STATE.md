@@ -6,7 +6,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 ## Stack snapshot
 - Python 3.11+, uv workspace, FastAPI API, worker, web (Next.js), packages: classify/common/extract/ocr/route/store, cli.
 - Pipeline: OCR (tesseract) -> classify (vision LLM with heuristic fallback) -> extract (per-category) -> route (yaml rules) -> store (SQLAlchemy).
-- Test runner: `uv run pytest` (~4 min full suite, 933 tests). `uv run ruff check .` for lint.
+- Test runner: `uv run pytest` (~2:20 full suite, 1036 tests). `uv run ruff check .` for lint.
 - DO NOT add heavy deps (no torch / tensorflow). opencv-headless already in.
 
 ## Conventions
@@ -16,10 +16,11 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - `redact_text` patterns live in `packages/common/src/shotclassify_common/redact.py`; adding a mode requires updating `PII_REDACT_MODES` in `packages/store/src/shotclassify_store/tenant_settings.py`.
 - Extractors in `packages/extract/src/shotclassify_extract/*.py` enrich existing fields; tests live next to other extractor tests in `tests/`.
 - Existing test patterns use `monkeypatch.setenv(...)` for env, `tmp_path` for sqlite, then `from services.api.app.main import create_app`.
-- Cross-category enrichment (e.g. URLs, language detection) belongs in `pipeline.py` and writes into `ExtractedFields.raw[<key>]` so any category benefits without needing a dedicated field.
+- Cross-category enrichment (e.g. URLs, paths, language detection) belongs in `pipeline.py` and writes into `ExtractedFields.raw[<key>]` so any category benefits without needing a dedicated field.
 - When you add a `ReceiptFields` / `ChatFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
+- Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names.
 
-## Roadmap (20 features tracked)
+## Roadmap (25 features tracked)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -35,17 +36,24 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 9. [x] Extract: cross-category URL extractor populating `ExtractedFields.raw["urls"]`.
 10. [x] Chat: hashtag (#tag) and mention (@user / @channel / @here / @everyone) extraction.
 
+### Done in tick 3 (5 features)
+11. [x] Code: Laravel, Symfony, Phoenix, Quarkus, Micronaut framework detection.
+13. [x] Receipt: ISO currency-code inference (CAD, CHF, AUD, NZD, SEK, NOK, DKK, INR, MXN, BRL, ZAR, SGD, HKD, CNY, RMB->CNY, KRW). Last-match wins.
+14. [x] Error: HTTP status code classifier — framework=http, exception=HTTP <code>, per-code likely_cause hints.
+17. [x] Receipt: line-item quantity inference ("2 x Latte 6.00 = 12.00", "Latte 2 @ 6.00", decimals + comma decimal supported).
+20. [x] Extract: cross-category file-path extractor populating `raw["paths"]` (POSIX / home / Windows drive / UNC; URL spans masked before scanning).
+
 ### Backlog
-11. [ ] Code: detect popular framework imports beyond the current set (Laravel, Symfony, Phoenix, Quarkus, Micronaut).
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
-13. [ ] Receipt: currency inference from locale phrases ("Total in CAD", "CHF", "AUD") -- expand `_detect_currency` beyond the symbol set.
-14. [ ] Error: HTTP status code classifier (5xx / 4xx pattern detection -> framework=http).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
 16. [ ] Chat: emoji density + reaction-line extraction (the `:eyes: 3` summary footer).
-17. [ ] Receipt: line-item quantity inference ("2 x Latte 6.00 = 12.00" -> qty=2 price=6).
 18. [ ] Error: .NET stacktrace support (`at Namespace.Type.Method(...)` frames + `System.NullReferenceException`).
 19. [ ] Code: SQL dialect hint (MySQL backticks, PostgreSQL `RETURNING`, SQLite `?` placeholders, MSSQL `TOP`).
-20. [ ] Extract: cross-category file-path extractor populating `raw["paths"]` (anything matching `[A-Z]:\\...` or `/abs/...`).
+21. [ ] Chat: read/delivered/unread status markers (iMessage "Delivered" / "Read" / WhatsApp double-tick) into ChatFields.raw or new field.
+22. [ ] Error: Rust panic + Python pytest assertion frame parsing (extract test_name + assertion expression).
+23. [ ] Receipt: line-item discount inference ("BOGO 50% off Latte" -> ReceiptLine with discount_pct).
+24. [ ] Extract: cross-category IP / port extractor populating `raw["network"]` (IPv4/IPv6 + `host:port`).
+25. [ ] Code: detect minified vs hand-written JS (heuristic: avg line length, lack of newlines after `;` and `{`).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -66,10 +74,25 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     an import-sort issue introduced by my own __init__.py edits) +
     pytest 933 passed / 3 skipped in 224.47s.
 
+- 2026-06-20 14:14 PT (tick 3, Cake): 5 features.
+  - 0d66411 feat(extract/code): Laravel, Symfony, Phoenix, Quarkus, Micronaut framework detection
+  - d5b8c07 feat(extract/receipt): infer currency from ISO codes (CAD, CHF, AUD, etc.)
+  - bf141a0 feat(extract/error): HTTP status classifier (framework=http)
+  - f46e68c feat(extract/receipt): line-item quantity inference (qty x desc price)
+  - c607749 feat(extract): cross-category file-path extractor into raw["paths"]
+  - Gate: ruff at baseline 536 (no new errors after two fixup amends for
+    S108 /tmp paths + N802 capital function name) + pytest 1036 passed /
+    3 skipped in 139.76s. 103 new tests across the 5 features.
+
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
 - API / middleware features still deferred because of TestClient bootstrap cost.
-- Started taking advantage of `ExtractedFields.raw` for cross-category data
-  this tick (URLs). That key is a free-form JSON dict already persisted by
-  storage, so we can keep stashing low-cost cross-category enrichments
-  there without schema migrations.
+- raw["urls"] and raw["paths"] are now both populated cross-category; the
+  path extractor masks URL spans before scanning so the two keys never
+  double-count.
+- HTTP status branch in error extractor is the final fallback before
+  the generic Error/Exception regex; this preserves all existing
+  language stacktrace classifications (regression-covered).
+- Pre-existing ruff S110 in code.py:138 (`except Exception: pass` in
+  the pygments fallback path) is NOT in this tick's diff and stays
+  baselined.
