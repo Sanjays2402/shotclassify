@@ -65,6 +65,140 @@ _RUBY_FRAME = re.compile(r"^\s*(?:from\s+)?([\w./_-]+\.rb):(\d+):in\s+`", re.MUL
 _RUBY_EXC = re.compile(r"\(([A-Z][\w:]*)\)\s*$", re.MULTILINE)
 _RUBY_MSG = re.compile(r":in\s+`[^']+':\s*(.+?)\s*\(", re.MULTILINE)
 
+# Rust panic format. Older Rust prints:
+#   thread 'main' panicked at 'index out of bounds: ...', src/main.rs:5:8
+# Modern Rust (1.72+) prints:
+#   thread 'main' panicked at src/main.rs:5:8:
+#   index out of bounds: ...
+# We accept either. ``_RUST_PANIC_OLD`` captures (message, file, line)
+# in one pass; ``_RUST_PANIC_NEW`` captures (file, line) and the message
+# is the next line.
+_RUST_PANIC_OLD = re.compile(
+    r"thread\s+'[^']*'\s+panicked\s+at\s+'(?P<msg>[^']*)',\s*"
+    r"(?P<file>[\w./\-]+\.rs):(?P<line>\d+)(?::\d+)?",
+)
+_RUST_PANIC_NEW = re.compile(
+    r"thread\s+'[^']*'\s+panicked\s+at\s+"
+    r"(?P<file>[\w./\-]+\.rs):(?P<line>\d+)(?::\d+)?:\s*\n\s*(?P<msg>[^\n]+)",
+)
+
+# Pytest assertion failure. The "long" output shape pytest emits is:
+#   ____________________ test_name ____________________
+#       def test_name():
+#   >       assert foo == bar
+#   E       AssertionError: ...
+#   tests/test_x.py:12: AssertionError
+#
+# We anchor on the final ``FILE:LINE: AssertionError`` (or
+# ``FILE:LINE: ExceptionName``) line because the visual divider rows
+# vary. We also accept the older short shape:
+#   FILE:LINE: in test_name
+#       assert foo == bar
+# This isn't a full pytest parser; it's a single-failure summary
+# extractor, which is the vast majority of pytest screenshots.
+_PYTEST_ASSERT_LINE = re.compile(
+    r"^E\s+(?P<exc>[A-Z][\w]*(?:Error|Exception|AssertionError))\s*:?\s*(?P<msg>.*)$",
+    re.MULTILINE,
+)
+_PYTEST_FAILURE_TAIL = re.compile(
+    r"^(?P<file>[\w./\-]+\.py):(?P<line>\d+):\s*(?P<exc>[A-Z][\w]*(?:Error|AssertionError|Exception))\s*$",
+    re.MULTILINE,
+)
+# pytest marks the failing source line with ``>`` followed by the
+# expression. That's an ``assert ...`` in 95% of cases but it can be
+# any expression (a function call that raised, a comparison, etc.) so
+# we capture the whole line content rather than locking to ``assert``.
+_PYTEST_ASSERT_EXPR = re.compile(r"^>\s+(?P<expr>\S.*?)\s*$", re.MULTILINE)
+
+
+def parse_rust_panic(text: str) -> tuple[str, int, str] | None:
+    """Return ``(file, line, message)`` for a Rust panic, or None.
+
+    Recognises both the pre-1.72 form
+    ``thread 'main' panicked at 'msg', src/foo.rs:5:8`` and the modern
+    1.72+ form ``thread 'main' panicked at src/foo.rs:5:8:\\nmsg``.
+    """
+    return _parse_rust_panic(text)
+
+
+def parse_pytest_failure(
+    text: str,
+) -> tuple[str, int, str | None, str | None] | None:
+    """Return ``(file, line, exception, assert_expr or message)`` for a
+    pytest failure summary, or ``None`` when the text does not look
+    like pytest output.
+    """
+    return _parse_pytest_failure(text)
+
+
+def _parse_rust_panic(text: str) -> tuple[str, int, str] | None:
+    """Return ``(file, line, message)`` for a Rust panic, or None."""
+    m = _RUST_PANIC_OLD.search(text)
+    if m:
+        return m.group("file"), int(m.group("line")), m.group("msg").strip()
+    m = _RUST_PANIC_NEW.search(text)
+    if m:
+        return m.group("file"), int(m.group("line")), m.group("msg").strip()
+    return None
+
+
+def _parse_pytest_failure(
+    text: str,
+) -> tuple[str, int, str | None, str | None] | None:
+    """Return ``(file, line, exception, assert_expr or message)`` for a
+    pytest failure summary, or None.
+
+    The exception is taken from the trailing ``FILE:LINE: ExcName``
+    line because it always reflects the actual exception class. When
+    an ``assert foo`` line is present (the ``>`` indicator pytest
+    prints) we surface the bare expression as the message so dashboards
+    can show ``assert foo == bar`` instead of the noisy multi-line
+    AssertionError detail.
+    """
+    tail = _PYTEST_FAILURE_TAIL.search(text)
+    if not tail:
+        return None
+    file_ = tail.group("file")
+    line_ = int(tail.group("line"))
+    exc = tail.group("exc")
+    expr_m = _PYTEST_ASSERT_EXPR.search(text)
+    if expr_m:
+        expr = expr_m.group("expr").strip()
+        # Strip a leading ``assert `` so dashboards show the comparison
+        # rather than the keyword. ``assert foo == bar`` -> ``foo == bar``.
+        if expr.startswith("assert "):
+            expr = expr[len("assert "):]
+        return file_, line_, exc, expr
+    # Fall back to the ``E   AssertionError: <msg>`` line if present.
+    msg_m = _PYTEST_ASSERT_LINE.search(text)
+    msg = msg_m.group("msg").strip() if msg_m else None
+    return file_, line_, exc, msg
+
+
+# Rust likely_cause helpers. Like Go panics, Rust panics commonly
+# print plain English messages, so we lean on substring matches
+# rather than parsing the panic type.
+def _rust_likely_cause(message: str | None) -> str | None:
+    if not message:
+        return None
+    low = message.lower()
+    if "index out of bounds" in low:
+        return "Index outside slice / vector bounds; check len() before indexing."
+    if "unwrap" in low and ("none" in low or "err" in low):
+        return "unwrap() on Err/None; use `?` or `match` to propagate."
+    if "attempt to divide by zero" in low:
+        return "Division by zero; guard the denominator."
+    if "stack overflow" in low:
+        return "Unbounded recursion; rewrite iteratively or grow the stack."
+    if "called `option::unwrap()` on a `none` value" in low:
+        return "unwrap() on None; use `?` or `match` to propagate."
+    if "called `result::unwrap()` on an `err` value" in low:
+        return "unwrap() on Err; use `?` or `match` to propagate."
+    if "attempt to subtract with overflow" in low or "attempt to add with overflow" in low:
+        return "Integer arithmetic overflowed; use checked_/saturating_ ops."
+    return None
+
+
 # HTTP status line patterns. Common shapes captured:
 #   HTTP/1.1 500 Internal Server Error
 #   HTTP 404 Not Found
@@ -231,6 +365,22 @@ def parse_error_text(text: str) -> ErrorFields:
     line_ = None
     exc = None
     msg = None
+    # pytest first: it's a Python failure but the tail-line + assert
+    # expression shape is unique enough that we extract test_name and
+    # the bare ``assert foo == bar`` expression instead of letting the
+    # surrounding Traceback branch take the trace.
+    pytest_hit = _parse_pytest_failure(text)
+    if pytest_hit and _PYTEST_ASSERT_EXPR.search(text):
+        file_, line_, exc, msg = pytest_hit
+        framework = "pytest"
+        return ErrorFields(
+            framework=framework,
+            exception=exc,
+            message=msg,
+            likely_cause="Assertion failed; check the expression on the `>` line.",
+            file=file_,
+            line=line_,
+        )
     if _PY_TRACE.search(text):
         framework = "python"
         for m in _PY_FRAME.finditer(text):
@@ -298,6 +448,26 @@ def parse_error_text(text: str) -> ErrorFields:
             msg = mm.group(1).strip()
         for m in _RUBY_FRAME.finditer(text):
             file_, line_ = m.group(1), int(m.group(2))
+    elif _parse_rust_panic(text) is not None:
+        # Rust panic: ``thread 'main' panicked at 'msg', src/foo.rs:5:8``
+        # (older) or ``thread 'main' panicked at src/foo.rs:5:8:\nmsg``
+        # (1.72+). We tag framework='rust' so dashboards can group Rust
+        # alongside the other systems-language panics. The exception
+        # name is always ``panic`` because Rust panics do not have a
+        # typed exception class -- the message is the discriminator.
+        framework = "rust"
+        result = _parse_rust_panic(text)
+        assert result is not None  # narrowed by the elif guard
+        file_, line_, msg = result
+        exc = "panic"
+        return ErrorFields(
+            framework=framework,
+            exception=exc,
+            message=msg,
+            likely_cause=_rust_likely_cause(msg),
+            file=file_,
+            line=line_,
+        )
     else:
         # Try the HTTP status branch BEFORE the generic Error/Exception
         # regex so a line like "HTTP/1.1 500 Internal Server Error" is
