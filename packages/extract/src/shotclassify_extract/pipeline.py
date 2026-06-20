@@ -6,6 +6,7 @@ from shotclassify_common import Category, ExtractedFields, OCRResult
 from .chat import enrich_chat
 from .code import enrich_code
 from .error import enrich_error
+from .paths import extract_paths
 from .receipt import enrich_receipt
 from .urls import extract_urls
 
@@ -27,8 +28,21 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     # everywhere (error -> docs link, receipt -> Yelp page, chat ->
     # mostly links). Callers that need only one category's URLs can
     # ignore the key; storage already persists raw as a JSON column.
-    urls = extract_urls(ocr.text or "")
+    text = ocr.text or ""
+    urls = extract_urls(text)
     if urls:
         out.raw = dict(out.raw or {})
         out.raw["urls"] = urls
+
+    # Cross-category: stash filesystem paths found in the OCR text
+    # under raw["paths"]. Mirrors the URL extractor (also runs for
+    # every category) -- error stacktraces, code snippets, terminal
+    # screenshots, and documents all reference paths and dashboards
+    # want a single key to look at. URL spans are masked out before
+    # scanning so a URL's path component does not double-count.
+    paths = extract_paths(text)
+    if paths:
+        out.raw = dict(out.raw or {})
+        out.raw["paths"] = paths
+
     return out
