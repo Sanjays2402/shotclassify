@@ -189,6 +189,77 @@ def _guess_date(text: str) -> str | None:
     return None
 
 
+# Per-item percent-off discount. Recognised shapes (matched in order):
+#
+#   "BOGO 50% off Latte 4.00"          -> desc=Latte, pct=50, price=4.00
+#   "50% off Croissant 3.50"           -> desc=Croissant, pct=50, price=3.50
+#   "Latte 5.00 (10% off)"             -> desc=Latte, pct=10, price=5.00
+#   "Latte 50% off 5.00"               -> desc=Latte, pct=50, price=5.00
+#
+# We anchor on the ``\d+%\s*off`` clause because that's the unambiguous
+# discount signal; the description, price, and order around it vary
+# wildly between printers. The price field captures the LINE price
+# (final after discount on most printers, the pre-discount on a few
+# fancy printers -- we accept either since the percent is the salient
+# datum). Pure ``50% off coupon`` summary lines without an item name
+# are NOT parsed as line items -- the existing top-level discount
+# detector already catches those.
+_LINE_PCT_OFF_LEADING = re.compile(
+    r"^(?:[A-Za-z][\w :,!-]*\s+)?"       # optional promo prefix ("BOGO ", "Member ", "Promo: BOGO ")
+    r"(?P<pct>\d{1,2}(?:\.\d{1,2})?)\s*%\s*off\s+"
+    r"(?P<desc>.+?)\s+"
+    r"[$€£¥]?\s*(?P<price>\d{1,5}(?:[.,]\d{2}))\s*$",
+    re.IGNORECASE,
+)
+_LINE_PCT_OFF_TRAILING = re.compile(
+    r"^(?P<desc>.+?)\s+"
+    r"[$€£¥]?\s*(?P<price>\d{1,5}(?:[.,]\d{2}))\s*"
+    r"\(?\s*(?P<pct>\d{1,2}(?:\.\d{1,2})?)\s*%\s*off\s*\)?\s*$",
+    re.IGNORECASE,
+)
+_LINE_PCT_OFF_INFIX = re.compile(
+    r"^(?P<desc>[A-Za-z][\w ]+?)\s+"
+    r"(?P<pct>\d{1,2}(?:\.\d{1,2})?)\s*%\s*off\s+"
+    r"[$€£¥]?\s*(?P<price>\d{1,5}(?:[.,]\d{2}))\s*$",
+    re.IGNORECASE,
+)
+
+
+def _try_pct_off(line: str) -> ReceiptLine | None:
+    """Return a ReceiptLine for any of the percent-off shapes, or None."""
+    for pat in (_LINE_PCT_OFF_LEADING, _LINE_PCT_OFF_INFIX, _LINE_PCT_OFF_TRAILING):
+        m = pat.match(line)
+        if not m:
+            continue
+        try:
+            pct = float(m.group("pct"))
+            price = float(m.group("price").replace(",", "."))
+        except ValueError:
+            continue
+        desc = m.group("desc").strip().strip(".:-")
+        # Strip generic promo / loyalty / member prefixes the leading
+        # regex may have absorbed into the desc when the loop matched
+        # via _LINE_PCT_OFF_INFIX (where ``[A-Za-z][\w ]+`` greedily
+        # took a "Member" word).
+        for prefix in ("member ", "loyalty ", "rewards ", "bogo "):
+            if desc.lower().startswith(prefix):
+                desc = desc[len(prefix):].strip()
+        if not desc or len(desc) < 2 or len(desc) > 60:
+            continue
+        if not (0 < pct <= 100):
+            continue
+        if not (0.01 <= price <= 9999):
+            continue
+        discount_amount = round(price * pct / 100.0, 2)
+        return ReceiptLine(
+            description=desc,
+            price=price,
+            discount_pct=pct,
+            discount_amount=discount_amount,
+        )
+    return None
+
+
 def _parse_items(text: str) -> list[ReceiptLine]:
     items: list[ReceiptLine] = []
     for raw in text.splitlines():
@@ -196,6 +267,19 @@ def _parse_items(text: str) -> list[ReceiptLine]:
         if not line:
             continue
         low = line.lower()
+        # 0) Per-item percent-off discount. Run BEFORE the keyword skip
+        #    so a line like ``Promo: BOGO 50% off Latte 4.00`` is parsed
+        #    as a discounted item even though it contains the
+        #    ``promo`` / ``discount`` keywords that would otherwise
+        #    push it through ``continue``. We only short-circuit when
+        #    the line genuinely has a ``\d+% off`` clause.
+        if re.search(r"\d{1,2}\s*%\s*off\b", line, re.IGNORECASE):
+            discounted = _try_pct_off(line)
+            if discounted is not None:
+                items.append(discounted)
+                if len(items) >= 30:
+                    break
+                continue
         if any(k in low for k in [
             "subtotal", "total", "tax", "vat", "tip", "gratuity", "service",
             "change", "cash", "discount", "coupon", "promo", "savings",

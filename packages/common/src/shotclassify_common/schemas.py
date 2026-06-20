@@ -54,6 +54,16 @@ class ReceiptLine(BaseModel):
     description: str
     qty: float | None = None
     price: float | None = None
+    # When the line item carries a percent-off promo (``50% off Latte``),
+    # ``discount_pct`` is the percentage that was knocked off. Stored
+    # as the raw percent value (50.0, not 0.5) so dashboards can display
+    # ``50%`` directly.
+    discount_pct: float | None = None
+    # When the line item carries an absolute-amount discount (e.g.
+    # ``Latte 5.00 -1.50``), ``discount_amount`` is the positive
+    # absolute amount knocked off. Stored positive so callers can
+    # subtract without sign confusion.
+    discount_amount: float | None = None
 
 
 class ReceiptFields(BaseModel):
