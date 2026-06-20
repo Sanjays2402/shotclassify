@@ -6,7 +6,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 ## Stack snapshot
 - Python 3.11+, uv workspace, FastAPI API, worker, web (Next.js), packages: classify/common/extract/ocr/route/store, cli.
 - Pipeline: OCR (tesseract) -> classify (vision LLM with heuristic fallback) -> extract (per-category) -> route (yaml rules) -> store (SQLAlchemy).
-- Test runner: `uv run pytest` (~5 min full suite, 753 tests). `uv run ruff check .` for lint.
+- Test runner: `uv run pytest` (~4 min full suite, 933 tests). `uv run ruff check .` for lint.
 - DO NOT add heavy deps (no torch / tensorflow). opencv-headless already in.
 
 ## Conventions
@@ -16,27 +16,36 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - `redact_text` patterns live in `packages/common/src/shotclassify_common/redact.py`; adding a mode requires updating `PII_REDACT_MODES` in `packages/store/src/shotclassify_store/tenant_settings.py`.
 - Extractors in `packages/extract/src/shotclassify_extract/*.py` enrich existing fields; tests live next to other extractor tests in `tests/`.
 - Existing test patterns use `monkeypatch.setenv(...)` for env, `tmp_path` for sqlite, then `from services.api.app.main import create_app`.
+- Cross-category enrichment (e.g. URLs, language detection) belongs in `pipeline.py` and writes into `ExtractedFields.raw[<key>]` so any category benefits without needing a dedicated field.
+- When you add a `ReceiptFields` / `ChatFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 
-## Roadmap (15 features)
+## Roadmap (20 features tracked)
 
-### Done in this tick (5 planned)
-1. [x] Receipt: tip/gratuity extraction (extract `tip` from "Tip: 5.00", "Gratuity: ..."; add field).
-2. [x] Receipt: payment method detection (cash/visa/mc/amex/discover/apple-pay).
-3. [x] Error: Go panic + Ruby/Rails stacktrace support (new frameworks + likely_cause cases).
-4. [x] Code: expanded language hints (rust/kotlin/swift/c#/elixir/php/haskell/scala) + framework guesses.
-5. [x] PII redaction: new modes for `jwt`, `aws_access_key`, `github_pat`, `slack_token`.
+### Done in tick 1 (5 features)
+1. [x] Receipt: tip/gratuity extraction.
+2. [x] Receipt: payment method detection.
+3. [x] Error: Go panic + Ruby/Rails stacktrace support.
+4. [x] Code: expanded language hints + framework guesses.
+5. [x] PII redaction: jwt, aws_access_key, github_pat, slack_token modes.
+
+### Done in tick 2 (5 features)
+6. [x] Chat: timestamp parsing from message lines (ISO / 12h AM-PM / 24h).
+7. [x] Receipt: discount / coupon / promo extraction.
+8. [x] Receipt: tip_percent derived from tip/subtotal (fallback to total - tip).
+9. [x] Extract: cross-category URL extractor populating `ExtractedFields.raw["urls"]`.
+10. [x] Chat: hashtag (#tag) and mention (@user / @channel / @here / @everyone) extraction.
 
 ### Backlog
-6. [ ] Chat: timestamp parsing from message lines (12:34, 12:34 PM, 2026-01-01T...).
-7. [ ] Receipt: discount line extraction (Discount, Coupon, Promo).
-8. [ ] Receipt: tip percentage computation (`tip_percent` derived from tip/subtotal).
-9. [ ] Code: detect popular framework imports (react, vue, django, rails, spring).
-10. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
-11. [ ] Extract: URL extractor that pulls every `http(s)://` link from OCR text into `ExtractedFields.raw["urls"]`.
-12. [ ] Extract: hashtag + mention extractor for chat screenshots (`#tag`, `@user`).
-13. [ ] Receipt: currency inference from locale phrases ("Total in CAD", "CHF", "AUD").
-14. [ ] Error: HTTP status code classifier (5xx/4xx pattern detection -> framework=http).
+11. [ ] Code: detect popular framework imports beyond the current set (Laravel, Symfony, Phoenix, Quarkus, Micronaut).
+12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
+13. [ ] Receipt: currency inference from locale phrases ("Total in CAD", "CHF", "AUD") -- expand `_detect_currency` beyond the symbol set.
+14. [ ] Error: HTTP status code classifier (5xx / 4xx pattern detection -> framework=http).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
+16. [ ] Chat: emoji density + reaction-line extraction (the `:eyes: 3` summary footer).
+17. [ ] Receipt: line-item quantity inference ("2 x Latte 6.00 = 12.00" -> qty=2 price=6).
+18. [ ] Error: .NET stacktrace support (`at Namespace.Type.Method(...)` frames + `System.NullReferenceException`).
+19. [ ] Code: SQL dialect hint (MySQL backticks, PostgreSQL `RETURNING`, SQLite `?` placeholders, MSSQL `TOP`).
+20. [ ] Extract: cross-category file-path extractor populating `raw["paths"]` (anything matching `[A-Z]:\\...` or `/abs/...`).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -47,6 +56,20 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
   - 48a349c feat(redact): JWT, AWS, GitHub, Slack token redaction modes
   - Gate: ruff (no NEW errors above baseline of 10) + pytest 850 passed / 3 skipped.
 
+- 2026-06-20 08:54 PT (tick 2, Cake): 5 features.
+  - 29aedf0 feat(extract/chat): timestamp parsing from message lines
+  - 120b0ae feat(extract/receipt): discount, coupon, promo extraction
+  - b9ecf39 feat(extract/receipt): derive tip_percent from tip and subtotal
+  - 177da1d feat(extract): cross-category URL extractor into raw["urls"]
+  - 7f8dcaa feat(extract/chat): hashtag and mention extraction
+  - Gate: ruff (no NEW errors -- baseline dropped one to 536 because I fixed
+    an import-sort issue introduced by my own __init__.py edits) +
+    pytest 933 passed / 3 skipped in 224.47s.
+
 ## Risks / notes
-- Web UI work skipped this tick — Python-only shipping for speed (test suite already costs ~5 min).
-- API/middleware features deferred because they cost a full TestClient bootstrap per test; the 20-min budget is tight.
+- Web UI work skipped again this tick -- Python-only shipping for speed.
+- API / middleware features still deferred because of TestClient bootstrap cost.
+- Started taking advantage of `ExtractedFields.raw` for cross-category data
+  this tick (URLs). That key is a free-form JSON dict already persisted by
+  storage, so we can keep stashing low-cost cross-category enrichments
+  there without schema migrations.
