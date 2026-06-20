@@ -89,6 +89,8 @@ class ChatFields(BaseModel):
     platform: str | None = None
     participants: list[str] = Field(default_factory=list)
     messages: list[dict[str, str]] = Field(default_factory=list)
+    hashtags: list[str] = Field(default_factory=list)
+    mentions: list[str] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):

@@ -1,10 +1,10 @@
 """Category-specific extractors that polish LLM output using OCR text."""
-from .receipt import enrich_receipt, parse_receipt_text
+from .chat import enrich_chat, parse_timestamp
 from .code import detect_framework, detect_language, enrich_code
 from .error import enrich_error, parse_error_text
-from .chat import enrich_chat, parse_timestamp
-from .urls import extract_urls
 from .pipeline import enrich
+from .receipt import enrich_receipt, parse_receipt_text
+from .urls import extract_urls
 
 __all__ = [
     "enrich",

@@ -125,6 +125,8 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             platform=ch.get("platform"),
             participants=ch.get("participants") or [],
             messages=ch.get("messages") or [],
+            hashtags=ch.get("hashtags") or [],
+            mentions=ch.get("mentions") or [],
         )
     if m := fields_in.get("meme"):
         fields.meme = MemeFields(**{k: m.get(k) for k in MemeFields.model_fields})

@@ -15,6 +15,91 @@ _PLATFORMS = {
 }
 
 
+# Hashtag: ``#`` followed by 1+ Unicode-letter / digit / underscore.
+# Word-boundary anchored so a literal ``#`` inside a URL fragment
+# (``...#frag``) or a Python comment line is not captured. We allow
+# digits in the tail but reject a pure-digit tag (``#123``) because
+# those are almost always issue numbers, ticket refs, or list markers
+# in screenshots — not hashtags.
+_HASHTAG_RE = re.compile(r"(?<![\w&])#([A-Za-z_][\w]{0,49})\b")
+
+# Mention: ``@`` followed by 1+ word chars (dot/dash/underscore allowed
+# inside, not at the edges). Word-boundary anchored on the LEFT so
+# ``foo@bar.com`` (an email) does NOT produce a ``@bar`` mention.
+# Rejects bare ``@`` and a single trailing punctuation.
+_MENTION_RE = re.compile(r"(?<![\w&.])@([A-Za-z_][A-Za-z0-9_.\-]{0,49})")
+
+
+# Channel-level mention keywords used by Slack/Discord that we want
+# to capture without stripping the ``@`` prefix (they are part of the
+# canonical form). We surface them lowercased and include the prefix.
+_CHANNEL_MENTIONS = ("@channel", "@here", "@everyone")
+
+
+_MAX_TAGS = 50
+_MAX_MENTIONS = 50
+
+
+def _extract_hashtags(text: str) -> list[str]:
+    """Return unique ``#tag`` matches preserving first-seen order.
+
+    Tags are NOT lowercased because case carries meaning on most
+    platforms (``#OpenAI`` vs ``#openai``). We compare via the original
+    surface form when de-duping. Pure-digit tails (``#123``) are
+    rejected at the regex level. Capped at 50.
+    """
+    if not text:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _HASHTAG_RE.finditer(text):
+        tag = "#" + m.group(1)
+        # Reject pure-digit tails defensively (regex requires a leading
+        # letter / underscore already, but a future regex change shouldn't
+        # be allowed to silently change this).
+        body = tag[1:]
+        if body.isdigit():
+            continue
+        if tag in seen:
+            continue
+        seen.add(tag)
+        out.append(tag)
+        if len(out) >= _MAX_TAGS:
+            break
+    return out
+
+
+def _extract_mentions(text: str) -> list[str]:
+    """Return unique ``@user`` mentions preserving first-seen order.
+
+    Includes the canonical channel-level mentions (``@channel``,
+    ``@here``, ``@everyone``) up front when present. Trims a single
+    trailing ``.`` / ``,`` that survived the regex tail because those
+    are almost always sentence punctuation. Capped at 50.
+    """
+    if not text:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    low = text.lower()
+    for ch in _CHANNEL_MENTIONS:
+        if ch in low and ch not in seen:
+            seen.add(ch)
+            out.append(ch)
+    for m in _MENTION_RE.finditer(text):
+        mention = "@" + m.group(1)
+        # Trim a stray trailing dot / dash from the regex tail.
+        while mention.endswith((".", "-", "_")):
+            mention = mention[:-1]
+        if mention == "@" or mention.lower() in seen:
+            continue
+        seen.add(mention.lower())
+        out.append(mention)
+        if len(out) >= _MAX_MENTIONS:
+            break
+    return out
+
+
 # Recognised timestamp shapes found in chat screenshots. Each entry is
 # (pattern, normalizer). Patterns are anchored with a leading non-word
 # context so we never eat a digit out of the middle of a phone number.
@@ -151,4 +236,34 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
             if ts:
                 msg["time"] = ts
                 msg["text"] = _strip_timestamp(body)
-    return ChatFields(platform=platform, participants=participants, messages=messages)
+    # Hashtags and mentions: union of caller-supplied + freshly-parsed.
+    # We parse against the FULL OCR text (not just the message bodies)
+    # so a screenshot header that lists ``#chan @owner`` outside the
+    # transcript is still captured. Caller values are preserved
+    # verbatim and de-duped case-insensitively for mentions; hashtags
+    # keep case because case carries meaning on most platforms.
+    seen_tags: set[str] = set()
+    hashtags = list(existing.hashtags) if existing else []
+    for t in hashtags:
+        seen_tags.add(t)
+    for t in _extract_hashtags(text):
+        if t not in seen_tags:
+            seen_tags.add(t)
+            hashtags.append(t)
+
+    seen_mentions: set[str] = set()
+    mentions = list(existing.mentions) if existing else []
+    for m in mentions:
+        seen_mentions.add(m.lower())
+    for m in _extract_mentions(text):
+        if m.lower() not in seen_mentions:
+            seen_mentions.add(m.lower())
+            mentions.append(m)
+
+    return ChatFields(
+        platform=platform,
+        participants=participants,
+        messages=messages,
+        hashtags=hashtags,
+        mentions=mentions,
+    )
