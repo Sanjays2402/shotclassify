@@ -3,6 +3,7 @@ from .receipt import enrich_receipt, parse_receipt_text
 from .code import detect_framework, detect_language, enrich_code
 from .error import enrich_error, parse_error_text
 from .chat import enrich_chat, parse_timestamp
+from .urls import extract_urls
 from .pipeline import enrich
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "parse_error_text",
     "enrich_chat",
     "parse_timestamp",
+    "extract_urls",
 ]
