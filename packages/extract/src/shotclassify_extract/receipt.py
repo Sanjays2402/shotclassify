@@ -52,6 +52,42 @@ def _find_tip(text: str) -> float | None:
     return None
 
 
+# Discount keywords ordered loosely by specificity. Discounts on
+# receipts are commonly printed as "Discount" / "Coupon" / "Promo" /
+# "Member savings" / "Loyalty". Same last-wins semantics as tips: a
+# header that lists available discounts at the top of the receipt
+# must not override the actual line the cashier applied at checkout.
+_DISCOUNT_KEYWORDS = (
+    "discount",
+    "coupon",
+    "promo",
+    "promo code",
+    "savings",
+    "loyalty",
+    "rewards",
+)
+
+
+def _find_discount(text: str) -> float | None:
+    """Return the absolute discount amount applied to the receipt, or None.
+
+    Most printers render discounts as a positive number on a line
+    labelled "Discount" / "Coupon" / "Promo" / "Savings" / "Loyalty" /
+    "Rewards". The underlying ``_find_amount_after`` regex requires
+    a digit immediately after the keyword (with at most one ``:`` or
+    ``-`` separator and optional whitespace), so a printer that writes
+    ``Discount: -2.00`` (sign in front of the amount) is NOT captured
+    by this version. We chose not to widen the shared regex because
+    that would also change how subtotal / tax / tip read malformed
+    receipts; a future ticket can add a dedicated signed-amount path.
+    """
+    for keyword in _DISCOUNT_KEYWORDS:
+        value = _find_amount_after(text, keyword)
+        if value is not None:
+            return value
+    return None
+
+
 def _detect_currency(text: str) -> str | None:
     for symbol, code in [("$", "USD"), ("€", "EUR"), ("£", "GBP"), ("¥", "JPY")]:
         if symbol in text:
@@ -135,7 +171,8 @@ def _parse_items(text: str) -> list[ReceiptLine]:
         low = line.lower()
         if any(k in low for k in [
             "subtotal", "total", "tax", "vat", "tip", "gratuity", "service",
-            "change", "cash",
+            "change", "cash", "discount", "coupon", "promo", "savings",
+            "loyalty", "rewards",
         ]):
             continue
         m = re.search(r"^(.*?)\s+(\d+(?:[.,]\d{2}))$", line)
@@ -158,6 +195,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         subtotal=_find_amount_after(text, "subtotal"),
         tax=_find_amount_after(text, "tax") or _find_amount_after(text, "vat"),
         tip=_find_tip(text),
+        discount=_find_discount(text),
         total=_find_amount_after(text, "total"),
         currency=_detect_currency(text),
         payment_method=_detect_payment_method(text),
@@ -171,8 +209,8 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         return parsed
     merged = existing.model_copy()
     for f in (
-        "vendor", "date", "subtotal", "tax", "tip", "total", "currency",
-        "payment_method",
+        "vendor", "date", "subtotal", "tax", "tip", "discount", "total",
+        "currency", "payment_method",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
