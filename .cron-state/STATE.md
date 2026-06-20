@@ -39,7 +39,13 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
 
 ## Tick log
-- 2026-06-20 05:37 PT (tick 1, Cake): bootstrap.
+- 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
+  - 0d85454 feat(extract/receipt): tip and gratuity extraction
+  - 9ac3b34 feat(extract/receipt): payment method detection
+  - f36757d feat(extract/error): Go panic and Ruby/Rails stacktrace support
+  - 1afe733 feat(extract/code): more languages + framework detection
+  - 48a349c feat(redact): JWT, AWS, GitHub, Slack token redaction modes
+  - Gate: ruff (no NEW errors above baseline of 10) + pytest 850 passed / 3 skipped.
 
 ## Risks / notes
 - Web UI work skipped this tick — Python-only shipping for speed (test suite already costs ~5 min).
