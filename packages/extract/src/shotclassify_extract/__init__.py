@@ -8,6 +8,7 @@ from .error import (
     parse_pytest_failure,
     parse_rust_panic,
 )
+from .network import extract_network
 from .paths import extract_paths
 from .pipeline import enrich
 from .receipt import enrich_receipt, parse_receipt_text
@@ -30,4 +31,5 @@ __all__ = [
     "parse_timestamp",
     "extract_urls",
     "extract_paths",
+    "extract_network",
 ]

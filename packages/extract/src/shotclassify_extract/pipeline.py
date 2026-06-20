@@ -6,6 +6,7 @@ from shotclassify_common import Category, ExtractedFields, OCRResult
 from .chat import enrich_chat
 from .code import enrich_code
 from .error import enrich_error
+from .network import extract_network
 from .paths import extract_paths
 from .receipt import enrich_receipt
 from .urls import extract_urls
@@ -44,5 +45,16 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if paths:
         out.raw = dict(out.raw or {})
         out.raw["paths"] = paths
+
+    # Cross-category: stash IP / IPv6 / host:port endpoints found in
+    # the OCR text under raw["network"]. Network endpoints appear in
+    # every category -- error stacktraces print the upstream that
+    # refused the connection, code snippets bind to ``0.0.0.0:8080``,
+    # terminal screenshots paste shell URIs. URL spans are masked
+    # before scanning so a URL's authority does not double-count.
+    network = extract_network(text)
+    if network:
+        out.raw = dict(out.raw or {})
+        out.raw["network"] = network
 
     return out
