@@ -89,13 +89,40 @@ def _find_discount(text: str) -> float | None:
 
 
 def _detect_currency(text: str) -> str | None:
-    for symbol, code in [("$", "USD"), ("€", "EUR"), ("£", "GBP"), ("¥", "JPY")]:
+    # 1) Unambiguous currency symbols win when present. ``$`` is
+    #    canonically USD here because the symbol is shared across many
+    #    dollar currencies; a later locale-code pass corrects to CAD /
+    #    AUD / NZD / etc. when the receipt also prints those codes.
+    for symbol, code in [("€", "EUR"), ("£", "GBP"), ("¥", "JPY")]:
         if symbol in text:
             return code
-    if re.search(r"\busd\b", text, re.IGNORECASE):
+    # 2) Three-letter ISO codes that appear as bare words. We match
+    #    them WITH word boundaries so an embedded "scAUDio" or a CSS
+    #    class "btn-aud" cannot trigger them. Order matters when a
+    #    receipt prints both "USD" and "CAD" (a tourist tab in CAD
+    #    where the operator forgot to switch from a USD template):
+    #    prefer the FIRST match seen left-to-right since the latter
+    #    printed code is usually the receipt's actual currency, and
+    #    we use last-match for that reason.
+    iso_codes = (
+        "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "NZD", "CHF",
+        "SEK", "NOK", "DKK", "INR", "MXN", "BRL", "ZAR", "SGD",
+        "HKD", "CNY", "RMB", "KRW",
+    )
+    # Build one regex with word boundaries; this is O(n) over the text.
+    iso_re = re.compile(
+        r"\b(" + "|".join(iso_codes) + r")\b", re.IGNORECASE
+    )
+    matches = iso_re.findall(text)
+    if matches:
+        # Last match wins: receipts commonly print a header (vendor's
+        # default currency) and then the actual line currency near the
+        # total. The closing "Total in CAD" beats a header "USD".
+        code = matches[-1].upper()
+        return "CNY" if code == "RMB" else code
+    # 3) Symbol-only fallback: dollar sign with no explicit code is USD.
+    if "$" in text:
         return "USD"
-    if re.search(r"\beur\b", text, re.IGNORECASE):
-        return "EUR"
     return None
 
 
