@@ -11,25 +11,73 @@ except Exception:  # pragma: no cover
     ClassNotFound = Exception  # type: ignore
 
 
-_FAST_HINTS = {
-    "python": [r"def ", r"import ", r"from .* import", r"print("],
-    "javascript": ["const ", "let ", "function ", "=>", "console.log"],
-    "typescript": [": string", ": number", "interface ", "type "],
-    "go": ["package ", "func ", "fmt."],
-    "rust": ["fn ", "let mut", "impl ", "::<"],
-    "java": ["public class", "System.out", "void main"],
-    "ruby": ["def ", "end", "puts "],
-    "shell": ["#!/bin/", "$(", "echo "],
-    "sql": ["SELECT ", "FROM ", "WHERE ", "INSERT INTO"],
+# Each entry is (language tag, list of substring needles). Order MATTERS:
+# more-specific languages are checked first so that, for example, a
+# Swift snippet's ``import Foundation`` wins before Python's bare
+# ``import`` substring. Likewise SQL (``SELECT`` / ``FROM``) wins
+# before Python (which also has ``from `` as a needle for ``from x
+# import y``). Substrings are matched case-insensitively against the
+# raw text.
+_FAST_HINTS = (
+    # Highly-distinctive sigils / shebangs first so they cannot lose
+    # to a generic keyword later.
+    ("shell", ["#!/bin/", "#!/usr/bin/env bash", "#!/usr/bin/env sh"]),
+    ("php", ["<?php"]),
+    # SQL ahead of Python so ``SELECT a FROM t`` does not lose to
+    # Python's ``from`` substring.
+    ("sql", ["SELECT ", "INSERT INTO", "UPDATE ", "DELETE FROM"]),
+    # Highly-distinctive imports / sigils next.
+    ("c#", ["Console.WriteLine", "using System;", "public static void Main", "namespace "]),
+    ("swift", ["import Foundation", "@objc", "guard let "]),
+    ("kotlin", ["companion object", "fun main("]),
+    ("scala", ["extends App", "import scala", "object Main extends"]),
+    ("haskell", ["import qualified", "main = do", ":: IO ", "putStrLn "]),
+    ("elixir", ["defmodule ", "defp ", "iex>", "|> ", "IO.puts"]),
+    ("rust", [
+        "fn main()", "let mut ", "impl ", "::<", "println!", "Result<", "Option<",
+    ]),
+    # Go BEFORE generic-keyword languages: ``package main`` and
+    # ``fmt.Println`` are unique to Go.
+    ("go", ["package main", "fmt.Println", "fmt.Printf", "fmt.Errorf"]),
+    ("typescript", [": string", ": number", "interface ", "type "]),
+    ("javascript", ["console.log", "const ", "let ", "function ", "=>"]),
+    ("python", [
+        "def ", "import ", "from ", "print(", "self.", "    return ",
+    ]),
+    ("java", ["public class", "System.out", "void main"]),
+    ("ruby", ["puts ", "require ", "def "]),
+)
+
+
+# Lightweight framework / library guesses driven off imports and
+# top-level identifiers. Returns None when no strong signal is found
+# so the caller can decide whether to fall back to the bare language.
+_FRAMEWORK_HINTS = {
+    "react": ["import react", "from 'react'", 'from "react"', "useState(", "useEffect("],
+    "vue": ["createApp(", "defineComponent(", "<script setup>"],
+    "angular": ["@Component(", "@NgModule(", "BrowserModule"],
+    "nextjs": ["from 'next/", 'from "next/', "getServerSideProps", "getStaticProps"],
+    "django": ["from django", "django.db", "models.Model", "urlpatterns"],
+    "flask": ["from flask", "Flask(__name__)", "@app.route"],
+    "fastapi": ["from fastapi", "FastAPI(", "@app.get", "@app.post"],
+    "rails": ["ActiveRecord::Base", "ApplicationController", "Rails.application"],
+    "spring": ["@SpringBootApplication", "@RestController", "@Autowired"],
+    "express": ["require('express')", 'require("express")', "express()"],
+    "gin": ["gin.New(", "gin.Default(", "*gin.Context"],
+    "actix": ["actix_web", "HttpServer::new"],
+    "tokio": ["tokio::main", "tokio::spawn", "tokio::runtime"],
 }
 
 
 def detect_language(code: str) -> str | None:
     if not code.strip():
         return None
-    # Try fast hints first — Pygments "guess_lexer" is notoriously wobbly on short snippets.
+    # Substring match is fine for our needles because we picked tokens
+    # that are reasonably distinctive within each language's slot in
+    # the ordered list. Match case-insensitively so SQL keywords work
+    # regardless of how the screenshot vendor cased them.
     upper = code.upper()
-    for lang, needles in _FAST_HINTS.items():
+    for lang, needles in _FAST_HINTS:
         if any(n.upper() in upper for n in needles):
             return lang
     if guess_lexer is not None:
@@ -42,6 +90,23 @@ def detect_language(code: str) -> str | None:
         except Exception:
             pass
     return "text"
+
+
+def detect_framework(code: str) -> str | None:
+    """Return a popular-framework tag (``react``, ``django``, ``rails``,
+    ``spring`` etc.) or ``None`` if no strong signal is present.
+
+    Used by the API and dashboards to group code-snippet captures by
+    the stack the operator is most likely working on, without forcing
+    a heavier LLM round trip.
+    """
+    if not code or not code.strip():
+        return None
+    body = code  # case-sensitive checks; framework needles include exact tokens
+    for tag, needles in _FRAMEWORK_HINTS.items():
+        if any(n in body for n in needles):
+            return tag
+    return None
 
 
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
