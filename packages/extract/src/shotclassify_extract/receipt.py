@@ -63,6 +63,40 @@ def _detect_currency(text: str) -> str | None:
     return None
 
 
+# Patterns for payment method detection. Each entry is (canonical name,
+# regex). The first regex to match wins, so order from MORE specific to
+# LESS specific (e.g. "American Express" before "amex" before bare
+# "card") to avoid a generic "credit card" line clobbering a clearly
+# labelled "VISA ****1234" line.
+_PAYMENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("apple_pay", re.compile(r"\bapple\s*pay\b", re.IGNORECASE)),
+    ("google_pay", re.compile(r"\bgoogle\s*pay\b", re.IGNORECASE)),
+    ("amex", re.compile(r"\b(american\s+express|amex)\b", re.IGNORECASE)),
+    ("visa", re.compile(r"\bvisa\b", re.IGNORECASE)),
+    ("mastercard", re.compile(r"\b(master\s*card|mastercard|m/?c)\b", re.IGNORECASE)),
+    ("discover", re.compile(r"\bdiscover\b", re.IGNORECASE)),
+    ("debit", re.compile(r"\bdebit(\s+card)?\b", re.IGNORECASE)),
+    ("credit", re.compile(r"\bcredit(\s+card)?\b", re.IGNORECASE)),
+    ("cash", re.compile(r"\bcash\b", re.IGNORECASE)),
+)
+
+
+def _detect_payment_method(text: str) -> str | None:
+    """Return a canonical payment-method tag, or None if nothing matched.
+
+    Tags are normalised to lowercase identifiers (``visa``, ``amex``,
+    ``mastercard``, ``apple_pay``, ``google_pay``, ``discover``,
+    ``debit``, ``credit``, ``cash``) so dashboards and routing rules
+    can match on a small enum instead of every printer's wording.
+    """
+    if not text:
+        return None
+    for name, pattern in _PAYMENT_PATTERNS:
+        if pattern.search(text):
+            return name
+    return None
+
+
 def _guess_vendor(text: str) -> str | None:
     for raw in text.splitlines():
         line = raw.strip()
@@ -126,6 +160,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         tip=_find_tip(text),
         total=_find_amount_after(text, "total"),
         currency=_detect_currency(text),
+        payment_method=_detect_payment_method(text),
         items=_parse_items(text),
     )
 
@@ -135,7 +170,10 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     if existing is None:
         return parsed
     merged = existing.model_copy()
-    for f in ("vendor", "date", "subtotal", "tax", "tip", "total", "currency"):
+    for f in (
+        "vendor", "date", "subtotal", "tax", "tip", "total", "currency",
+        "payment_method",
+    ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
     if not merged.items:
