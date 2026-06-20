@@ -12,6 +12,35 @@ _JS_AT = re.compile(r"\s+at\s+\S+\s+\(([^):]+):(\d+):(\d+)\)")
 _JS_EXC = re.compile(r"^(\w*Error)\s*:\s*(.*)$", re.MULTILINE)
 _JAVA_EXC = re.compile(r"^(?:Exception in thread .* )?([\w.$]+(?:Exception|Error))\s*:\s*(.*)$", re.MULTILINE)
 
+# .NET / C# stacktraces. The CLR prints exceptions as
+# ``System.NullReferenceException: Object reference ...`` followed by
+# frames like ``   at Foo.Bar.Baz(int x) in C:\src\x.cs:line 42``.
+# Some traces (web logs, container output) omit the file/line portion
+# and only show ``   at Namespace.Type.Method(...)``. We accept both.
+#
+# We require the exception namespace to start with ``System.`` or any
+# CamelCase ``Word.Word`` with an ``Exception`` suffix so the regex does
+# not accidentally fire on a generic Python or Java line.
+_DOTNET_EXC = re.compile(
+    r"^([A-Z][\w]*(?:\.[A-Z][\w]*)+Exception)\s*:\s*(.*)$",
+    re.MULTILINE,
+)
+# Frame WITH source file/line: ``   at NS.T.M(args) in C:\path\f.cs:line 12``
+# The file segment is a non-whitespace blob ending in ``.cs`` / ``.vb`` /
+# ``.fs`` -- using ``\S+?`` (non-greedy) lets Windows drive paths like
+# ``C:\src\App.cs`` survive the drive-letter colon (a ``[^:]`` class
+# would stop at the first ``:`` and miss ``:line`` entirely).
+_DOTNET_FRAME_FILE = re.compile(
+    r"^\s*at\s+[\w.<>`\$]+(?:\([^)]*\))?\s+in\s+(?P<file>\S+?(?:\.cs|\.vb|\.fs)):line\s+(?P<line>\d+)\s*$",
+    re.MULTILINE,
+)
+# Frame WITHOUT source: ``   at NS.T.M(args)``. Used only to detect that
+# this trace looks like .NET when no file/line is present.
+_DOTNET_FRAME_BARE = re.compile(
+    r"^\s*at\s+[A-Z][\w<>`\$]*(?:\.[A-Z][\w<>`\$]*)+\s*\([^)]*\)\s*$",
+    re.MULTILINE,
+)
+
 # Go panic format:
 #   panic: runtime error: invalid memory address or nil pointer dereference
 #   [signal SIGSEGV...]
@@ -167,6 +196,30 @@ def _likely_cause(framework: str, exception: str | None, message: str | None) ->
             return "Gem or file failed to load; check Gemfile / load path."
         if "activerecord::recordnotfound" in exc:
             return "ActiveRecord lookup returned no row; guard with find_by."
+    # .NET / CLR causes. The .NET branch tags ``framework='dotnet'`` and
+    # the exception name keeps its namespace (``System.NullReferenceException``)
+    # so dashboards can still group by short or full form.
+    if framework == "dotnet":
+        if "nullreferenceexception" in exc:
+            return "Dereferenced a null reference; add null check or initialize."
+        if "argumentnullexception" in exc:
+            return "Argument was null where the method requires a value."
+        if "argumentoutofrangeexception" in exc or "indexoutofrangeexception" in exc:
+            return "Index or argument outside the allowed range."
+        if "invalidoperationexception" in exc:
+            return "Object is in a state that does not permit the operation."
+        if "filenotfoundexception" in exc:
+            return "Referenced file is missing on disk; check path and packaging."
+        if "unauthorizedaccessexception" in exc:
+            return "Filesystem or registry permission denied; check ACLs."
+        if "dividebyzeroexception" in exc:
+            return "Division by zero; guard the denominator."
+        if "stackoverflowexception" in exc:
+            return "Unbounded recursion; add a base case or convert to iteration."
+        if "outofmemoryexception" in exc:
+            return "Process exceeded its memory budget; reduce working set."
+        if "taskcanceledexception" in exc or "operationcanceledexception" in exc:
+            return "Operation was cancelled (timeout or token); inspect deadlines."
     return None
 
 
@@ -193,6 +246,21 @@ def parse_error_text(text: str) -> ErrorFields:
         em = _JS_EXC.search(text)
         if em:
             exc, msg = em.group(1), em.group(2).strip()
+    elif _DOTNET_FRAME_FILE.search(text) or (
+        _DOTNET_FRAME_BARE.search(text) and _DOTNET_EXC.search(text)
+    ):
+        # .NET / CLR. We detect on the FRAME shape (``at NS.T.M() in
+        # foo.cs:line 12`` OR bare ``at NS.T.M()`` paired with a
+        # ``\w.\w+Exception`` exception line) so we don't steal JVM
+        # traces that print frames as ``at com.x.Y.z(Y.java:12)``.
+        framework = "dotnet"
+        em = _DOTNET_EXC.search(text)
+        if em:
+            exc, msg = em.group(1), em.group(2).strip()
+        # Walk every "in foo.cs:line N" frame; the LAST one wins,
+        # mirroring how the Python branch finds the innermost frame.
+        for m in _DOTNET_FRAME_FILE.finditer(text):
+            file_, line_ = m.group("file").strip(), int(m.group("line"))
     elif _JAVA_EXC.search(text):
         framework = "jvm"
         em = _JAVA_EXC.search(text)
