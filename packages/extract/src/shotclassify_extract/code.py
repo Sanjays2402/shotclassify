@@ -61,11 +61,59 @@ _FRAMEWORK_HINTS = {
     "flask": ["from flask", "Flask(__name__)", "@app.route"],
     "fastapi": ["from fastapi", "FastAPI(", "@app.get", "@app.post"],
     "rails": ["ActiveRecord::Base", "ApplicationController", "Rails.application"],
+    # JVM microframeworks. Quarkus and Micronaut both compete with
+    # Spring on the JVM. Their needles are distinct from Spring's
+    # (`io.quarkus` / `io.micronaut` vs `@SpringBootApplication`) so
+    # iteration order rarely matters in practice — but we still put
+    # them BEFORE `spring` so a Quarkus extension that happens to use
+    # `@RestController` (from a Spring compatibility shim) still tags
+    # the file as Quarkus, which is the more specific signal.
+    "quarkus": [
+        "io.quarkus",
+        "@QuarkusTest",
+        "@ApplicationScoped",
+        "quarkus.platform",
+    ],
+    "micronaut": [
+        "io.micronaut",
+        "@MicronautTest",
+        "io.micronaut.http",
+        "io.micronaut.runtime",
+    ],
     "spring": ["@SpringBootApplication", "@RestController", "@Autowired"],
     "express": ["require('express')", 'require("express")', "express()"],
     "gin": ["gin.New(", "gin.Default(", "*gin.Context"],
     "actix": ["actix_web", "HttpServer::new"],
     "tokio": ["tokio::main", "tokio::spawn", "tokio::runtime"],
+    # PHP web frameworks. Laravel's facades (`Illuminate\\`) and Artisan
+    # commands are unique enough to identify the framework even when the
+    # surrounding code looks like vanilla PHP. Symfony uses the
+    # `Symfony\\Component` and `App\\Controller` conventions plus the
+    # `@Route(...)` annotation.
+    "laravel": [
+        "use Illuminate\\",
+        "Illuminate\\Support",
+        "Illuminate\\Http",
+        "extends Controller",
+        "Artisan::",
+        "->middleware(",
+    ],
+    "symfony": [
+        "use Symfony\\Component",
+        "Symfony\\Bundle",
+        "extends AbstractController",
+        "#[Route(",
+        "@Route(",
+    ],
+    # Elixir Phoenix uses `Phoenix.Router`, `Phoenix.Endpoint`, and the
+    # pipe-through router macro. Keep these tight so a bare Elixir
+    # snippet still classifies as plain Elixir at the language layer.
+    "phoenix": [
+        "use Phoenix.Router",
+        "Phoenix.Endpoint",
+        "Phoenix.LiveView",
+        "pipe_through ",
+    ],
 }
 
 
