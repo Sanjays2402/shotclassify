@@ -74,6 +74,11 @@ class CodeFields(BaseModel):
     language: str | None = None
     code: str = ""
     line_count: int = 0
+    # When ``language == "sql"`` (or any SQL-flavoured tag), this field
+    # narrows the SQL dialect to one of: ``mysql`` / ``postgres`` /
+    # ``sqlite`` / ``mssql``. ``None`` means either non-SQL code or
+    # ambiguous ANSI SQL without dialect-specific syntax.
+    dialect: str | None = None
 
 
 class ErrorFields(BaseModel):

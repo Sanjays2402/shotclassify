@@ -1,6 +1,8 @@
 """Code snippet extractor: Pygments lexer guess, line count, code body."""
 from __future__ import annotations
 
+import re
+
 from shotclassify_common import CodeFields, OCRResult
 
 try:
@@ -157,11 +159,119 @@ def detect_framework(code: str) -> str | None:
     return None
 
 
+# SQL dialect detection. Returns a lowercase dialect tag for SQL
+# snippets so dashboards can group MySQL vs PostgreSQL vs SQLite vs
+# MSSQL captures, or ``None`` when the code is not SQL (or doesn't
+# emit enough signal to pick a dialect confidently).
+#
+# Signals (case-insensitive comparisons unless noted) -- the FIRST
+# matching dialect wins, in this priority order:
+#
+#   mssql     - ``TOP n`` after SELECT, ``NVARCHAR``, ``GETDATE()``,
+#               ``[col]`` square-bracket quoting, ``WITH (NOLOCK)``.
+#   postgres  - ``RETURNING`` clause, ``::TYPE`` casts, ``$1``/``$N``
+#               placeholders, ``SERIAL`` column type, ``ILIKE``.
+#   mysql     - ``AUTO_INCREMENT`` (snake), ``ENGINE=``, ``\`column\``
+#               backtick quoting, ``LIMIT n OFFSET m``.
+#   sqlite    - ``AUTOINCREMENT`` (no underscore, single word),
+#               ``pragma`` directives, ``sqlite_master`` table.
+#
+# Ambiguous SQL (e.g. ANSI-style ``SELECT * FROM t WHERE x = ?``)
+# returns ``None`` -- the caller already knows the language is SQL
+# from ``detect_language``; we only commit to a dialect when at least
+# one strong signal is present.
+_SQL_DIALECT_HINTS: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
+    (
+        "mssql",
+        (
+            re.compile(r"\bSELECT\s+TOP\s+\d+\b", re.IGNORECASE),
+            re.compile(r"\bNVARCHAR\s*\(", re.IGNORECASE),
+            re.compile(r"\bGETDATE\s*\(\s*\)", re.IGNORECASE),
+            re.compile(r"\bWITH\s*\(\s*NOLOCK\s*\)", re.IGNORECASE),
+            # Square-bracket identifier quoting. Require it to wrap a
+            # plausible identifier so a JSON path / generic ``[0]``
+            # doesn't trigger. Followed by an operator, comma, paren,
+            # whitespace, or end-of-string so a query that ends with
+            # ``FROM [Users]`` still tags.
+            re.compile(r"\[[A-Za-z_][A-Za-z0-9_ ]*\](?=[\s=,)]|$)"),
+            re.compile(r"@@(?:IDENTITY|ROWCOUNT|VERSION)\b", re.IGNORECASE),
+        ),
+    ),
+    (
+        "postgres",
+        (
+            re.compile(r"\bRETURNING\b", re.IGNORECASE),
+            # ``$1`` / ``$2`` placeholders. Require a word boundary on
+            # the left so a regex pattern like ``r'\$1'`` in surrounding
+            # code doesn't trigger.
+            re.compile(r"(?<![\w])\$\d+\b"),
+            re.compile(r"::(?:int|integer|bigint|text|varchar|uuid|jsonb?|"
+                       r"timestamp(?:tz)?|date|bool(?:ean)?|numeric|float|"
+                       r"double precision)\b", re.IGNORECASE),
+            re.compile(r"\bSERIAL\b|\bBIGSERIAL\b", re.IGNORECASE),
+            re.compile(r"\bILIKE\b", re.IGNORECASE),
+            re.compile(r"\bON CONFLICT\b", re.IGNORECASE),
+        ),
+    ),
+    (
+        "mysql",
+        (
+            re.compile(r"\bAUTO_INCREMENT\b", re.IGNORECASE),
+            re.compile(r"\bENGINE\s*=\s*(?:InnoDB|MyISAM|MEMORY|ARCHIVE)\b", re.IGNORECASE),
+            # Backtick-quoted identifier. Same defence as MSSQL: needs
+            # to look like an identifier.
+            re.compile(r"`[A-Za-z_][A-Za-z0-9_]*`"),
+            re.compile(r"\bLIMIT\s+\d+\s*,\s*\d+\b", re.IGNORECASE),
+            re.compile(r"\bUNSIGNED\b", re.IGNORECASE),
+            re.compile(r"\bDEFAULT CHARSET\s*=\s*\w+", re.IGNORECASE),
+        ),
+    ),
+    (
+        "sqlite",
+        (
+            # SQLite uses one-word AUTOINCREMENT (no underscore).
+            re.compile(r"\bAUTOINCREMENT\b"),
+            re.compile(r"\bPRAGMA\b", re.IGNORECASE),
+            re.compile(r"\bsqlite_master\b", re.IGNORECASE),
+            re.compile(r"\bWITHOUT\s+ROWID\b", re.IGNORECASE),
+        ),
+    ),
+)
+
+
+def detect_sql_dialect(code: str) -> str | None:
+    """Return ``mssql`` / ``postgres`` / ``mysql`` / ``sqlite`` for
+    SQL snippets with a strong dialect signal, or ``None`` otherwise.
+
+    The detection iterates dialects in priority order and returns the
+    first match. Order matters because some dialect features overlap
+    (e.g. MySQL and PostgreSQL both accept ``LIMIT n``); we anchor on
+    the dialect-specific features (``AUTO_INCREMENT``, ``RETURNING``,
+    ``TOP``, ``AUTOINCREMENT``) so ambiguous ANSI SQL falls through to
+    ``None``.
+    """
+    if not code or not code.strip():
+        return None
+    for tag, patterns in _SQL_DIALECT_HINTS:
+        if any(p.search(code) for p in patterns):
+            return tag
+    return None
+
+
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     code = (existing.code if existing and existing.code else ocr.text or "").strip()
+    language = (existing.language if existing and existing.language else None) or detect_language(code)
+    # Dialect narrowing runs only when the inferred language looks like
+    # SQL -- it's a no-op for every other language, so the cost is a
+    # single string check per snippet. The LLM-supplied dialect (if any)
+    # always wins so a caller that already knows the dialect is not
+    # second-guessed by the heuristic.
+    dialect = existing.dialect if existing and existing.dialect else None
+    if dialect is None and language and language.lower().startswith("sql"):
+        dialect = detect_sql_dialect(code)
     return CodeFields(
-        language=(existing.language if existing and existing.language else None)
-        or detect_language(code),
+        language=language,
         code=code,
         line_count=len(code.splitlines()),
+        dialect=dialect,
     )
