@@ -36,6 +36,93 @@ _RUBY_FRAME = re.compile(r"^\s*(?:from\s+)?([\w./_-]+\.rb):(\d+):in\s+`", re.MUL
 _RUBY_EXC = re.compile(r"\(([A-Z][\w:]*)\)\s*$", re.MULTILINE)
 _RUBY_MSG = re.compile(r":in\s+`[^']+':\s*(.+?)\s*\(", re.MULTILINE)
 
+# HTTP status line patterns. Common shapes captured:
+#   HTTP/1.1 500 Internal Server Error
+#   HTTP 404 Not Found
+#   GET /api/users -> 502 Bad Gateway
+#   status: 503
+#   Response: 401 Unauthorized
+# We accept any 1xx-5xx three-digit code that follows the word HTTP or
+# an explicit "status"/"response" prefix to avoid catching arbitrary
+# three-digit numbers in stacktraces (line numbers, byte offsets).
+_HTTP_LINE = re.compile(
+    r"\b(?:HTTP(?:/\d+(?:\.\d+)?)?|status|response)\b[^\d\n]{0,12}"
+    r"(?P<code>[1-5]\d{2})\b\s*(?P<reason>[A-Za-z][\w \-/.]{0,40})?",
+    re.IGNORECASE,
+)
+# Reason-phrase only path: "404 Not Found" with no HTTP prefix. We
+# require the reason phrase to start with an uppercase letter so a
+# bare "500 dollars" cannot match.
+_HTTP_CODE_REASON = re.compile(
+    r"\b(?P<code>[1-5]\d{2})\s+(?P<reason>(?:Not Found|Unauthorized|Forbidden|"
+    r"Internal Server Error|Bad Gateway|Bad Request|Service Unavailable|"
+    r"Gateway Timeout|Too Many Requests|Method Not Allowed|Conflict|"
+    r"Unprocessable Entity|Payload Too Large|OK|Created|Accepted|"
+    r"No Content|Moved Permanently|Found|See Other|Not Modified|"
+    r"Temporary Redirect|Permanent Redirect))\b"
+)
+
+
+def _http_status_class(code: int) -> str:
+    if 100 <= code < 200:
+        return "informational"
+    if 200 <= code < 300:
+        return "success"
+    if 300 <= code < 400:
+        return "redirect"
+    if 400 <= code < 500:
+        return "client error"
+    return "server error"
+
+
+def _http_likely_cause(code: int, reason: str | None) -> str | None:
+    """Return a one-line operator-friendly hint for the HTTP status."""
+    # Specific high-frequency codes get tailored hints; the rest fall
+    # back to the class so the field is always populated when we
+    # tagged the framework as ``http``.
+    specific = {
+        400: "Malformed request payload or query.",
+        401: "Auth credentials missing or invalid.",
+        403: "Credentials valid but the action is not permitted.",
+        404: "Endpoint or resource does not exist.",
+        405: "Endpoint exists but the HTTP method is wrong.",
+        409: "Concurrent modification or unique constraint conflict.",
+        413: "Request body exceeds the server upload cap.",
+        422: "Validation failed on a well-formed request body.",
+        429: "Rate-limited; back off and retry with jitter.",
+        500: "Server crashed handling the request; check upstream logs.",
+        502: "Upstream service returned an invalid response.",
+        503: "Upstream temporarily unavailable; circuit-break or retry.",
+        504: "Upstream timed out before responding.",
+    }
+    if code in specific:
+        return specific[code]
+    cls = _http_status_class(code)
+    return f"HTTP {code} ({cls})."
+
+
+def parse_http_status(text: str) -> tuple[int, str | None] | None:
+    """Return ``(code, reason_phrase or None)`` for the first HTTP
+    status found in ``text``, or ``None`` if nothing matched.
+
+    Recognises ``HTTP/1.1 500 Internal Server Error`` style preludes,
+    bare ``status: 404`` lines, and well-known reason phrases
+    (``404 Not Found``) even when no ``HTTP`` prefix is present.
+    """
+    if not text:
+        return None
+    # Try the prefixed form first so a bare "404 Not Found" that also
+    # appears later does not steal a real "HTTP 500" prelude.
+    m = _HTTP_LINE.search(text)
+    if m:
+        code = int(m.group("code"))
+        reason = (m.group("reason") or "").strip(" -:.") or None
+        return code, reason
+    m = _HTTP_CODE_REASON.search(text)
+    if m:
+        return int(m.group("code")), m.group("reason").strip()
+    return None
+
 
 def _likely_cause(framework: str, exception: str | None, message: str | None) -> str | None:
     exc = (exception or "").lower()
@@ -144,6 +231,25 @@ def parse_error_text(text: str) -> ErrorFields:
         for m in _RUBY_FRAME.finditer(text):
             file_, line_ = m.group(1), int(m.group(2))
     else:
+        # Try the HTTP status branch BEFORE the generic Error/Exception
+        # regex so a line like "HTTP/1.1 500 Internal Server Error" is
+        # recognised as an HTTP failure, not as a plain "InternalServerError"
+        # exception name (it isn't one).
+        http = parse_http_status(text)
+        if http is not None:
+            code, reason = http
+            framework = "http"
+            exc = f"HTTP {code}"
+            msg = reason
+            cause = _http_likely_cause(code, reason)
+            return ErrorFields(
+                framework=framework,
+                exception=exc,
+                message=msg,
+                likely_cause=cause,
+                file=None,
+                line=None,
+            )
         em = re.search(r"^([\w.]*(?:Error|Exception))\s*:\s*(.*)$", text, re.MULTILINE)
         if em:
             exc, msg = em.group(1), em.group(2).strip()
