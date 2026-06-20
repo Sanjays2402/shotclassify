@@ -202,6 +202,56 @@ def _parse_items(text: str) -> list[ReceiptLine]:
             "loyalty", "rewards",
         ]):
             continue
+        # 1) Quantity-prefixed form: "2 x Latte 6.00 = 12.00" or
+        #    "2 x Latte 6.00" (no extended total printed). The qty is
+        #    typically printed as the leading integer / decimal,
+        #    separated from the description by ``x`` / ``X`` / ``*``
+        #    (with optional spaces) -- the same notation almost every
+        #    receipt printer uses. When a final "= 12.00" is printed
+        #    we still record the UNIT price in ReceiptLine.price (qty
+        #    * price reconstructs the extended total cleanly), which
+        #    matches how downstream dashboards expect to multiply.
+        qty_match = re.match(
+            r"^(?P<qty>\d+(?:[.,]\d{1,3})?)\s*[xX*]\s+"
+            r"(?P<desc>.+?)\s+"
+            r"(?P<unit>\d+(?:[.,]\d{2}))"
+            r"(?:\s*=\s*(?P<ext>\d+(?:[.,]\d{2})))?\s*$",
+            line,
+        )
+        if qty_match:
+            try:
+                qty = float(qty_match.group("qty").replace(",", "."))
+                unit = float(qty_match.group("unit").replace(",", "."))
+            except ValueError:
+                continue
+            desc = qty_match.group("desc").strip().strip(".:-")
+            if 0.01 <= unit <= 9999 and 2 <= len(desc) <= 60 and qty > 0:
+                items.append(ReceiptLine(description=desc, qty=qty, price=unit))
+                if len(items) >= 30:
+                    break
+                continue
+        # 2) Trailing quantity-times-price form: "Latte 2 @ 6.00" or
+        #    "Latte 2 @ $6.00". Some receipt printers print the
+        #    quantity AFTER the description with an ``@`` separator
+        #    instead of leading ``x``.
+        at_match = re.match(
+            r"^(?P<desc>.+?)\s+(?P<qty>\d+(?:[.,]\d{1,3})?)\s*@\s*"
+            r"[$€£¥]?\s*(?P<unit>\d+(?:[.,]\d{2}))\s*$",
+            line,
+        )
+        if at_match:
+            try:
+                qty = float(at_match.group("qty").replace(",", "."))
+                unit = float(at_match.group("unit").replace(",", "."))
+            except ValueError:
+                continue
+            desc = at_match.group("desc").strip().strip(".:-")
+            if 0.01 <= unit <= 9999 and 2 <= len(desc) <= 60 and qty > 0:
+                items.append(ReceiptLine(description=desc, qty=qty, price=unit))
+                if len(items) >= 30:
+                    break
+                continue
+        # 3) Bare desc + price (original behaviour).
         m = re.search(r"^(.*?)\s+(\d+(?:[.,]\d{2}))$", line)
         if not m:
             continue
