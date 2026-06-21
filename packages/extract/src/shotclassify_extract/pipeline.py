@@ -5,8 +5,13 @@ from shotclassify_common import Category, ExtractedFields, OCRResult
 
 from .chat import enrich_chat
 from .code import enrich_code
+from .emails import extract_emails
 from .error import enrich_error
+from .identifiers import extract_identifiers
+from .network import extract_network
+from .paths import extract_paths
 from .receipt import enrich_receipt
+from .urls import extract_urls
 
 
 def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> ExtractedFields:
@@ -20,4 +25,65 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     elif category == Category.chat_screenshot:
         out.chat = enrich_chat(out.chat, ocr)
     # meme/document/ui_mockup/chart/other rely on LLM fields; nothing to enrich
+
+    # Cross-category: stash every http(s) URL found in the OCR text
+    # under raw["urls"]. Runs for EVERY category because URLs show up
+    # everywhere (error -> docs link, receipt -> Yelp page, chat ->
+    # mostly links). Callers that need only one category's URLs can
+    # ignore the key; storage already persists raw as a JSON column.
+    text = ocr.text or ""
+    urls = extract_urls(text)
+    if urls:
+        out.raw = dict(out.raw or {})
+        out.raw["urls"] = urls
+
+    # Cross-category: stash filesystem paths found in the OCR text
+    # under raw["paths"]. Mirrors the URL extractor (also runs for
+    # every category) -- error stacktraces, code snippets, terminal
+    # screenshots, and documents all reference paths and dashboards
+    # want a single key to look at. URL spans are masked out before
+    # scanning so a URL's path component does not double-count.
+    paths = extract_paths(text)
+    if paths:
+        out.raw = dict(out.raw or {})
+        out.raw["paths"] = paths
+
+    # Cross-category: stash IP / IPv6 / host:port endpoints found in
+    # the OCR text under raw["network"]. Network endpoints appear in
+    # every category -- error stacktraces print the upstream that
+    # refused the connection, code snippets bind to ``0.0.0.0:8080``,
+    # terminal screenshots paste shell URIs. URL spans are masked
+    # before scanning so a URL's authority does not double-count.
+    network = extract_network(text)
+    if network:
+        out.raw = dict(out.raw or {})
+        out.raw["network"] = network
+
+    # Cross-category: stash email addresses found in the OCR text
+    # under raw["emails"]. Emails appear across every category --
+    # error reports cite the on-call address, receipts include the
+    # merchant's billing email, code snippets reference test
+    # fixtures, chats are mostly emails between people. Email
+    # spans never overlap URL spans (a URL has ``://`` between the
+    # scheme and authority, while an email has ``@`` between local
+    # and domain) so no masking is required.
+    emails = extract_emails(text)
+    if emails:
+        out.raw = dict(out.raw or {})
+        out.raw["emails"] = emails
+
+    # Cross-category: stash academic / publishing identifiers (ISBN,
+    # DOI, arXiv, ISSN) found in the OCR text under
+    # raw["identifiers"] as a list of {"type", "value"} dicts. These
+    # show up on document and chart captures most often but a code
+    # snippet's docstring or a chat message can also cite a DOI, so
+    # we run the matcher cross-category and let the consumer filter
+    # by type. Each identifier passes its respective check-digit
+    # validation (EAN-13 / mod-11 / arXiv shape) so 13-digit barcode
+    # noise does not false-positive as an ISBN.
+    identifiers = extract_identifiers(text)
+    if identifiers:
+        out.raw = dict(out.raw or {})
+        out.raw["identifiers"] = identifiers
+
     return out

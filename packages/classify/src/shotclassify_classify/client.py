@@ -97,6 +97,8 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
                 description=str(i.get("description", "")),
                 qty=i.get("qty"),
                 price=i.get("price"),
+                discount_pct=i.get("discount_pct"),
+                discount_amount=i.get("discount_amount"),
             )
             for i in (r.get("items") or [])
         ]
@@ -105,8 +107,14 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             date=r.get("date"),
             subtotal=r.get("subtotal"),
             tax=r.get("tax"),
+            tip=r.get("tip"),
+            discount=r.get("discount"),
             total=r.get("total"),
             currency=r.get("currency"),
+            payment_method=r.get("payment_method"),
+            order_number=r.get("order_number"),
+            tax_mode=r.get("tax_mode"),
+            party_size=r.get("party_size"),
             items=items,
         )
     if c := fields_in.get("code"):
@@ -114,6 +122,9 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             language=c.get("language"),
             code=str(c.get("code", "")),
             line_count=int(c.get("line_count") or len(str(c.get("code", "")).splitlines())),
+            dialect=c.get("dialect"),
+            ts_features=c.get("ts_features") or [],
+            minified=bool(c.get("minified") or False),
         )
     if e := fields_in.get("error"):
         fields.error = ErrorFields(**{k: e.get(k) for k in ErrorFields.model_fields})
@@ -122,6 +133,9 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             platform=ch.get("platform"),
             participants=ch.get("participants") or [],
             messages=ch.get("messages") or [],
+            hashtags=ch.get("hashtags") or [],
+            mentions=ch.get("mentions") or [],
+            statuses=ch.get("statuses") or [],
         )
     if m := fields_in.get("meme"):
         fields.meme = MemeFields(**{k: m.get(k) for k in MemeFields.model_fields})

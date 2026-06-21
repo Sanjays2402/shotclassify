@@ -276,6 +276,14 @@ PII_REDACT_MODES: tuple[str, ...] = (
     "credit_card",
     "ip",
     "iban",
+    # Developer-secrets modes added in feature/autoship tick 1. These
+    # cover the obvious leaked-secret cases that show up in screenshots
+    # of terminals, .env editors, and CI logs without requiring a
+    # heavier downstream scanner.
+    "jwt",
+    "aws_access_key",
+    "github_token",
+    "slack_token",
 )
 
 

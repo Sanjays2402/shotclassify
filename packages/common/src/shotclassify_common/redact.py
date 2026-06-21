@@ -3,18 +3,32 @@
 This module is the single source of truth for what counts as PII inside
 shotclassify. The :func:`redact_text` helper takes a string and a set of
 mode names (``email``, ``phone``, ``ssn``, ``credit_card``, ``ip``,
-``iban``) and returns a copy with each match replaced by a typed
-placeholder such as ``[REDACTED:email]``. The :func:`redact_fields`
-helper walks an arbitrary JSON-shaped value (dict / list / str) and
-applies the same rules to every string leaf, which lets the pipeline
-sanitize OCR results and extracted structured fields with one call
-before any of it is persisted or shipped to an outbound webhook.
+``iban``, ``jwt``, ``aws_access_key``, ``github_token``,
+``slack_token``) and returns a copy with each match replaced by a typed
+placeholder such as ``[REDACTED:email]`` or
+``[REDACTED:aws_access_key]``. The :func:`redact_fields` helper walks
+an arbitrary JSON-shaped value (dict / list / str) and applies the
+same rules to every string leaf, which lets the pipeline sanitize OCR
+results and extracted structured fields with one call before any of it
+is persisted or shipped to an outbound webhook.
 
-The regexes are intentionally conservative: they aim for very low false
-positives at the cost of missing exotic formats. A buyer's procurement
-review wants to see redaction working on the obvious cases (email,
-phone, credit card, SSN) without garbling unrelated text in their
-screenshots. Specialist DLP belongs in a dedicated downstream service.
+The developer-secret modes (``jwt``, ``aws_access_key``,
+``github_token``, ``slack_token``) cover the obvious leaked-secret
+cases that show up in screenshots of terminals, .env editors, and CI
+logs without requiring a heavier downstream scanner. The regexes are
+deliberately tight: they key off the canonical format published by
+each vendor (AWS's ``AKIA``/``ASIA`` prefix + 16 base32 chars,
+GitHub's ``ghp_``/``gho_``/``ghu_``/``ghs_``/``ghr_``/``github_pat_``
+prefixes, Slack's ``xox{a-z}-`` family, and the ``eyJ`` JWT header
+opener) so a random alphanumeric string in unrelated text is never
+mistakenly redacted.
+
+The base regexes are intentionally conservative: they aim for very
+low false positives at the cost of missing exotic formats. A buyer's
+procurement review wants to see redaction working on the obvious
+cases (email, phone, credit card, SSN, leaked vendor tokens) without
+garbling unrelated text in their screenshots. Specialist DLP belongs
+in a dedicated downstream service.
 
 Adding a new mode is two edits: append it to ``_PATTERNS`` here and to
 ``PII_REDACT_MODES`` in ``shotclassify_store.tenant_settings`` so the
@@ -28,8 +42,47 @@ from typing import Any
 
 # Order matters: longer / more specific patterns first so that, for
 # example, a credit-card-shaped number is not partially consumed by the
-# phone matcher.
+# phone matcher. Developer-secret patterns are matched BEFORE generic
+# email so that a JWT (which embeds three dot-separated base64 chunks)
+# can never be partially eaten by another rule.
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        # AWS access key id: literal AKIA or ASIA followed by 16 base32
+        # uppercase chars. Strictly 20 chars total. Distinct enough that
+        # a single 20-char run prefixed by AKIA/ASIA in a screenshot is
+        # almost always a real AWS credential.
+        "aws_access_key",
+        re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
+    ),
+    (
+        # GitHub personal-access tokens, fine-grained tokens, OAuth
+        # tokens, server-to-server tokens, refresh tokens. GitHub
+        # publishes the prefixes (ghp_, gho_, ghu_, ghs_, ghr_,
+        # github_pat_) and a fixed length is enforced by their format.
+        "github_token",
+        re.compile(
+            r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b"
+            r"|\bgithub_pat_[A-Za-z0-9_]{82}\b"
+        ),
+    ),
+    (
+        # Slack tokens: classic bots, user, app, refresh, and the modern
+        # xoxe-/xoxd- variants. All begin with xox{a-z} and a dash, then
+        # numeric workspace + token segments.
+        "slack_token",
+        re.compile(r"\bxox[abeoprs]-(?:\d+-)+[A-Za-z0-9-]{16,}\b"),
+    ),
+    (
+        # JWT: three base64url-encoded segments separated by dots. We
+        # require the header segment to start with one of the common
+        # alg-typed prefixes (eyJ = base64url for `{"`), and each
+        # segment to be at least 8 chars so we do not eat random
+        # dot-separated identifiers. Trailing padding is optional.
+        "jwt",
+        re.compile(
+            r"\beyJ[A-Za-z0-9_=-]{8,}\.[A-Za-z0-9_=-]{8,}\.[A-Za-z0-9_=-]{8,}\b"
+        ),
+    ),
     (
         "email",
         re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE),

@@ -54,6 +54,16 @@ class ReceiptLine(BaseModel):
     description: str
     qty: float | None = None
     price: float | None = None
+    # When the line item carries a percent-off promo (``50% off Latte``),
+    # ``discount_pct`` is the percentage that was knocked off. Stored
+    # as the raw percent value (50.0, not 0.5) so dashboards can display
+    # ``50%`` directly.
+    discount_pct: float | None = None
+    # When the line item carries an absolute-amount discount (e.g.
+    # ``Latte 5.00 -1.50``), ``discount_amount`` is the positive
+    # absolute amount knocked off. Stored positive so callers can
+    # subtract without sign confusion.
+    discount_amount: float | None = None
 
 
 class ReceiptFields(BaseModel):
@@ -61,8 +71,34 @@ class ReceiptFields(BaseModel):
     date: str | None = None
     subtotal: float | None = None
     tax: float | None = None
+    tip: float | None = None
+    tip_percent: float | None = None
+    discount: float | None = None
     total: float | None = None
     currency: str | None = None
+    payment_method: str | None = None
+    # Order / invoice / receipt number printed near the top or bottom
+    # of most receipts. Stored as a string because vendors mix digits
+    # with letters (``ABC-12345``, ``INV-00099``, ``#TKT-2024-007``).
+    # Captured verbatim from the OCR pass (with any ``#`` prefix kept
+    # because dashboards almost always render it back with the hash).
+    order_number: str | None = None
+    # How the printed prices relate to tax: ``inclusive`` when the
+    # receipt explicitly notes ``VAT included`` / ``tax incl.`` /
+    # ``incl. GST`` (common in EU / AU / NZ / IN), ``exclusive`` when
+    # the receipt prints ``+ tax`` / ``plus tax`` / ``tax extra``
+    # (common in US sales-tax regions), and ``None`` when the receipt
+    # gives no signal either way. Dashboards use this to decide
+    # whether the subtotal should be displayed as the pre-tax base or
+    # the customer-facing all-in price.
+    tax_mode: str | None = None
+    # Party size / split-bill count. Restaurant receipts commonly
+    # print ``Party of 4`` / ``Guests: 2`` / ``Split 3 ways`` near
+    # the header or footer. Stored as an int so dashboards can sum
+    # covers across the period or derive per-person spend
+    # (``total / party_size``). ``None`` when the receipt gives no
+    # cover-count signal (a typical retail receipt, for example).
+    party_size: int | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
@@ -70,6 +106,31 @@ class CodeFields(BaseModel):
     language: str | None = None
     code: str = ""
     line_count: int = 0
+    # When ``language == "sql"`` (or any SQL-flavoured tag), this field
+    # narrows the SQL dialect to one of: ``mysql`` / ``postgres`` /
+    # ``sqlite`` / ``mssql``. ``None`` means either non-SQL code or
+    # ambiguous ANSI SQL without dialect-specific syntax.
+    dialect: str | None = None
+    # When ``language == "typescript"``, surface the TypeScript-only
+    # features the snippet exercises. Each entry is a short tag in:
+    # ``decorator`` (``@Component``), ``as_cast`` (``foo as Bar``),
+    # ``angle_cast`` (``<Bar>foo``), ``generic`` (``Array<T>``,
+    # ``function<T>(...)``), ``enum`` (``enum X { ... }``),
+    # ``readonly`` (``readonly x``), ``abstract`` (``abstract class``),
+    # ``access_modifier`` (``private`` / ``public`` / ``protected``),
+    # ``namespace`` (``namespace X { ... }``), ``optional_chain``
+    # (``foo?.bar``), ``non_null_assert`` (``foo!``). Tags are unique
+    # per snippet; empty list when the snippet is non-TS or has none.
+    ts_features: list[str] = Field(default_factory=list)
+    # ``True`` when the snippet looks like minified / bundled JS or
+    # TS (long single-line statements, near-zero whitespace, no
+    # newlines after ``;`` / ``{`` / ``}``). ``False`` otherwise.
+    # Dashboards use this to surface "looks bundled" annotations on
+    # code captures so a reviewer knows not to read the snippet
+    # line-by-line. Only meaningful for languages == javascript /
+    # typescript / jsx / tsx; the detector returns False for other
+    # languages even when their line stats look minified.
+    minified: bool = False
 
 
 class ErrorFields(BaseModel):
@@ -85,6 +146,17 @@ class ChatFields(BaseModel):
     platform: str | None = None
     participants: list[str] = Field(default_factory=list)
     messages: list[dict[str, str]] = Field(default_factory=list)
+    hashtags: list[str] = Field(default_factory=list)
+    mentions: list[str] = Field(default_factory=list)
+    # Read / delivered / unread status markers visible in the
+    # screenshot. Each entry is a dict with at minimum a ``status``
+    # tag (``delivered`` / ``read`` / ``unread`` / ``sent`` /
+    # ``seen`` / ``typing``) and optionally a ``time`` (normalised by
+    # parse_timestamp) so dashboards can answer "when was the last
+    # message read?" without re-scanning the OCR text. Stored as a
+    # list of dicts to mirror how ``messages`` is shaped; ordering
+    # preserves first-seen-in-OCR order.
+    statuses: list[dict[str, str]] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):

@@ -30,14 +30,377 @@ def _find_amount_after(text: str, keyword: str) -> float | None:
     return float(matches[-1].group(1).replace(",", "."))
 
 
+# Tip keywords ordered loosely by specificity. We try each in turn so a
+# receipt that prints both "Gratuity" and "Tip" lines (the European bar
+# tab pattern) still resolves to the same number.
+_TIP_KEYWORDS = ("gratuity", "tip", "service charge", "service")
+
+
+def _find_tip(text: str) -> float | None:
+    """Return the gratuity amount in the receipt, or None.
+
+    Looks for "Tip", "Gratuity", "Service charge" (and bare "Service")
+    followed by an amount. A keyword that appears more than once (e.g.
+    "Tip suggested" then the real "Tip 5.00") uses the LAST occurrence
+    so a printed suggestion table never overrides the line the customer
+    actually paid.
+    """
+    for keyword in _TIP_KEYWORDS:
+        value = _find_amount_after(text, keyword)
+        if value is not None:
+            return value
+    return None
+
+
+# Discount keywords ordered loosely by specificity. Discounts on
+# receipts are commonly printed as "Discount" / "Coupon" / "Promo" /
+# "Member savings" / "Loyalty". Same last-wins semantics as tips: a
+# header that lists available discounts at the top of the receipt
+# must not override the actual line the cashier applied at checkout.
+_DISCOUNT_KEYWORDS = (
+    "discount",
+    "coupon",
+    "promo",
+    "promo code",
+    "savings",
+    "loyalty",
+    "rewards",
+)
+
+
+def _find_discount(text: str) -> float | None:
+    """Return the absolute discount amount applied to the receipt, or None.
+
+    Most printers render discounts as a positive number on a line
+    labelled "Discount" / "Coupon" / "Promo" / "Savings" / "Loyalty" /
+    "Rewards". The underlying ``_find_amount_after`` regex requires
+    a digit immediately after the keyword (with at most one ``:`` or
+    ``-`` separator and optional whitespace), so a printer that writes
+    ``Discount: -2.00`` (sign in front of the amount) is NOT captured
+    by this version. We chose not to widen the shared regex because
+    that would also change how subtotal / tax / tip read malformed
+    receipts; a future ticket can add a dedicated signed-amount path.
+    """
+    for keyword in _DISCOUNT_KEYWORDS:
+        value = _find_amount_after(text, keyword)
+        if value is not None:
+            return value
+    return None
+
+
 def _detect_currency(text: str) -> str | None:
-    for symbol, code in [("$", "USD"), ("€", "EUR"), ("£", "GBP"), ("¥", "JPY")]:
+    # 1) Unambiguous currency symbols win when present. ``$`` is
+    #    canonically USD here because the symbol is shared across many
+    #    dollar currencies; a later locale-code pass corrects to CAD /
+    #    AUD / NZD / etc. when the receipt also prints those codes.
+    for symbol, code in [("€", "EUR"), ("£", "GBP"), ("¥", "JPY")]:
         if symbol in text:
             return code
-    if re.search(r"\busd\b", text, re.IGNORECASE):
+    # 2) Three-letter ISO codes that appear as bare words. We match
+    #    them WITH word boundaries so an embedded "scAUDio" or a CSS
+    #    class "btn-aud" cannot trigger them. Order matters when a
+    #    receipt prints both "USD" and "CAD" (a tourist tab in CAD
+    #    where the operator forgot to switch from a USD template):
+    #    prefer the FIRST match seen left-to-right since the latter
+    #    printed code is usually the receipt's actual currency, and
+    #    we use last-match for that reason.
+    iso_codes = (
+        "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "NZD", "CHF",
+        "SEK", "NOK", "DKK", "INR", "MXN", "BRL", "ZAR", "SGD",
+        "HKD", "CNY", "RMB", "KRW",
+    )
+    # Build one regex with word boundaries; this is O(n) over the text.
+    iso_re = re.compile(
+        r"\b(" + "|".join(iso_codes) + r")\b", re.IGNORECASE
+    )
+    matches = iso_re.findall(text)
+    if matches:
+        # Last match wins: receipts commonly print a header (vendor's
+        # default currency) and then the actual line currency near the
+        # total. The closing "Total in CAD" beats a header "USD".
+        code = matches[-1].upper()
+        return "CNY" if code == "RMB" else code
+    # 3) Symbol-only fallback: dollar sign with no explicit code is USD.
+    if "$" in text:
         return "USD"
-    if re.search(r"\beur\b", text, re.IGNORECASE):
-        return "EUR"
+    return None
+
+
+# Patterns for payment method detection. Each entry is (canonical name,
+# regex). The first regex to match wins, so order from MORE specific to
+# LESS specific (e.g. "American Express" before "amex" before bare
+# "card") to avoid a generic "credit card" line clobbering a clearly
+# labelled "VISA ****1234" line.
+_PAYMENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("apple_pay", re.compile(r"\bapple\s*pay\b", re.IGNORECASE)),
+    ("google_pay", re.compile(r"\bgoogle\s*pay\b", re.IGNORECASE)),
+    ("amex", re.compile(r"\b(american\s+express|amex)\b", re.IGNORECASE)),
+    ("visa", re.compile(r"\bvisa\b", re.IGNORECASE)),
+    ("mastercard", re.compile(r"\b(master\s*card|mastercard|m/?c)\b", re.IGNORECASE)),
+    ("discover", re.compile(r"\bdiscover\b", re.IGNORECASE)),
+    ("debit", re.compile(r"\bdebit(\s+card)?\b", re.IGNORECASE)),
+    ("credit", re.compile(r"\bcredit(\s+card)?\b", re.IGNORECASE)),
+    ("cash", re.compile(r"\bcash\b", re.IGNORECASE)),
+)
+
+
+def _detect_payment_method(text: str) -> str | None:
+    """Return a canonical payment-method tag, or None if nothing matched.
+
+    Tags are normalised to lowercase identifiers (``visa``, ``amex``,
+    ``mastercard``, ``apple_pay``, ``google_pay``, ``discover``,
+    ``debit``, ``credit``, ``cash``) so dashboards and routing rules
+    can match on a small enum instead of every printer's wording.
+    """
+    if not text:
+        return None
+    for name, pattern in _PAYMENT_PATTERNS:
+        if pattern.search(text):
+            return name
+    return None
+
+
+# Order / invoice / receipt-number detection. Recognised printer
+# vocabularies (case-insensitive, in priority order so a long header
+# wins over a short one when both appear):
+#
+#   Invoice No: ABC-12345        ->  ABC-12345
+#   Invoice #: 99001             ->  99001
+#   Order #12345                 ->  12345  (hash is part of the keyword)
+#   Order Number: 12345          ->  12345
+#   Receipt No. ABC-099          ->  ABC-099
+#   Reference: TKT-2024-007      ->  TKT-2024-007
+#   Order ID 99001               ->  99001
+#   Ref # 12345                  ->  12345
+#   Transaction ID 7788          ->  7788
+#   Check #45                    ->  45     (US restaurant pattern)
+#
+# Order matters: ``invoice`` keywords are checked before ``order``
+# before ``receipt`` before ``reference`` / ``transaction`` so a
+# receipt that prints BOTH "Invoice No 1" and "Order ID 2" tags as
+# the invoice (more business-formal source of truth on most printers).
+# Within a single keyword we use the FIRST occurrence because the
+# number typically appears once at the top of the receipt.
+#
+# The token regex permits alphanumerics, dashes, dots, and slashes
+# (some POS systems print ``2024/07/00099`` style numbers). Length
+# is bounded to 2..40 chars so a 2-digit ``Check #45`` still matches
+# while OCR runs (40+ chars) are rejected.
+_ORDER_KEYWORDS: tuple[tuple[str, str], ...] = (
+    # (display_keyword_for_regex, internal_tag)
+    (r"invoice\s+(?:no\.?|number|#)", "invoice"),
+    (r"invoice", "invoice_bare"),
+    (r"order\s+(?:no\.?|number|id|#)", "order"),
+    (r"order", "order_bare"),
+    (r"receipt\s+(?:no\.?|number|#)", "receipt"),
+    (r"check\s*#", "check"),
+    (r"transaction\s+(?:id|#)", "transaction"),
+    (r"ref(?:erence)?\s*#?", "reference"),
+    (r"confirmation\s+(?:no\.?|number|#)", "confirmation"),
+)
+# Value: an alphanumeric-bookended run of 2..40 chars with internal
+# ``./-`` punctuation, OR a single alphanumeric (the 1-char fallback
+# for ``#1`` style numbers). Order matters in the alternation -- the
+# longer form is tried first so ``ABC-12345`` is not truncated to
+# ``A``. Internal punctuation is bounded to ``./-`` so a value never
+# eats a sentence comma.
+_ORDER_VALUE = (
+    r"(?:[A-Za-z0-9][A-Za-z0-9./\-]{0,38}[A-Za-z0-9]|[A-Za-z0-9])"
+)
+
+
+def _find_order_number(text: str) -> str | None:
+    """Return the order / invoice / receipt / reference number, or None.
+
+    Loops through the keyword catalogue in priority order. For each
+    keyword, accepts an optional ``:`` / ``-`` / ``=`` separator,
+    optional whitespace, then a single value token. The value must
+    contain at least one digit (so a stray ``Reference: see below``
+    sentence does NOT match -- ``see`` has no digits). A leading
+    ``#`` is preserved because dashboards almost always render it
+    back with the hash. The keyword's last word ``no`` / ``no.`` /
+    ``number`` / ``id`` / ``#`` is consumed by the regex so the value
+    matcher does not see it.
+
+    First keyword to match wins. Within a keyword, the FIRST
+    occurrence wins because the number usually appears once at the
+    top of the receipt; falling-back vendors that print a duplicate
+    at the bottom should still match the same value.
+    """
+    if not text:
+        return None
+    for keyword_re, _tag in _ORDER_KEYWORDS:
+        pat = re.compile(
+            rf"(?<![A-Za-z])(?:{keyword_re})\s*[:\-=]?\s*(?P<val>{_ORDER_VALUE})",
+            re.IGNORECASE,
+        )
+        m = pat.search(text)
+        if not m:
+            continue
+        val = m.group("val").strip()
+        # Require at least one digit so a non-numeric tail (``ref see``)
+        # does not pass as the number.
+        if not any(c.isdigit() for c in val):
+            continue
+        # Strip a stray trailing punctuation that the regex absorbed.
+        val = val.rstrip(".,;:)")
+        if not val:
+            continue
+        return val
+    return None
+
+
+# Tax-mode detection. Receipts almost always carry an explicit cue
+# about whether the printed prices are inclusive of tax (the customer
+# pays exactly what's on the line) or exclusive (tax is added at the
+# end). Both phrasings show up across vendors so we match a broad set:
+#
+#   inclusive:  "VAT included", "incl. VAT", "tax included",
+#               "incl. tax", "incl GST", "GST inclusive",
+#               "all prices include tax", "prices incl. VAT",
+#               "inclusive of GST" / "inclusive of HST".
+#   exclusive:  "+ tax", "plus tax", "tax extra", "tax not included",
+#               "excl. tax", "excl. VAT", "exclusive of GST", "ex GST",
+#               "ex VAT", "prices exclude tax".
+#
+# Inclusive wins ties because most ambiguous wording ("plus 8% tax
+# included") is a printer typo where the merchant meant inclusive.
+# When neither is present we return None and the dashboard can fall
+# back to inferring from subtotal vs total math.
+_TAX_INCLUSIVE_HINTS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:vat|tax|gst|hst|pst|qst)\s+included\b", re.IGNORECASE),
+    re.compile(r"\bincl(?:\.|usive)?\s+(?:of\s+)?(?:vat|tax|gst|hst)\b", re.IGNORECASE),
+    re.compile(r"\b(?:vat|tax|gst|hst)\s+incl(?:\.|usive)?\b", re.IGNORECASE),
+    re.compile(r"\b(?:all\s+)?prices?\s+include\s+(?:vat|tax|gst)\b", re.IGNORECASE),
+    re.compile(r"\binclusive\s+of\s+(?:vat|tax|gst|hst)\b", re.IGNORECASE),
+)
+_TAX_EXCLUSIVE_HINTS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\+\s*(?:vat|tax|gst|hst)\b", re.IGNORECASE),
+    re.compile(r"\bplus\s+(?:vat|tax|gst|hst)\b", re.IGNORECASE),
+    re.compile(r"\b(?:vat|tax|gst|hst)\s+extra\b", re.IGNORECASE),
+    re.compile(r"\b(?:vat|tax|gst|hst)\s+not\s+included\b", re.IGNORECASE),
+    re.compile(r"\bexcl(?:\.|usive)?\s+(?:of\s+)?(?:vat|tax|gst|hst)\b", re.IGNORECASE),
+    re.compile(r"\b(?:vat|tax|gst|hst)\s+excl(?:\.|usive)?\b", re.IGNORECASE),
+    re.compile(r"\bex\s+(?:vat|gst|hst)\b", re.IGNORECASE),
+    re.compile(r"\bprices?\s+exclude\s+(?:vat|tax|gst)\b", re.IGNORECASE),
+    re.compile(r"\bexclusive\s+of\s+(?:vat|tax|gst|hst)\b", re.IGNORECASE),
+)
+
+
+def _detect_tax_mode(text: str) -> str | None:
+    """Return ``"inclusive"`` / ``"exclusive"`` / ``None`` for the
+    text's tax-mode cue.
+
+    Inclusive cues are checked first because the most common
+    "ambiguous" wording (``+ 8% VAT included``) is almost always a
+    misprint where the merchant meant inclusive. A receipt that
+    prints both an inclusive cue and an exclusive cue (rare but
+    possible -- a multi-page invoice with summary + addendum)
+    resolves to the FIRST one seen in OCR order so the dashboard's
+    answer matches what a human reading top-to-bottom would settle
+    on.
+    """
+    if not text:
+        return None
+    first_inclusive: int | None = None
+    first_exclusive: int | None = None
+    for pat in _TAX_INCLUSIVE_HINTS:
+        m = pat.search(text)
+        if m and (first_inclusive is None or m.start() < first_inclusive):
+            first_inclusive = m.start()
+    for pat in _TAX_EXCLUSIVE_HINTS:
+        m = pat.search(text)
+        if m and (first_exclusive is None or m.start() < first_exclusive):
+            first_exclusive = m.start()
+    if first_inclusive is None and first_exclusive is None:
+        return None
+    if first_inclusive is None:
+        return "exclusive"
+    if first_exclusive is None:
+        return "inclusive"
+    return "inclusive" if first_inclusive <= first_exclusive else "exclusive"
+
+
+# Party size / split-bill detection. Restaurant receipts print a
+# small set of phrases when the bill represents more than one cover:
+#
+#   "Party of 4"                 -> 4
+#   "Party Size: 6"              -> 6
+#   "Party 2"                    -> 2     (bare, after a comma/header)
+#   "Guests: 3" / "Guests 3"     -> 3
+#   "Guest count: 5"             -> 5
+#   "# of Guests 4"              -> 4
+#   "# Guests 4"                 -> 4
+#   "No. of Guests 2"            -> 2
+#   "Covers: 8"                  -> 8     (POS / industry term)
+#   "Split 3 ways"               -> 3
+#   "Split between 4"            -> 4
+#   "Split 4 ways"               -> 4
+#   "Per Person (4)"             -> 4     (when the parens give a count)
+#
+# Order: cover-count terms ("Party of", "Guests:", "Covers:") are
+# checked BEFORE the split-bill terms ("Split N ways") because a
+# receipt that prints both ("Party of 4 ... Split 4 ways") should
+# tag the party size, not the split count, when they conflict. We
+# bound the captured int to 1..50; anything outside that is OCR
+# noise or a wrong match.
+_PARTY_HINTS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bparty\s+of\s+(\d{1,2})\b", re.IGNORECASE),
+    re.compile(r"\bparty\s+size\s*[:\-]?\s*(\d{1,2})\b", re.IGNORECASE),
+    re.compile(r"\bguest\s+count\s*[:\-]?\s*(\d{1,2})\b", re.IGNORECASE),
+    # Allow leading ``#`` / ``No.`` for ``# of Guests N`` / ``No. of Guests N``.
+    re.compile(
+        r"(?:#\s*(?:of\s+)?|no\.?\s*of\s+)guests?\s*[:\-]?\s*(\d{1,2})\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bguests?\s*[:\-]?\s*(\d{1,2})\b", re.IGNORECASE),
+    re.compile(r"\bcovers?\s*[:\-]?\s*(\d{1,2})\b", re.IGNORECASE),
+    # Bare ``Party N`` only when preceded by start-of-line or a colon/
+    # comma so a stray sentence "the party N celebrated" doesn't fire.
+    re.compile(r"(?:^|[:,]\s*)party\s+(\d{1,2})\b", re.IGNORECASE | re.MULTILINE),
+)
+_SPLIT_HINTS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bsplit\s+(\d{1,2})\s+ways?\b", re.IGNORECASE),
+    re.compile(r"\bsplit\s+between\s+(\d{1,2})\b", re.IGNORECASE),
+    re.compile(r"\bsplit\s+by\s+(\d{1,2})\b", re.IGNORECASE),
+    # "Per person (4)" / "Per-person 4" -- the parens are optional.
+    re.compile(r"\bper[\s\-]person\s*\(?\s*(\d{1,2})\s*\)?\b", re.IGNORECASE),
+)
+
+
+def _detect_party_size(text: str) -> int | None:
+    """Return the cover count / split count printed on the receipt, or
+    ``None``.
+
+    Party-of / guests / covers cues win over split-bill cues when both
+    appear, because the cover count is the source of truth (a 4-cover
+    bill that happens to be split 3 ways still has 4 guests). Within a
+    single regex group the FIRST match wins -- the count is usually
+    printed once near the header. Bounded to 1..50; values outside that
+    range are rejected as OCR noise or wrong matches.
+    """
+    if not text:
+        return None
+    for pat in _PARTY_HINTS:
+        m = pat.search(text)
+        if not m:
+            continue
+        try:
+            n = int(m.group(1))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= n <= 50:
+            return n
+    for pat in _SPLIT_HINTS:
+        m = pat.search(text)
+        if not m:
+            continue
+        try:
+            n = int(m.group(1))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= n <= 50:
+            return n
     return None
 
 
@@ -70,6 +433,77 @@ def _guess_date(text: str) -> str | None:
     return None
 
 
+# Per-item percent-off discount. Recognised shapes (matched in order):
+#
+#   "BOGO 50% off Latte 4.00"          -> desc=Latte, pct=50, price=4.00
+#   "50% off Croissant 3.50"           -> desc=Croissant, pct=50, price=3.50
+#   "Latte 5.00 (10% off)"             -> desc=Latte, pct=10, price=5.00
+#   "Latte 50% off 5.00"               -> desc=Latte, pct=50, price=5.00
+#
+# We anchor on the ``\d+%\s*off`` clause because that's the unambiguous
+# discount signal; the description, price, and order around it vary
+# wildly between printers. The price field captures the LINE price
+# (final after discount on most printers, the pre-discount on a few
+# fancy printers -- we accept either since the percent is the salient
+# datum). Pure ``50% off coupon`` summary lines without an item name
+# are NOT parsed as line items -- the existing top-level discount
+# detector already catches those.
+_LINE_PCT_OFF_LEADING = re.compile(
+    r"^(?:[A-Za-z][\w :,!-]*\s+)?"       # optional promo prefix ("BOGO ", "Member ", "Promo: BOGO ")
+    r"(?P<pct>\d{1,2}(?:\.\d{1,2})?)\s*%\s*off\s+"
+    r"(?P<desc>.+?)\s+"
+    r"[$€£¥]?\s*(?P<price>\d{1,5}(?:[.,]\d{2}))\s*$",
+    re.IGNORECASE,
+)
+_LINE_PCT_OFF_TRAILING = re.compile(
+    r"^(?P<desc>.+?)\s+"
+    r"[$€£¥]?\s*(?P<price>\d{1,5}(?:[.,]\d{2}))\s*"
+    r"\(?\s*(?P<pct>\d{1,2}(?:\.\d{1,2})?)\s*%\s*off\s*\)?\s*$",
+    re.IGNORECASE,
+)
+_LINE_PCT_OFF_INFIX = re.compile(
+    r"^(?P<desc>[A-Za-z][\w ]+?)\s+"
+    r"(?P<pct>\d{1,2}(?:\.\d{1,2})?)\s*%\s*off\s+"
+    r"[$€£¥]?\s*(?P<price>\d{1,5}(?:[.,]\d{2}))\s*$",
+    re.IGNORECASE,
+)
+
+
+def _try_pct_off(line: str) -> ReceiptLine | None:
+    """Return a ReceiptLine for any of the percent-off shapes, or None."""
+    for pat in (_LINE_PCT_OFF_LEADING, _LINE_PCT_OFF_INFIX, _LINE_PCT_OFF_TRAILING):
+        m = pat.match(line)
+        if not m:
+            continue
+        try:
+            pct = float(m.group("pct"))
+            price = float(m.group("price").replace(",", "."))
+        except ValueError:
+            continue
+        desc = m.group("desc").strip().strip(".:-")
+        # Strip generic promo / loyalty / member prefixes the leading
+        # regex may have absorbed into the desc when the loop matched
+        # via _LINE_PCT_OFF_INFIX (where ``[A-Za-z][\w ]+`` greedily
+        # took a "Member" word).
+        for prefix in ("member ", "loyalty ", "rewards ", "bogo "):
+            if desc.lower().startswith(prefix):
+                desc = desc[len(prefix):].strip()
+        if not desc or len(desc) < 2 or len(desc) > 60:
+            continue
+        if not (0 < pct <= 100):
+            continue
+        if not (0.01 <= price <= 9999):
+            continue
+        discount_amount = round(price * pct / 100.0, 2)
+        return ReceiptLine(
+            description=desc,
+            price=price,
+            discount_pct=pct,
+            discount_amount=discount_amount,
+        )
+    return None
+
+
 def _parse_items(text: str) -> list[ReceiptLine]:
     items: list[ReceiptLine] = []
     for raw in text.splitlines():
@@ -77,8 +511,75 @@ def _parse_items(text: str) -> list[ReceiptLine]:
         if not line:
             continue
         low = line.lower()
-        if any(k in low for k in ["subtotal", "total", "tax", "vat", "tip", "change", "cash"]):
+        # 0) Per-item percent-off discount. Run BEFORE the keyword skip
+        #    so a line like ``Promo: BOGO 50% off Latte 4.00`` is parsed
+        #    as a discounted item even though it contains the
+        #    ``promo`` / ``discount`` keywords that would otherwise
+        #    push it through ``continue``. We only short-circuit when
+        #    the line genuinely has a ``\d+% off`` clause.
+        if re.search(r"\d{1,2}\s*%\s*off\b", line, re.IGNORECASE):
+            discounted = _try_pct_off(line)
+            if discounted is not None:
+                items.append(discounted)
+                if len(items) >= 30:
+                    break
+                continue
+        if any(k in low for k in [
+            "subtotal", "total", "tax", "vat", "tip", "gratuity", "service",
+            "change", "cash", "discount", "coupon", "promo", "savings",
+            "loyalty", "rewards",
+        ]):
             continue
+        # 1) Quantity-prefixed form: "2 x Latte 6.00 = 12.00" or
+        #    "2 x Latte 6.00" (no extended total printed). The qty is
+        #    typically printed as the leading integer / decimal,
+        #    separated from the description by ``x`` / ``X`` / ``*``
+        #    (with optional spaces) -- the same notation almost every
+        #    receipt printer uses. When a final "= 12.00" is printed
+        #    we still record the UNIT price in ReceiptLine.price (qty
+        #    * price reconstructs the extended total cleanly), which
+        #    matches how downstream dashboards expect to multiply.
+        qty_match = re.match(
+            r"^(?P<qty>\d+(?:[.,]\d{1,3})?)\s*[xX*]\s+"
+            r"(?P<desc>.+?)\s+"
+            r"(?P<unit>\d+(?:[.,]\d{2}))"
+            r"(?:\s*=\s*(?P<ext>\d+(?:[.,]\d{2})))?\s*$",
+            line,
+        )
+        if qty_match:
+            try:
+                qty = float(qty_match.group("qty").replace(",", "."))
+                unit = float(qty_match.group("unit").replace(",", "."))
+            except ValueError:
+                continue
+            desc = qty_match.group("desc").strip().strip(".:-")
+            if 0.01 <= unit <= 9999 and 2 <= len(desc) <= 60 and qty > 0:
+                items.append(ReceiptLine(description=desc, qty=qty, price=unit))
+                if len(items) >= 30:
+                    break
+                continue
+        # 2) Trailing quantity-times-price form: "Latte 2 @ 6.00" or
+        #    "Latte 2 @ $6.00". Some receipt printers print the
+        #    quantity AFTER the description with an ``@`` separator
+        #    instead of leading ``x``.
+        at_match = re.match(
+            r"^(?P<desc>.+?)\s+(?P<qty>\d+(?:[.,]\d{1,3})?)\s*@\s*"
+            r"[$€£¥]?\s*(?P<unit>\d+(?:[.,]\d{2}))\s*$",
+            line,
+        )
+        if at_match:
+            try:
+                qty = float(at_match.group("qty").replace(",", "."))
+                unit = float(at_match.group("unit").replace(",", "."))
+            except ValueError:
+                continue
+            desc = at_match.group("desc").strip().strip(".:-")
+            if 0.01 <= unit <= 9999 and 2 <= len(desc) <= 60 and qty > 0:
+                items.append(ReceiptLine(description=desc, qty=qty, price=unit))
+                if len(items) >= 30:
+                    break
+                continue
+        # 3) Bare desc + price (original behaviour).
         m = re.search(r"^(.*?)\s+(\d+(?:[.,]\d{2}))$", line)
         if not m:
             continue
@@ -92,14 +593,58 @@ def _parse_items(text: str) -> list[ReceiptLine]:
     return items[:30]
 
 
+def _compute_tip_percent(
+    tip: float | None, subtotal: float | None, total: float | None
+) -> float | None:
+    """Return tip as a percentage of subtotal (preferred) or pre-tip total.
+
+    Returns ``None`` when:
+      * no tip was found, OR
+      * neither a subtotal nor a usable total is available, OR
+      * the inferred base (subtotal / total - tip) is non-positive.
+
+    The result is rounded to one decimal place because two decimals
+    are spurious precision on top of OCR noise.
+
+    Subtotal is preferred over total because it excludes tax (and on
+    most US receipts the customer tips on the pre-tax subtotal). If
+    only the total is available, we approximate by subtracting the tip
+    (``base = total - tip``) and accepting whatever tax distortion
+    that introduces — the percentage is still useful for dashboards
+    that want to bucket "15% / 18% / 20% / generous" tippers.
+    """
+    if tip is None or tip <= 0:
+        return None
+    base: float | None = None
+    if subtotal is not None and subtotal > 0:
+        base = subtotal
+    elif total is not None and total > tip:
+        base = total - tip
+    if base is None or base <= 0:
+        return None
+    pct = (tip / base) * 100.0
+    return round(pct, 1)
+
+
 def parse_receipt_text(text: str) -> ReceiptFields:
+    subtotal = _find_amount_after(text, "subtotal")
+    tax = _find_amount_after(text, "tax") or _find_amount_after(text, "vat")
+    tip = _find_tip(text)
+    total = _find_amount_after(text, "total")
     return ReceiptFields(
         vendor=_guess_vendor(text),
         date=_guess_date(text),
-        subtotal=_find_amount_after(text, "subtotal"),
-        tax=_find_amount_after(text, "tax") or _find_amount_after(text, "vat"),
-        total=_find_amount_after(text, "total"),
+        subtotal=subtotal,
+        tax=tax,
+        tip=tip,
+        tip_percent=_compute_tip_percent(tip, subtotal, total),
+        discount=_find_discount(text),
+        total=total,
         currency=_detect_currency(text),
+        payment_method=_detect_payment_method(text),
+        order_number=_find_order_number(text),
+        tax_mode=_detect_tax_mode(text),
+        party_size=_detect_party_size(text),
         items=_parse_items(text),
     )
 
@@ -109,9 +654,20 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     if existing is None:
         return parsed
     merged = existing.model_copy()
-    for f in ("vendor", "date", "subtotal", "tax", "total", "currency"):
+    for f in (
+        "vendor", "date", "subtotal", "tax", "tip", "discount", "total",
+        "currency", "payment_method", "order_number", "tax_mode",
+        "party_size",
+    ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
     if not merged.items:
         merged.items = parsed.items
+    # Recompute tip_percent against the merged tip + subtotal/total so a
+    # caller that only supplied a subtotal still gets a derived percent
+    # when the OCR pass discovered the tip.
+    if merged.tip_percent in (None, 0):
+        merged.tip_percent = _compute_tip_percent(
+            merged.tip, merged.subtotal, merged.total
+        )
     return merged
