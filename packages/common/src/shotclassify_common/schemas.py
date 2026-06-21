@@ -250,6 +250,23 @@ class CodeFields(BaseModel):
     # a conservative overcount we accept as the trade-off for keeping
     # the detector deterministic and fast.
     todo_count: int = 0
+    # Detected open-source license header at the top of the snippet,
+    # as a short SPDX-style tag: ``mit`` / ``apache-2.0`` / ``gpl-3.0`` /
+    # ``gpl-2.0`` / ``lgpl-3.0`` / ``bsd-2-clause`` / ``bsd-3-clause`` /
+    # ``mpl-2.0`` / ``isc`` / ``unlicense`` / ``cc0-1.0`` / ``agpl-3.0``.
+    # ``None`` when no recognised license header is present.
+    #
+    # Detection scans the FIRST 30 lines of the snippet for the
+    # distinctive opening phrase of each license (``Permission is
+    # hereby granted, free of charge, ...`` for MIT, ``Licensed under
+    # the Apache License, Version 2.0`` for Apache, etc). The shorter
+    # tags (MIT / ISC) are checked LAST because their distinctive
+    # wording overlaps with longer licenses (BSD also contains the
+    # ``permission is granted`` phrasing) -- this ordering means a
+    # full BSD-3-Clause header tags as ``bsd-3-clause``, not MIT.
+    # Dashboards use this to surface license-attribution annotations
+    # and to flag GPL-family snippets in code-review screenshots.
+    license: str | None = None
 
 
 class ErrorFields(BaseModel):

@@ -772,6 +772,155 @@ def detect_todo_count(code: str, language: str | None = None) -> int:
     return count
 
 
+# License-header detection. We scan the first ~30 lines of the snippet
+# for the distinctive opening phrase of each common open-source
+# license. Each license catalogues:
+#
+# * SPDX-style tag returned to the caller.
+# * One or more substring "needles" that uniquely identify the
+#   license. Needles are checked CASE-INSENSITIVELY and the FIRST
+#   matching license in priority order wins.
+#
+# Priority order (longest / most distinctive first):
+#
+#   1. Apache-2.0   - "Licensed under the Apache License, Version 2.0"
+#   2. AGPL-3.0    - "GNU Affero General Public License" + "version 3"
+#   3. GPL-3.0     - "GNU General Public License" + "version 3"
+#   4. GPL-2.0     - "GNU General Public License" + "version 2"
+#   5. LGPL-3.0    - "GNU Lesser General Public License" + "version 3"
+#   6. MPL-2.0     - "Mozilla Public License Version 2.0"
+#   7. BSD-3-Clause - "All advertising materials" CLAUSE forbidden + 3-clause
+#   8. BSD-2-Clause - "Redistributions of source code" + "Redistributions in binary form"
+#   9. CC0-1.0     - "CC0 1.0 Universal" / "Creative Commons Zero"
+#  10. Unlicense   - "This is free and unencumbered software released into the public domain"
+#  11. ISC         - "Permission to use, copy, modify, and/or distribute"
+#  12. MIT         - "Permission is hereby granted, free of charge"
+#
+# The MIT and ISC entries sit LAST because their distinctive phrasing
+# overlaps with BSD headers (BSD also contains "permission is granted"
+# wording). With this ordering, a full BSD-3-Clause header tags as
+# ``bsd-3-clause`` -- not MIT. The scanner stops at the first hit.
+_LICENSE_CATALOGUE: tuple[tuple[str, tuple[tuple[str, ...], ...]], ...] = (
+    # Each license is (tag, ((needle_group_1), (needle_group_2), ...)).
+    # ALL needles in a SINGLE group must be present (AND); ANY group
+    # passing is enough to identify the license (OR across groups).
+    ("apache-2.0", (
+        ("apache license", "version 2.0"),
+        ("licensed under the apache license",),
+    )),
+    ("agpl-3.0", (
+        ("gnu affero general public license", "version 3"),
+        ("agpl", "version 3"),
+    )),
+    ("gpl-3.0", (
+        ("gnu general public license", "version 3"),
+        ("gpl-3.0",),
+        ("gplv3",),
+    )),
+    ("gpl-2.0", (
+        ("gnu general public license", "version 2"),
+        ("gpl-2.0",),
+        ("gplv2",),
+    )),
+    ("lgpl-3.0", (
+        ("gnu lesser general public license", "version 3"),
+        ("lgpl-3.0",),
+        ("lgplv3",),
+    )),
+    ("mpl-2.0", (
+        ("mozilla public license", "version 2.0"),
+        ("mpl-2.0",),
+    )),
+    ("bsd-3-clause", (
+        ("redistribution and use", "neither the name", "redistributions in binary form"),
+        ("bsd 3-clause",),
+        ("bsd-3-clause",),
+    )),
+    ("bsd-2-clause", (
+        ("redistribution and use", "redistributions of source code", "redistributions in binary form"),
+        ("bsd 2-clause",),
+        ("bsd-2-clause",),
+    )),
+    ("cc0-1.0", (
+        ("cc0 1.0 universal",),
+        ("creative commons zero",),
+        ("cc0-1.0",),
+    )),
+    ("unlicense", (
+        ("this is free and unencumbered software released into the public domain",),
+        ("the unlicense",),
+    )),
+    ("isc", (
+        ("permission to use, copy, modify, and/or distribute",),
+        ("isc license",),
+    )),
+    ("mit", (
+        ("permission is hereby granted, free of charge",),
+        ("mit license",),
+    )),
+)
+# Max lines of the snippet's header that we scan. A real license
+# block is rarely longer than ~25 lines (the longest is GPL-3.0's
+# preamble at 21 lines). We use 30 as a comfortable upper bound that
+# still rules out a full file with one license-keyword comment buried
+# halfway down.
+_LICENSE_HEADER_LINES = 30
+
+
+def detect_license(code: str) -> str | None:
+    """Return the SPDX-style tag of an open-source license header
+    detected in the first :data:`_LICENSE_HEADER_LINES` lines of
+    ``code``, or ``None``.
+
+    Recognised tags: ``apache-2.0`` / ``mit`` / ``gpl-3.0`` /
+    ``gpl-2.0`` / ``lgpl-3.0`` / ``agpl-3.0`` / ``bsd-2-clause`` /
+    ``bsd-3-clause`` / ``mpl-2.0`` / ``isc`` / ``unlicense`` /
+    ``cc0-1.0``.
+
+    Detection scans the snippet's header for the distinctive opening
+    phrase of each license (catalogued in :data:`_LICENSE_CATALOGUE`).
+    The first license whose needle group matches wins. Order matters:
+    the longer / more-distinctive licenses (BSD-3-Clause, Apache 2.0)
+    are checked BEFORE the shorter ones (MIT, ISC) so a full BSD
+    header tags as ``bsd-3-clause`` rather than MIT (BSD headers also
+    contain the ``permission is granted`` phrasing).
+
+    Case-insensitive matching throughout. Whitespace and line breaks
+    are flattened so a header wrapped onto multiple lines still
+    matches the multi-needle requirement.
+    """
+    if not code or not code.strip():
+        return None
+    # Flatten the header to a single lowercased string with normalised
+    # whitespace so multi-line needles (``Licensed under the Apache
+    # License, Version 2.0``) still match when wrapped across two
+    # comment lines. We also strip leading comment markers (``*``,
+    # ``//``, ``#``, ``--``, ``;``) per-line so a C-style multi-line
+    # comment with ``* `` line continuations doesn't break a needle
+    # like ``mozilla public license`` across the asterisk boundary.
+    header_lines = code.splitlines()[:_LICENSE_HEADER_LINES]
+    cleaned: list[str] = []
+    for raw in header_lines:
+        line = raw.strip()
+        # Strip the comment-leader prefix so wrapped phrases collapse
+        # cleanly. We accept the four common single-char leaders and
+        # the two-char ones.
+        for leader in ("//", "/*", "*/", "--", "*", "#", ";", "%"):
+            if line.startswith(leader):
+                line = line[len(leader):].lstrip()
+                break
+        cleaned.append(line)
+    flat = " ".join(cleaned).lower()
+    # Collapse runs of whitespace so the comparison is robust to OCR
+    # noise (multiple spaces / tabs between words).
+    flat = re.sub(r"\s+", " ", flat)
+    for tag, needle_groups in _LICENSE_CATALOGUE:
+        for group in needle_groups:
+            if all(needle in flat for needle in group):
+                return tag
+    return None
+
+
 # Line-number prefix patterns. Each candidate captures (1) the number
 # itself and (2) the separator + trailing space(s), so we can strip
 # the matched prefix from the line. Tried in order most-specific-first
@@ -985,6 +1134,15 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if todo_count == 0:
         todo_count = detect_todo_count(code, language)
+    # License-header detection. Caller-supplied value wins; otherwise
+    # scan the snippet's header for a recognised open-source license.
+    # The detector returns None when no header matches so a TODO-free
+    # snippet with no license stays at the default None.
+    license_tag = (
+        existing.license if existing and existing.license else None
+    )
+    if license_tag is None:
+        license_tag = detect_license(code)
     return CodeFields(
         language=language,
         code=code,
@@ -996,4 +1154,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         comment_density=comment_density,
         numbered=numbered,
         todo_count=todo_count,
+        license=license_tag,
     )
