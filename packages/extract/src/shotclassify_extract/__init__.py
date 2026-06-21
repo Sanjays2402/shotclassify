@@ -24,6 +24,7 @@ from .error import (
 )
 from .git_shas import extract_git_shas
 from .identifiers import extract_identifiers
+from .macs import extract_macs
 from .network import extract_network
 from .paths import extract_paths
 from .phones import extract_phones
@@ -63,4 +64,5 @@ __all__ = [
     "extract_phones",
     "extract_uuids",
     "extract_git_shas",
+    "extract_macs",
 ]

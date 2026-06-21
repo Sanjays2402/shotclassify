@@ -9,6 +9,7 @@ from .emails import extract_emails
 from .error import enrich_error
 from .git_shas import extract_git_shas
 from .identifiers import extract_identifiers
+from .macs import extract_macs
 from .network import extract_network
 from .paths import extract_paths
 from .phones import extract_phones
@@ -126,5 +127,20 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if git_shas:
         out.raw = dict(out.raw or {})
         out.raw["git_shas"] = git_shas
+
+    # Cross-category: stash MAC addresses found in the OCR text under
+    # raw["macs"]. MACs surface in terminal screenshots (``ifconfig``
+    # / ``ip link`` output), network-config captures, ARP / DHCP
+    # tables, router console output, and asset-inventory documents.
+    # Output is canonical lowercase + colon-separated EUI-48 form so
+    # the same MAC printed colon / dash / Cisco-dot-quad collapses to
+    # one entry. The null MAC (all zeros) and broadcast MAC (all
+    # ones) are rejected because they don't identify a specific
+    # device. IPv6 spans are masked before scanning so a compressed
+    # IPv6 doesn't false-positive as a MAC.
+    macs = extract_macs(text)
+    if macs:
+        out.raw = dict(out.raw or {})
+        out.raw["macs"] = macs
 
     return out
