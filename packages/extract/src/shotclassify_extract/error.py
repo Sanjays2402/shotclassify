@@ -8,6 +8,19 @@ from shotclassify_common import ErrorFields, OCRResult
 _PY_TRACE = re.compile(r"Traceback \(most recent call last\):")
 _PY_FRAME = re.compile(r'File "([^"]+)", line (\d+)')
 _PY_EXC = re.compile(r"^([A-Z][A-Za-z0-9_]*Error|Exception)\s*:?\s*(.*)$", re.MULTILINE)
+# Python SyntaxError caret indicator. Python prints the offending
+# source line, an optional whitespace prefix matching the source
+# indent, then a run of ``^`` characters pointing at the bad token /
+# span. CPython 3.10+ also prints ``~~~~^^^^~~~~`` shapes where the
+# tildes cover the whole expression and the carets pin the operator;
+# we accept both purely-caret and tilde+caret shapes. The caret line
+# must be on its own line and contain only whitespace + ``~`` + ``^``.
+_PY_SYNTAX_EXC = re.compile(
+    r"^(?P<exc>SyntaxError|IndentationError|TabError|UnicodeDecodeError|"
+    r"UnicodeEncodeError)\s*:\s*(?P<msg>.*)$",
+    re.MULTILINE,
+)
+_PY_CARET_LINE = re.compile(r"^(?P<prefix>[ \t]*)(?P<arrows>[~^]*\^[~^]*)\s*$", re.MULTILINE)
 _JS_AT = re.compile(r"\s+at\s+\S+\s+\(([^):]+):(\d+):(\d+)\)")
 _JS_EXC = re.compile(r"^(\w*Error)\s*:\s*(.*)$", re.MULTILINE)
 _JAVA_EXC = re.compile(r"^(?:Exception in thread .* )?([\w.$]+(?:Exception|Error))\s*:\s*(.*)$", re.MULTILINE)
@@ -186,6 +199,54 @@ _PYTEST_FAILURE_TAIL = re.compile(
 # any expression (a function call that raised, a comparison, etc.) so
 # we capture the whole line content rather than locking to ``assert``.
 _PYTEST_ASSERT_EXPR = re.compile(r"^>\s+(?P<expr>\S.*?)\s*$", re.MULTILINE)
+
+
+def parse_syntax_caret(text: str) -> tuple[str, str, int, int] | None:
+    """Return ``(exception, source_line, caret_start, caret_end)`` when
+    ``text`` carries a Python ``SyntaxError`` / ``IndentationError`` /
+    ``TabError`` with the caret indicator. Returns ``None`` otherwise.
+
+    The exception is taken from the trailing ``SyntaxError: msg`` line.
+    The source line is the line printed IMMEDIATELY ABOVE the caret
+    line (CPython always prints them in that order: source, then
+    pointer). The caret span is ``(start_column, end_column)`` 0-indexed
+    columns into the source line so dashboards can highlight the bad
+    token. CPython 3.10+ prints multi-char ``~~~~^^^^~~~~`` shapes that
+    cover the whole expression; we capture the FULL caret span (tildes
+    included) because the carets within mark the operator and the
+    tildes mark the operands.
+    """
+    if not text:
+        return None
+    exc_m = _PY_SYNTAX_EXC.search(text)
+    if not exc_m:
+        return None
+    exc_name = exc_m.group("exc")
+    # Find the caret line and the source line printed directly above it.
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        m = _PY_CARET_LINE.match(line)
+        if not m:
+            continue
+        if i == 0:
+            # Caret with no source line above is malformed; skip.
+            continue
+        source = lines[i - 1]
+        prefix = m.group("prefix") or ""
+        arrows = m.group("arrows") or ""
+        start = len(prefix)
+        end = start + len(arrows)
+        # Reject the all-frame-bar pattern CPython prints between
+        # frames (a dashed/under-line that contains a ``^``). A real
+        # caret line never has anything but tildes and carets.
+        if not arrows or arrows.strip("~^") != "":
+            continue
+        # Source line must not be empty -- prevents capturing the
+        # caret of a frame whose source the OCR truncated.
+        if not source.strip():
+            continue
+        return exc_name, source, start, end
+    return None
 
 
 def parse_rust_panic(text: str) -> tuple[str, int, str] | None:
@@ -419,6 +480,25 @@ def _likely_cause(framework: str, exception: str | None, message: str | None) ->
         return "Incompatible types passed to a function or operator."
     if "modulenotfounderror" in exc or "no module named" in msg:
         return "Dependency not installed in the active environment."
+    if "syntaxerror" in exc:
+        # Common Python syntax-error wordings have a tight set of
+        # culprits. The caret span isn't used here -- the message text
+        # is enough to disambiguate.
+        if "invalid syntax" in msg:
+            return "Parser hit invalid syntax; check the highlighted token."
+        if "unexpected eof" in msg or "unexpected end of file" in msg:
+            return "File ended mid-statement; close every brace / paren / quote."
+        if "unmatched" in msg:
+            return "Unmatched bracket / quote; check pair balance above."
+        if "expected" in msg and ":" in msg:
+            return "Statement missing trailing ':' (def / if / for / class)."
+        if "f-string" in msg:
+            return "F-string syntax error; check braces and nested quotes."
+        return "Python syntax error; the caret points at the bad token."
+    if "indentationerror" in exc:
+        return "Indentation is inconsistent; mix of tabs and spaces likely."
+    if "taberror" in exc:
+        return "TabError: tabs mixed with spaces; use one consistently."
     if "connectionrefused" in msg.replace(" ", "") or "econnrefused" in msg:
         return "Target service is down or wrong host/port."
     if "permission denied" in msg:
@@ -509,6 +589,28 @@ def parse_error_text(text: str) -> ErrorFields:
         em = _PY_EXC.search(text)
         if em:
             exc, msg = em.group(1), em.group(2).strip()
+        # SyntaxError-class enrichment: when CPython prints the caret
+        # indicator (the ``^^^^^^^`` pointer to the bad token), surface
+        # the offending source line and the caret column span in the
+        # ``message`` field so dashboards can render a highlighted code
+        # snippet without needing to re-parse the trace. The bare
+        # SyntaxError ``msg`` (already populated above) is preserved as
+        # a prefix; we append the source-line context and a "col N..M"
+        # tail. The exception name is whatever CPython printed (one of
+        # SyntaxError / IndentationError / TabError / Unicode*Error).
+        syn = parse_syntax_caret(text)
+        if syn is not None:
+            syn_exc, source, col_start, col_end = syn
+            exc = syn_exc
+            base_msg = msg or ""
+            # Trim leading whitespace from the source for display while
+            # adjusting the caret span by the trimmed-prefix width.
+            trim = len(source) - len(source.lstrip())
+            display = source[trim:]
+            disp_start = max(0, col_start - trim)
+            disp_end = max(disp_start, col_end - trim)
+            caret_tail = f" [at {display!r}, col {disp_start}..{disp_end}]"
+            msg = (base_msg + caret_tail).strip()
     elif _JS_AT.search(text) or "at Object" in text or "node:" in text:
         framework = "node"
         m = _JS_AT.search(text)

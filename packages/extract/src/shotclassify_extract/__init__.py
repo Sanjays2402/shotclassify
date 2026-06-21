@@ -16,6 +16,7 @@ from .error import (
     parse_http_status,
     parse_pytest_failure,
     parse_rust_panic,
+    parse_syntax_caret,
 )
 from .identifiers import extract_identifiers
 from .network import extract_network
@@ -39,6 +40,7 @@ __all__ = [
     "parse_http_status",
     "parse_pytest_failure",
     "parse_rust_panic",
+    "parse_syntax_caret",
     "parse_beam_crash",
     "enrich_chat",
     "parse_timestamp",
