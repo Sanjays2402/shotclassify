@@ -71,22 +71,24 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 36. [x] Receipt: refund / void / cancelled-transaction detection (new `ReceiptFields.refund_amount`; positive amount stored regardless of leading minus; keyword vocab Refund/Refund Amount/Refund Total + Void/Void Sale/Void Transaction + Cancelled/Cancelled Transaction/Cancellation + Return/Return Amount/Return Total + Reversal; fallback to negative-Total/Subtotal with leading minus when no keyword; per-line negatives stay as discount lines; LLM wire-format updated).
 41. [x] Code: shebang interpreter extraction (new `CodeFields.interpreter`; direct path takes last segment, env wrapper takes first non-flag arg, env -S split-args skips flags, env --split-string=python3 inline form, only first line consulted so body shebangs are ignored, leading whitespace before #! is rejected because kernel exec(2) requires #! at byte 0; LLM wire-format updated).
 
+### Done in tick 8 (5 features)
+37. [x] Receipt: loyalty / membership / store / register identifier extraction (3 new ReceiptFields: loyalty_id, store_id, register_id; shared _find_keyword_id helper; first-keyword-in-catalogue-wins with most-specific keywords first; negative-lookbehind on alphas enforces word boundary so "Bookstore #1" / "Remember 1234" don't false-positive; LLM wire-format updated).
+38. [x] Receipt: cashier / server name extraction (2 new ReceiptFields: cashier, server; shared _find_keyword_name helper; column-gap two-space splitter runs BEFORE whitespace normalisation so cleaned name doesn't absorb the next column; punctuation in real names preserved (Mary-Jane, O'Brien, Jr.); LLM wire-format updated; documented one accepted false-positive on prose containing the bare keyword).
+44. [x] Error: PHP fatal-error stacktrace support (framework='php'; "Fatal error: Uncaught X:" and "PHP Fatal error:" preludes; thrown-in PATH on line N as innermost frame; inline "in PATH:LINE" fallback; namespace-qualified exceptions preserved; placed BEFORE JVM in elif chain because PHP exception names also satisfy _JAVA_EXC; 13-cause likely_cause catalogue).
+47. [x] Error: SQL database error extraction (framework='sql'; PostgreSQL ERROR:/LINE N: shape, MySQL ERROR NNNN (SQLSTATE): shape, SQLite Error: with vocab anchor, MSSQL Msg NNNN, Level N, State N + next-line message; PostgreSQL and SQLite regexes CASE-SENSITIVE to prevent generic "Error:" prose false-positives; dialect priority MySQL -> MSSQL -> SQLite -> PostgreSQL; runs BEFORE HTTP in else branch; 13-cause likely_cause catalogue).
+28. [x] Code: comment-density heuristic (new `CodeFields.comment_density` float 0..1; per-language comment-leader catalogue covers #/// /-- /; /% /<!-- families across 40+ language tags; block-comment openers /* / """ / ''' / =begin count when at start of line; "text" catchall defaults to # leader; pure data formats (json/csv/tsv) return 0.0; blank lines excluded from denominator; rounded to 2 decimal places; LLM wire-format updated).
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
 16. [ ] Chat: emoji density + reaction-line extraction (the `:eyes: 3` summary footer).
-28. [ ] Code: comment-density heuristic (% of lines that start with `//` or `#`) as a CodeFields.raw signal.
 32. [ ] Chat: emoji reaction counts on a per-message basis (the `❤️ 3 👍 2` footer).
-37. [ ] Receipt: loyalty / membership identifier extraction (member numbers, store IDs like `Store #1234`, register IDs `REG 02`).
-38. [ ] Receipt: cashier / server name extraction (`Cashier: Bob`, `Served by Alice`, `Your server was X`).
 39. [ ] Chat: replied-to / quoted-message detection (the `> quoted text` line + replied-by attribution above the new message).
 40. [ ] Chat: voice-note / image / video attachment markers (`🎤 Voice (0:42)`, `📷 Photo`, `[Image]`, `[Voice note 0:23]`).
 42. [ ] Code: JSDoc / docstring extraction (top-level docstring captured into `CodeFields.docstring` for Python / JS / Java / Go).
 43. [ ] Code: import-set extraction (new `CodeFields.imports` list of imported modules/packages, per language).
-44. [ ] Error: PHP fatal-error stacktrace support (framework=php; `Fatal error: Uncaught`, `Stack trace: #0 ...`, `thrown in /path/to/file.php on line N`).
 45. [ ] Error: Swift / Objective-C crash log parsing (framework=swift; `Fatal error: Unexpectedly found nil`, `*** Terminating app due to uncaught exception`).
 46. [ ] Error: Kotlin coroutine exception parsing (framework=kotlin; `kotlinx.coroutines.JobCancellationException`, `at ... CoroutineScopeKt`).
-47. [ ] Error: SQL-error extraction (framework=sql; PostgreSQL `ERROR: syntax error at or near "..."`, MySQL `ERROR 1064`, SQLite `Error: near "..."`).
 51. [ ] Extract: cross-category credit-card detection (PAN-shaped digit runs that pass Luhn; redact to BIN+last4 in `raw["pii"]`).
 52. [ ] Extract: cross-category ICAO / IATA airport-code extractor into `raw["airports"]` for travel screenshots.
 53. [ ] Chart: bar-chart series-label OCR refinement (split the legend block into a clean `ChartFields.series` list).
@@ -99,6 +101,11 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 60. [ ] Receipt: signature / signed-by detection (`Signature: _____`, `Signed by: Bob`, `X____` line markers).
 61. [ ] Receipt: barcode / SKU extraction at the line-item level (`SKU: 1234567`, `Barcode: 0123456789012`).
 62. [ ] Code: line-numbering detection (when the snippet starts every line with a number+space, strip the prefix and store `CodeFields.numbered = True`).
+63. [ ] Receipt: tender / change-given detection (new ReceiptFields.change; "Tendered 20.00 / Change 7.50" shape).
+64. [ ] Code: TODO / FIXME comment count surfaced as CodeFields.todo_count for code-review screenshots.
+65. [ ] Chat: link preview block detection (the inline OG-card with title + description that platforms inline for shared URLs).
+66. [ ] Error: AWS Lambda / boto3 client error extraction (BotoCoreError, ClientError with operation_name + error_code).
+67. [ ] Extract: cross-category MAC-address extractor into raw["macs"] (colon-separated + dash-separated 48-bit forms).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -196,6 +203,29 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     updated for both. Three new cross-category raw keys:
     raw["phones"], raw["uuids"], raw["git_shas"]. Roadmap refilled
     with 5 new items (58..62) so the backlog stays at 25+ open.
+
+- 2026-06-21 05:01 PT (tick 8, Cake): 5 features.
+  - 9ea9913 feat(extract/receipt): loyalty / store / register identifier extraction
+  - f25ff08 feat(extract/receipt): cashier and server name extraction
+  - e8f8b93 feat(extract/error): PHP fatal-error stacktrace support
+  - 83807e6 feat(extract/error): SQL database error extraction (framework='sql')
+  - 9868609 feat(extract/code): comment-density heuristic into CodeFields
+  - Gate: ruff at baseline 536 (no new errors, zero fixups needed
+    -- all five files written clean on first pass; one test
+    assertion adjustment in tick (the shell-density expectation
+    was 1.0 but #!/bin/bash + #helper + echo = 0.67 with 3
+    non-blank lines, fixed before commit) + pytest 1858 passed /
+    3 skipped in 119.66s. 221 new tests across the 5 features
+    (58 + 48 + 28 + 43 + 44). New fields shipped:
+    ReceiptFields.loyalty_id, ReceiptFields.store_id,
+    ReceiptFields.register_id, ReceiptFields.cashier,
+    ReceiptFields.server, CodeFields.comment_density. LLM wire
+    format in classify/client.py updated for all six. Two new
+    framework tags in error extractor: php, sql. Roadmap refilled
+    with 5 new items (63..67) so the backlog stays at 25+ open.
+    Shared helpers: _find_keyword_id (loyalty/store/register),
+    _find_keyword_name (cashier/server), _comment_leaders_for
+    (40+ language tags catalogued).
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
@@ -337,3 +367,57 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
   branch handles ``-S`` split-args (GNU coreutils >= 8.30),
   ``--split-string=python3`` inline form, and skips arbitrary
   short / long flags before landing on the first non-flag token.
+- `ReceiptFields.loyalty_id`, `store_id`, `register_id`, `cashier`,
+  and `server` all share the same negative-lookbehind on alphas
+  to enforce a word boundary on the left of the keyword. This is
+  why `Bookstore #1` doesn't fire the store matcher and `Remember
+  1234` doesn't fire the member matcher. Within each ID category
+  the keyword catalogue is ordered most-specific-first so
+  `Loyalty Number 1234` beats a bare `Member: 99` when both are
+  present. The cashier / server matchers use a column-gap
+  detector (two consecutive spaces) that runs BEFORE the
+  whitespace-collapse pass so the cleaned name doesn't
+  accidentally absorb the next receipt column. One accepted
+  false-positive on cashier: any prose sentence containing the
+  bare `cashier` keyword followed by a word captures the word
+  as the name (`the cashier was busy` -> `was`). Acceptable
+  because receipt OCR rarely contains full prose, and the regex
+  is intentionally permissive for name variations.
+- PHP fatal-error branch (`framework='php'`) is placed BEFORE the
+  JVM branch in the parse_error_text elif chain because the PHP
+  exception name is also a `\w+Exception` / `\w+Error` pattern
+  that satisfies `_JAVA_EXC`. Without this ordering a PHP
+  `RuntimeException` would tag as JVM. The `Uncaught` keyword
+  is the discriminator: PHP warnings / notices / parse errors
+  intentionally don't match. Namespace-qualified exceptions
+  keep their full path (`Symfony\\Component\\HttpKernel\\
+  Exception\\NotFoundHttpException`) so Laravel / Symfony
+  codebases tag correctly.
+- SQL error branch (`framework='sql'`) sits INSIDE the else:
+  fallback (after Rust, before HTTP) because SQL errors carry no
+  status code so they never accidentally pre-empt a real HTTP
+  trace. Dialect priority MySQL -> MSSQL -> SQLite -> PostgreSQL
+  is intentional because the more-specific signatures (MySQL's
+  parenthesised SQLSTATE, MSSQL's Msg header) anchor strongly
+  while PostgreSQL's bare `ERROR:` is the most generic and
+  would steal a SQLite `Error: near` line if case-insensitivity
+  collided. PostgreSQL and SQLite regexes are CASE-SENSITIVE
+  (Postgres prints strictly uppercase `ERROR:`, SQLite strictly
+  capital-E `Error:`) so generic `Error: something` prose lines
+  don't false-positive. MySQL stays case-insensitive because the
+  prelude is sometimes printed in title-case by GUI clients.
+- `CodeFields.comment_density` counts the fraction of NON-BLANK
+  lines whose first non-whitespace token opens a comment for the
+  detected language. Block-comment openers (`/*`, `"""`, `'''`,
+  `=begin`) count when they sit at the start of a line so
+  Python triple-quoted docstrings and C-family license headers
+  register correctly. Inline trailing comments (`foo = 1  #
+  inline`) do NOT count -- only line-leading. The `text`
+  catchall fallback defaults to the `#` leader because a
+  script-like snippet whose language was undetectable is
+  usually still readable with the `#` rule; only pure data
+  formats (json, csv, tsv) zero out unconditionally. PHP is
+  catalogued with BOTH `//` and `#` as leaders because PHP
+  accepts both syntaxes. Result is rounded to 2 decimal places
+  because finer precision is meaningless given OCR noise and
+  small snippet sizes.
