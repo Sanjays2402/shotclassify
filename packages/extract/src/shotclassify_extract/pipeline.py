@@ -13,6 +13,7 @@ from .paths import extract_paths
 from .phones import extract_phones
 from .receipt import enrich_receipt
 from .urls import extract_urls
+from .uuids import extract_uuids
 
 
 def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> ExtractedFields:
@@ -99,5 +100,17 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if phones:
         out.raw = dict(out.raw or {})
         out.raw["phones"] = phones
+
+    # Cross-category: stash UUIDs found in the OCR text under
+    # raw["uuids"]. UUIDs appear everywhere -- correlation IDs in
+    # error logs, test fixtures in code snippets, resource IDs in
+    # document URLs, invite links in chats. Output is canonical
+    # lowercase + hyphenated RFC 4122 form so the same UUID printed
+    # compact vs dashed collapses to one entry. The "nil" UUID
+    # (all zeros) is rejected as a placeholder.
+    uuids = extract_uuids(text)
+    if uuids:
+        out.raw = dict(out.raw or {})
+        out.raw["uuids"] = uuids
 
     return out

@@ -25,6 +25,7 @@ from .phones import extract_phones
 from .pipeline import enrich
 from .receipt import enrich_receipt, parse_receipt_text
 from .urls import extract_urls
+from .uuids import extract_uuids
 
 __all__ = [
     "enrich",
@@ -51,4 +52,5 @@ __all__ = [
     "extract_emails",
     "extract_identifiers",
     "extract_phones",
+    "extract_uuids",
 ]
