@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (35 features tracked)
+## Roadmap (40 features tracked)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -64,27 +64,29 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 25. [x] Code: minified vs hand-written JS detection (new `CodeFields.minified` bool; webpack/IIFE/bundler preamble shortcut + avg-line-length + low-newline-ratio dual-gate; JS-family languages only; LLM wire-format updated).
 33. [x] Error: Python SyntaxError caret-line extraction (`message` enriched with offending source line + caret col span; CPython 3.10+ widened `~~^^^~~` shapes captured; six likely_cause hints; parse_syntax_caret helper exported).
 
+### Done in tick 7 (5 features)
+48. [x] Extract: cross-category phone-number extractor (E.164 with mixed separators, NANP-formatted with matched separators + 2-9 leading digits on area/exchange, keyword-prefixed bare NANP; output digits-only with `+` preserved; E.164 hits also register the 10-digit tail so NANP duplicates of the same number are suppressed; cap 50; raw["phones"]).
+49. [x] Extract: cross-category UUID extractor (dashed + compact, v1..v5 only via version-nibble enforcement at position 12, variant nibble intentionally unconstrained so Microsoft GUIDs land too, "nil" all-zero UUID rejected as placeholder, non-hex boundaries prevent biting longer SHA hashes, canonical lowercase + hyphenated output; cap 50; raw["uuids"]).
+50. [x] Extract: cross-category git SHA extractor (full SHA-1 standalone, short 7..12 hex requires git-vocabulary context: commit/revision/rev/SHA/hash + : or whitespace, git subcommand invocations on SAME LINE only, mail-style footers Fixes:/Refs:/Reverts:/See:/Cc:, GitHub-style #<sha>, reflog HEAD@{<sha>}; full and short stay distinct without repo to resolve against; cap 50; raw["git_shas"]).
+36. [x] Receipt: refund / void / cancelled-transaction detection (new `ReceiptFields.refund_amount`; positive amount stored regardless of leading minus; keyword vocab Refund/Refund Amount/Refund Total + Void/Void Sale/Void Transaction + Cancelled/Cancelled Transaction/Cancellation + Return/Return Amount/Return Total + Reversal; fallback to negative-Total/Subtotal with leading minus when no keyword; per-line negatives stay as discount lines; LLM wire-format updated).
+41. [x] Code: shebang interpreter extraction (new `CodeFields.interpreter`; direct path takes last segment, env wrapper takes first non-flag arg, env -S split-args skips flags, env --split-string=python3 inline form, only first line consulted so body shebangs are ignored, leading whitespace before #! is rejected because kernel exec(2) requires #! at byte 0; LLM wire-format updated).
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
 16. [ ] Chat: emoji density + reaction-line extraction (the `:eyes: 3` summary footer).
 28. [ ] Code: comment-density heuristic (% of lines that start with `//` or `#`) as a CodeFields.raw signal.
 32. [ ] Chat: emoji reaction counts on a per-message basis (the `❤️ 3 👍 2` footer).
-36. [ ] Receipt: detect refund / void / cancelled lines (new `ReceiptFields.refund_amount`; `REFUND` / `VOID` / `CANCELLED` markers; negative-sign forms).
 37. [ ] Receipt: loyalty / membership identifier extraction (member numbers, store IDs like `Store #1234`, register IDs `REG 02`).
 38. [ ] Receipt: cashier / server name extraction (`Cashier: Bob`, `Served by Alice`, `Your server was X`).
 39. [ ] Chat: replied-to / quoted-message detection (the `> quoted text` line + replied-by attribution above the new message).
 40. [ ] Chat: voice-note / image / video attachment markers (`🎤 Voice (0:42)`, `📷 Photo`, `[Image]`, `[Voice note 0:23]`).
-41. [ ] Code: shebang interpreter extraction (new `CodeFields.interpreter`; pulls `#!/usr/bin/env python3` -> `python3`, `bash`, `node`, etc.).
 42. [ ] Code: JSDoc / docstring extraction (top-level docstring captured into `CodeFields.docstring` for Python / JS / Java / Go).
 43. [ ] Code: import-set extraction (new `CodeFields.imports` list of imported modules/packages, per language).
 44. [ ] Error: PHP fatal-error stacktrace support (framework=php; `Fatal error: Uncaught`, `Stack trace: #0 ...`, `thrown in /path/to/file.php on line N`).
 45. [ ] Error: Swift / Objective-C crash log parsing (framework=swift; `Fatal error: Unexpectedly found nil`, `*** Terminating app due to uncaught exception`).
 46. [ ] Error: Kotlin coroutine exception parsing (framework=kotlin; `kotlinx.coroutines.JobCancellationException`, `at ... CoroutineScopeKt`).
 47. [ ] Error: SQL-error extraction (framework=sql; PostgreSQL `ERROR: syntax error at or near "..."`, MySQL `ERROR 1064`, SQLite `Error: near "..."`).
-48. [ ] Extract: cross-category phone-number extractor into `raw["phones"]` (E.164, US ten-digit, formatted with dashes/parens; libphonenumber-free conservative regex).
-49. [ ] Extract: cross-category UUID extractor into `raw["uuids"]` (v1-v5 dashed and 32-char compact forms with case normalised to lowercase).
-50. [ ] Extract: cross-category git SHA extractor into `raw["git_shas"]` (40-char and 7..12 char short SHAs anchored to bare word context).
 51. [ ] Extract: cross-category credit-card detection (PAN-shaped digit runs that pass Luhn; redact to BIN+last4 in `raw["pii"]`).
 52. [ ] Extract: cross-category ICAO / IATA airport-code extractor into `raw["airports"]` for travel screenshots.
 53. [ ] Chart: bar-chart series-label OCR refinement (split the legend block into a clean `ChartFields.series` list).
@@ -92,6 +94,11 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 55. [ ] UI mockup: layout-style guess (new `UIMockupFields.layout_kind`: `dashboard` / `landing` / `form` / `settings` / `modal`).
 56. [ ] PII redact: phone-number redaction mode (`phone` mode; normalises to `<PHONE>` stub).
 57. [ ] PII redact: physical-address redaction mode (`address` mode; one-line US/UK street + city + zip patterns).
+58. [ ] Extract: cross-category time-zone offset extractor (UTC offsets like `+05:30`, `-0800`, `Z`; named zones like `PST` / `JST` / `IST`).
+59. [ ] Extract: cross-category currency-amount extractor into `raw["amounts"]` (cross-category so a code snippet or chat message that quotes a price is surfaced; symbol + ISO code aware).
+60. [ ] Receipt: signature / signed-by detection (`Signature: _____`, `Signed by: Bob`, `X____` line markers).
+61. [ ] Receipt: barcode / SKU extraction at the line-item level (`SKU: 1234567`, `Barcode: 0123456789012`).
+62. [ ] Code: line-numbering detection (when the snippet starts every line with a number+space, strip the prefix and store `CodeFields.numbered = True`).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -169,6 +176,26 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     classify/client.py updated for all four new fields. Roadmap
     refilled with 22 new items (36..57) so the backlog has
     breathing room.
+
+- 2026-06-21 01:24 PT (tick 7, Cake): 5 features.
+  - 1c6a05f feat(extract): cross-category phone-number extractor into raw["phones"]
+  - 8373e6b feat(extract): cross-category UUID extractor into raw["uuids"]
+  - 81533f8 feat(extract): cross-category git SHA extractor into raw["git_shas"]
+  - 2793ab1 feat(extract/receipt): detect refund / void / cancelled transactions
+  - edd68e9 feat(extract/code): shebang interpreter extraction
+  - Gate: ruff at baseline 536 (no new errors after three I001
+    fixups -- ruff wanted no blank line between
+    `from shotclassify_extract import ...` and the first
+    section-divider comment in the new test files -- + one N802
+    fixup for `test_env_with_S_flag_split_args` -> lowercase `s`;
+    all four folded via --fixup + --autosquash into the
+    respective feature commits) + pytest 1637 passed / 3 skipped
+    in 238.88s. 204 new tests across the 5 features (42 + 34 + 49
+    + 40 + 39). New fields shipped: ReceiptFields.refund_amount,
+    CodeFields.interpreter. LLM wire format in classify/client.py
+    updated for both. Three new cross-category raw keys:
+    raw["phones"], raw["uuids"], raw["git_shas"]. Roadmap refilled
+    with 5 new items (58..62) so the backlog stays at 25+ open.
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
@@ -268,3 +295,45 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
   OCR noise can) does not steal the match. It also skips caret
   lines that sit at index 0 (no source line above) and caret
   lines whose source line is blank.
+- `extract_phones` E.164 hits also register the trailing 10-digit
+  form in the seen-set so a follow-up bare NANP match on the same
+  number (``+1 (415) 555-1234`` printed alongside ``(415)
+  555-1234``) does NOT land as a separate entry. The reverse case
+  (bare NANP printed before E.164) keeps the NANP version because
+  it lands first in source-text offset order.
+- `extract_uuids` deliberately rejects the all-zero "nil" UUID
+  because it's almost always a placeholder / default value, but
+  ACCEPTS UUIDs whose variant nibble (first hex of the 4th group)
+  doesn't conform to RFC 4122 -- real-world dashboards encounter
+  Microsoft GUIDs whose variant doesn't match and we want them
+  surfaced. The version nibble IS enforced (position 12 must be
+  1..5) so we never fold a random 32-hex string of the wrong
+  shape into the list.
+- `extract_git_shas` short SHAs (7..12 hex) require a git-
+  vocabulary context to land because a bare 7-12 hex blob false-
+  positives on UUIDs, color codes, and base16 IDs. The git
+  subcommand pattern (``git show / log / cherry-pick ...``) uses
+  ``[ \t]+`` horizontal whitespace ONLY between the command and
+  the SHA so ``git log --oneline\n1234567 fix...`` does NOT steal
+  the first hex tail of the log output as the argument SHA. Full
+  and short forms of the same commit stay distinct because we
+  don't have the repo to resolve against.
+- `ReceiptFields.refund_amount` is stored POSITIVE regardless of
+  whether the printer used a leading ``-`` or wrote the value
+  bare with a refund keyword. The sign is implied by the field's
+  semantic. Per-line negative amounts continue to flow through
+  the existing per-item discount parser (``ReceiptLine.discount_amount``);
+  only top-level keyword-led OR explicit negative-Total/Subtotal
+  forms populate the top-level field. The negative-total
+  fallback requires an EXPLICIT leading ``-`` on the
+  ``Total`` / ``Subtotal`` value -- a positive total is a normal
+  sale and never tags as a refund.
+- `CodeFields.interpreter` extraction looks at the FIRST line of
+  the snippet only. A shebang elsewhere in the body is treated
+  as a regular comment (which it is). Leading whitespace before
+  the ``#!`` marker is rejected because the kernel exec(2)
+  parser also requires ``#!`` at byte 0 -- a script that does
+  not enforce this is not actually shebang-runnable. The env
+  branch handles ``-S`` split-args (GNU coreutils >= 8.30),
+  ``--split-string=python3`` inline form, and skips arbitrary
+  short / long flags before landing on the first non-flag token.
