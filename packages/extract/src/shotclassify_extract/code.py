@@ -1525,6 +1525,129 @@ def extract_imports(code: str, language: str | None = None) -> list[str]:
     return out
 
 
+# Copyright-holder extraction. We scan the first 30 lines of the
+# snippet for a ``Copyright`` / ``(c)`` / ``(C)`` header and capture
+# each ``{holder, year}`` pair found. The same header window is used
+# by ``detect_license`` so the two detectors run against the same
+# slice of the snippet.
+#
+# Recognised vocabularies (case-insensitive):
+#
+#   Copyright (c) 2024 ACME Corp
+#   Copyright (C) 2020-2024 Alice Author
+#   (c) 2024 ACME, All rights reserved.
+#   (C) 2024 ACME Corp.
+#   Copyright 2024 ACME Corp           (no (c) marker)
+#   COPYRIGHT 2024 ACME CORP           (uppercase)
+#
+# Year shapes captured (preserved as printed):
+#
+#   2024                       single year
+#   2020-2024                  range
+#   2020, 2021, 2024           list (commas + spaces preserved)
+#   2020, 2022-2024            mixed list + range
+#
+# Edge cases handled:
+#
+# * Per-line comment leaders (``//``, ``/*``, ``*``, ``#``, ``--``,
+#   ``;``, ``%``) are stripped before parsing so a C-style header
+#   comment doesn't carry the leader into the captured holder name.
+# * ``All rights reserved`` and trailing ``.`` / ``,`` are stripped
+#   from the captured holder name.
+# * Multiple holders printed across multiple lines (a derived work
+#   with both upstream and downstream copyrights) all surface as
+#   separate entries. De-duplication is on the (holder, year)
+#   pair, NOT on holder alone -- two copyrights with different
+#   years are kept distinct.
+_COPYRIGHT_HEADER_LINES = 30
+
+# Year-token regex: a 4-digit year, or a list of comma- or hyphen-
+# separated years. We allow whitespace between the separators so the
+# printer can choose its preferred style.
+_YEAR_TOKEN = r"\d{4}(?:\s*[-,]\s*\d{4})*"
+
+# Holder-name regex: everything from after the year up to a sentence
+# terminator (``.`` at end of line) or a hard separator (``;``).
+# Trailing ``All rights reserved`` is stripped post-match.
+_HOLDER_TAIL = r"(?P<holder>.+?)(?:\s*[.;]?\s*(?:all\s+rights\s+reserved)?\s*)?$"
+
+# Full copyright regex. The leading marker is one of:
+#   * ``copyright`` word
+#   * literal ``(c)`` / ``(C)``
+#   * literal ``©`` (Unicode copyright sign)
+# followed optionally by an additional ``(c)`` / ``(C)`` / ``©``
+# marker, then the year-token, then the holder name.
+_COPYRIGHT_RE = re.compile(
+    r"(?:copyright|\(c\)|©)"
+    r"(?:\s*(?:\(c\)|©))?"
+    r"\s+(?P<year>" + _YEAR_TOKEN + r")"
+    r"(?:\s+by)?"
+    r"\s+" + _HOLDER_TAIL,
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _strip_copyright_leader(line: str) -> str:
+    """Strip the leading comment leader from a header line."""
+    s = line.strip()
+    # Two-char leaders first so ``//`` and ``/*`` don't get clipped to ``/``.
+    for leader in ("//", "/*", "*/", "--"):
+        if s.startswith(leader):
+            return s[len(leader):].lstrip()
+    # Single-char leaders.
+    if s and s[0] in "*#;%":
+        return s[1:].lstrip()
+    return s
+
+
+def _clean_holder(raw: str) -> str:
+    """Trim the trailing ``All rights reserved`` / punctuation cruft."""
+    s = raw.strip()
+    # Strip a trailing ``All rights reserved`` (the word "rights" is
+    # the unique signal so we don't accidentally clip a real name).
+    s = re.sub(r"\s*[,.]?\s*all\s+rights\s+reserved\.?$", "", s, flags=re.IGNORECASE)
+    # Strip a final block-comment terminator if the holder ends adjacent
+    # to a C-style header (`/* ... ACME Corp */`).
+    s = re.sub(r"\s*\*/\s*$", "", s)
+    # Strip trailing punctuation.
+    s = s.rstrip(".,;:")
+    return s.strip()
+
+
+def extract_copyrights(code: str) -> list[dict[str, str]]:
+    """Return a list of ``{holder, year}`` dicts found in the snippet's header.
+
+    Scans the first :data:`_COPYRIGHT_HEADER_LINES` lines and matches
+    every distinct copyright statement. Multiple holders on separate
+    lines (or comma-separated on the same line) all surface. The
+    captured year is the as-printed token (a single year, a range, or
+    a list); the holder is trimmed of trailing ``All rights reserved``
+    boilerplate and punctuation.
+    """
+    if not code or not code.strip():
+        return []
+    header_lines = code.splitlines()[:_COPYRIGHT_HEADER_LINES]
+    cleaned = [_strip_copyright_leader(ln) for ln in header_lines]
+    body = "\n".join(cleaned)
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for m in _COPYRIGHT_RE.finditer(body):
+        year = m.group("year").strip()
+        # Collapse the year token whitespace so ``2020 - 2024`` becomes
+        # ``2020-2024`` and ``2020 , 2021`` becomes ``2020, 2021``.
+        year = re.sub(r"\s*-\s*", "-", year)
+        year = re.sub(r"\s*,\s*", ", ", year)
+        holder = _clean_holder(m.group("holder"))
+        if not holder:
+            continue
+        key = (holder.lower(), year)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"holder": holder, "year": year})
+    return out
+
+
 # Line-number prefix patterns. Each candidate captures (1) the number
 # itself and (2) the separator + trailing space(s), so we can strip
 # the matched prefix from the line. Tried in order most-specific-first
@@ -1764,6 +1887,13 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     imports = list(existing.imports) if existing and existing.imports else []
     if not imports:
         imports = extract_imports(code, language)
+    # Copyright holders extracted from the snippet's header. Caller-
+    # supplied list wins (preserved verbatim); otherwise scan the
+    # first 30 header lines for ``Copyright ...`` / ``(c) ...`` /
+    # ``©`` markers and surface each ``{holder, year}`` pair found.
+    copyrights = list(existing.copyright) if existing and existing.copyright else []
+    if not copyrights:
+        copyrights = extract_copyrights(code)
     return CodeFields(
         language=language,
         code=code,
@@ -1778,4 +1908,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         license=license_tag,
         docstring=docstring,
         imports=imports,
+        copyright=copyrights,
     )

@@ -312,6 +312,30 @@ class CodeFields(BaseModel):
     # Dashboards use this to surface "uses X library" annotations and
     # group snippets by stack without forcing an LLM round trip.
     imports: list[str] = Field(default_factory=list)
+    # Copyright holders extracted from the snippet's header lines.
+    # Each entry is a ``{"holder": str, "year": str}`` dict. ``year``
+    # is the as-printed year token (``2024``, ``2020-2024``,
+    # ``2020, 2021, 2024``) so dashboards can surface the freshest
+    # year without re-parsing. ``holder`` is the captured rights-
+    # holder name (a person, company, or organisation), trimmed of
+    # trailing periods / commas / ``All rights reserved`` boilerplate.
+    #
+    # Recognised printer vocabularies (case-insensitive):
+    #
+    #   Copyright (c) 2024 ACME Corp
+    #   Copyright (C) 2020-2024 Alice Author
+    #   (c) 2024 ACME, All rights reserved.
+    #   (C) 2024 ACME Corp.
+    #   Copyright 2024 ACME Corp           (no (c) marker)
+    #   COPYRIGHT 2024 ACME CORP           (uppercase)
+    #
+    # Detection scans the first 30 header lines (same window as
+    # ``license`` detection). Multiple distinct holders may appear on
+    # the same header (a derived work that lists both upstream and
+    # downstream copyrights); we capture each. De-duplicated on the
+    # (holder, year) pair. Empty list when no copyright lines are
+    # present.
+    copyright: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):

@@ -13,6 +13,7 @@ from .code import (
     detect_todo_count,
     detect_ts_features,
     enrich_code,
+    extract_copyrights,
     extract_imports,
 )
 from .credit_cards import extract_credit_cards
@@ -83,4 +84,5 @@ __all__ = [
     "extract_timezones",
     "extract_credit_cards",
     "extract_imports",
+    "extract_copyrights",
 ]
