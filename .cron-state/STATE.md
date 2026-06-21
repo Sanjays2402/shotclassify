@@ -57,17 +57,41 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 30. [x] Extract: cross-category identifier extractor (ISBN-10/13 + DOI + arXiv + ISSN) into `raw["identifiers"]` (check-digit validated, masked spans between matchers).
 31. [x] Receipt: order/invoice/reference number extraction (new `ReceiptFields.order_number`; invoice/order/receipt/check/transaction/reference/confirmation vocabularies; LLM wire-format updated).
 
+### Done in tick 6 (5 features)
+26. [x] Receipt: tax-inclusive vs exclusive pricing detection (new `ReceiptFields.tax_mode`; first-in-OCR-order tiebreaker; ten EU/AU/NZ/IN/US/UK phrasings each side; LLM wire-format updated).
+34. [x] Receipt: party-size / split-bill detection (new `ReceiptFields.party_size`; party/guests/covers vocabularies win over split-cues; 1..50 bound; LLM wire-format updated).
+35. [x] Code: TypeScript-specific feature extraction (new `CodeFields.ts_features` list with decorator/as_cast/angle_cast/generic/enum/readonly/abstract/access_modifier/namespace/optional_chain/non_null_assert tags; runs only when language is typescript/tsx/ts; LLM wire-format updated).
+25. [x] Code: minified vs hand-written JS detection (new `CodeFields.minified` bool; webpack/IIFE/bundler preamble shortcut + avg-line-length + low-newline-ratio dual-gate; JS-family languages only; LLM wire-format updated).
+33. [x] Error: Python SyntaxError caret-line extraction (`message` enriched with offending source line + caret col span; CPython 3.10+ widened `~~^^^~~` shapes captured; six likely_cause hints; parse_syntax_caret helper exported).
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
 16. [ ] Chat: emoji density + reaction-line extraction (the `:eyes: 3` summary footer).
-25. [ ] Code: detect minified vs hand-written JS (heuristic: avg line length, lack of newlines after `;` and `{`).
-26. [ ] Receipt: detect tax-inclusive vs exclusive pricing from text cues (`VAT included` / `tax incl.` / `+ tax`).
 28. [ ] Code: comment-density heuristic (% of lines that start with `//` or `#`) as a CodeFields.raw signal.
 32. [ ] Chat: emoji reaction counts on a per-message basis (the `❤️ 3 👍 2` footer).
-33. [ ] Error: Python `SyntaxError` with caret line extraction (`^^^^^^^` indicator).
-34. [ ] Receipt: split-bill / parties detection (`Party of 4`, `Split 3 ways`).
-35. [ ] Code: TypeScript-specific signals (decorators, `as` casts, generic type params) beyond the current `: type` tags.
+36. [ ] Receipt: detect refund / void / cancelled lines (new `ReceiptFields.refund_amount`; `REFUND` / `VOID` / `CANCELLED` markers; negative-sign forms).
+37. [ ] Receipt: loyalty / membership identifier extraction (member numbers, store IDs like `Store #1234`, register IDs `REG 02`).
+38. [ ] Receipt: cashier / server name extraction (`Cashier: Bob`, `Served by Alice`, `Your server was X`).
+39. [ ] Chat: replied-to / quoted-message detection (the `> quoted text` line + replied-by attribution above the new message).
+40. [ ] Chat: voice-note / image / video attachment markers (`🎤 Voice (0:42)`, `📷 Photo`, `[Image]`, `[Voice note 0:23]`).
+41. [ ] Code: shebang interpreter extraction (new `CodeFields.interpreter`; pulls `#!/usr/bin/env python3` -> `python3`, `bash`, `node`, etc.).
+42. [ ] Code: JSDoc / docstring extraction (top-level docstring captured into `CodeFields.docstring` for Python / JS / Java / Go).
+43. [ ] Code: import-set extraction (new `CodeFields.imports` list of imported modules/packages, per language).
+44. [ ] Error: PHP fatal-error stacktrace support (framework=php; `Fatal error: Uncaught`, `Stack trace: #0 ...`, `thrown in /path/to/file.php on line N`).
+45. [ ] Error: Swift / Objective-C crash log parsing (framework=swift; `Fatal error: Unexpectedly found nil`, `*** Terminating app due to uncaught exception`).
+46. [ ] Error: Kotlin coroutine exception parsing (framework=kotlin; `kotlinx.coroutines.JobCancellationException`, `at ... CoroutineScopeKt`).
+47. [ ] Error: SQL-error extraction (framework=sql; PostgreSQL `ERROR: syntax error at or near "..."`, MySQL `ERROR 1064`, SQLite `Error: near "..."`).
+48. [ ] Extract: cross-category phone-number extractor into `raw["phones"]` (E.164, US ten-digit, formatted with dashes/parens; libphonenumber-free conservative regex).
+49. [ ] Extract: cross-category UUID extractor into `raw["uuids"]` (v1-v5 dashed and 32-char compact forms with case normalised to lowercase).
+50. [ ] Extract: cross-category git SHA extractor into `raw["git_shas"]` (40-char and 7..12 char short SHAs anchored to bare word context).
+51. [ ] Extract: cross-category credit-card detection (PAN-shaped digit runs that pass Luhn; redact to BIN+last4 in `raw["pii"]`).
+52. [ ] Extract: cross-category ICAO / IATA airport-code extractor into `raw["airports"]` for travel screenshots.
+53. [ ] Chart: bar-chart series-label OCR refinement (split the legend block into a clean `ChartFields.series` list).
+54. [ ] Chart: percent annotations vs raw values heuristic (new `ChartFields.value_unit`: `%` / `count` / `currency` based on axis tick text).
+55. [ ] UI mockup: layout-style guess (new `UIMockupFields.layout_kind`: `dashboard` / `landing` / `form` / `settings` / `modal`).
+56. [ ] PII redact: phone-number redaction mode (`phone` mode; normalises to `<PHONE>` stub).
+57. [ ] PII redact: physical-address redaction mode (`address` mode; one-line US/UK street + city + zip patterns).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -127,6 +151,25 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     BEAM crash branch placed between Go and Ruby in the elif chain;
     no other branch displaced.
 
+- 2026-06-20 22:43 PT (tick 6, Cake): 5 features.
+  - da07739 feat(extract/receipt): detect inclusive vs exclusive tax mode
+  - f06edea feat(extract/receipt): detect party size and split-bill count
+  - 2460910 feat(extract/code): TypeScript-specific feature extraction
+  - a0ccc41 feat(extract/code): detect minified vs hand-written JS
+  - 49a28b6 feat(extract/error): Python SyntaxError caret-line extraction
+  - Gate: ruff at baseline 536 (no new errors, zero fixups needed
+    -- all five files written clean on first pass; the
+    access_modifier TS regex needed one tighten after the first
+    failing test pass, folded into 2460910 before commit) + pytest
+    1433 passed / 3 skipped in 139.09s. 164 new tests across the 5
+    features (35 + 39 + 47 + 22 + 21). New fields shipped:
+    ReceiptFields.tax_mode, ReceiptFields.party_size,
+    CodeFields.ts_features, CodeFields.minified. New helper
+    parse_syntax_caret exported. LLM wire format in
+    classify/client.py updated for all four new fields. Roadmap
+    refilled with 22 new items (36..57) so the backlog has
+    breathing room.
+
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
 - API / middleware features still deferred because of TestClient bootstrap cost.
@@ -184,3 +227,44 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
   barcode noise is rejected. arXiv requires the ``arXiv:`` prefix
   so a bare ``2306.12345`` version-string lookalike does not
   false-positive.
+- `ReceiptFields.tax_mode` cues are checked in inclusive-first
+  order purely so the helper has a deterministic tiebreaker; the
+  actual decision rule is "FIRST cue in OCR order wins". Both
+  inclusive and exclusive vocabularies span EU / AU / NZ / IN / US
+  / UK phrasings (VAT, GST, HST, PST, QST). The exclusive ``ex
+  VAT`` shorthand requires a leading word boundary so a stray
+  ``ex`` in prose does not false-positive.
+- `ReceiptFields.party_size` cues prefer cover-count vocabularies
+  (Party / Guests / Covers) over split-bill cues (Split N ways /
+  Per person N) because a 4-cover bill split 3 ways still has 4
+  guests. Counts are bounded 1..50; the bare ``Party N`` form
+  requires a leading colon, comma, or line-start so prose
+  ("the party 3 days ago") does not fire. Three-digit counts
+  fail the regex digit cap as a second defence.
+- `CodeFields.ts_features` runs ONLY when the language detector
+  already tagged the snippet as typescript / tsx / ts so a plain
+  JS snippet using ``as`` as a variable name does not false-
+  positive. The ``access_modifier`` regex was relaxed away from
+  start-of-line anchoring so inline class declarations
+  (``class Foo { private id: number; }``) still tag; the
+  trailing-token constraint (``[:(?=]``) keeps prose words after
+  ``private`` from misfiring.
+- `CodeFields.minified` is a dual-gated decision: long lines AND
+  low newline-after-separator ratio. The ``max_len > 500`` branch
+  exists specifically to catch bundles with a few short sourcemap
+  comments above one giant minified body. Non-JS-family languages
+  short-circuit to False because the heuristic is tuned for JS
+  bundle output.
+- Python SyntaxError enrichment runs INSIDE the existing python
+  branch of ``parse_error_text`` (not as a separate elif). It
+  overrides the exception name from the trailing
+  ``SyntaxError: msg`` line and appends the source line + caret
+  column span to the message. The trim-by-leading-whitespace
+  step keeps the dashboard rendering compact while preserving
+  the caret-into-trimmed-source column math.
+- `parse_syntax_caret` rejects a caret line whose ``arrows``
+  group contains anything other than ``~`` and ``^`` chars, so a
+  divider like ``---^---`` (CPython does not print this, but
+  OCR noise can) does not steal the match. It also skips caret
+  lines that sit at index 0 (no source line above) and caret
+  lines whose source line is blank.
