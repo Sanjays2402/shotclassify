@@ -404,6 +404,98 @@ def _detect_party_size(text: str) -> int | None:
     return None
 
 
+# Refund / void / cancelled-transaction detection. Real-world
+# return / void receipts print a small set of recognisable cues
+# alongside the refunded amount:
+#
+#   "REFUND 12.50"               -> 12.50
+#   "Refund Amount: 12.50"       -> 12.50
+#   "REFUND: -12.50"             -> 12.50  (sign stripped)
+#   "Refund Total 12.50"         -> 12.50
+#   "VOID 12.50"                 -> 12.50
+#   "Void Sale 12.50"            -> 12.50
+#   "CANCELLED 12.50"            -> 12.50
+#   "Cancelled Transaction 12.50"-> 12.50
+#   "Return 12.50"               -> 12.50  (American POS term)
+#   "RETURN: -12.50"             -> 12.50
+#
+# Also accepts a leading-sign form even WITHOUT a keyword when the
+# explicit ``Total`` / ``Subtotal`` line is itself negative:
+#
+#   "Total -12.50"               -> 12.50
+#   "TOTAL: -$12.50"             -> 12.50
+#
+# Inside an item line a negative amount is treated as a line discount
+# (existing behaviour); only top-level total / subtotal / explicit
+# refund-keyword amounts populate refund_amount.
+#
+# We bound the amount to 0.01..99999 to keep OCR noise out.
+_REFUND_KEYWORDS = (
+    r"refund(?:\s+(?:amount|total))?",
+    r"void(?:\s+(?:sale|transaction))?",
+    r"cancelled(?:\s+transaction)?",
+    r"cancellation",
+    r"return(?:\s+(?:amount|total))?",
+    r"reversal",
+)
+
+
+def _find_refund_amount(text: str) -> float | None:
+    """Return the refund / void / cancelled amount, or None.
+
+    Tries the keyword forms (``Refund 12.50`` / ``VOID -12.50`` etc.)
+    first because they are the unambiguous signal. Falls back to a
+    negative-total form (``Total -12.50``) so a printer that omits
+    the keyword but flips the total sign still tags the receipt as
+    a refund. Returns the ABSOLUTE amount; the sign is implied by
+    the field's semantic (only refunds populate it). Values outside
+    0.01..99999 are rejected as OCR noise.
+    """
+    if not text:
+        return None
+    # Keyword-led form: ``REFUND -12.50`` / ``Refund Amount: 12.50``.
+    # Accept an optional leading sign on the amount, optional
+    # currency symbol, and optional ``:`` / ``-`` / ``=`` separator
+    # between the keyword and the value.
+    for kw in _REFUND_KEYWORDS:
+        pat = re.compile(
+            rf"(?:(?<=\n)|(?<=^)|(?<=[^a-zA-Z])){kw}"
+            r"\s*[:\-=]?\s*[-]?\s*[$€£¥]?\s*"
+            r"(?P<amt>\d{1,5}(?:[.,]\d{2}))",
+            re.IGNORECASE,
+        )
+        matches = list(pat.finditer(text))
+        if not matches:
+            continue
+        # Last-match wins for the keyword form (a header that lists
+        # "Refunds Today" + the actual ``Refund 12.50`` line at the
+        # bottom should resolve to the actual line).
+        try:
+            amount = abs(float(matches[-1].group("amt").replace(",", ".")))
+        except ValueError:
+            continue
+        if 0.01 <= amount <= 99999:
+            return round(amount, 2)
+    # No keyword cue -> try the negative-total fallback. We only do
+    # this when the ``Total`` / ``Subtotal`` line carries an explicit
+    # leading ``-``; a positive total is a normal sale.
+    neg_total = re.search(
+        r"(?:(?<=\n)|(?<=^)|(?<=[^a-zA-Z]))(?:sub)?total"
+        r"\s*[:\-]?\s*-\s*[$€£¥]?\s*"
+        r"(?P<amt>\d{1,5}(?:[.,]\d{2}))",
+        text,
+        re.IGNORECASE,
+    )
+    if neg_total:
+        try:
+            amount = abs(float(neg_total.group("amt").replace(",", ".")))
+        except ValueError:
+            return None
+        if 0.01 <= amount <= 99999:
+            return round(amount, 2)
+    return None
+
+
 def _guess_vendor(text: str) -> str | None:
     for raw in text.splitlines():
         line = raw.strip()
@@ -645,6 +737,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         order_number=_find_order_number(text),
         tax_mode=_detect_tax_mode(text),
         party_size=_detect_party_size(text),
+        refund_amount=_find_refund_amount(text),
         items=_parse_items(text),
     )
 
@@ -657,7 +750,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     for f in (
         "vendor", "date", "subtotal", "tax", "tip", "discount", "total",
         "currency", "payment_method", "order_number", "tax_mode",
-        "party_size",
+        "party_size", "refund_amount",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))

@@ -99,6 +99,14 @@ class ReceiptFields(BaseModel):
     # (``total / party_size``). ``None`` when the receipt gives no
     # cover-count signal (a typical retail receipt, for example).
     party_size: int | None = None
+    # Refund / void amount when the receipt represents a returned or
+    # cancelled transaction. Stored as a positive float (the amount
+    # being refunded) regardless of whether the printer used a
+    # leading ``-`` or wrote the number bare with a ``REFUND`` /
+    # ``VOID`` / ``CANCELLED`` keyword. ``None`` for normal sales.
+    # Dashboards use this to surface refund volume and net revenue
+    # without re-parsing every receipt.
+    refund_amount: float | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 

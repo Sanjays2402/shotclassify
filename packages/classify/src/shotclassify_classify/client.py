@@ -115,6 +115,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             order_number=r.get("order_number"),
             tax_mode=r.get("tax_mode"),
             party_size=r.get("party_size"),
+            refund_amount=r.get("refund_amount"),
             items=items,
         )
     if c := fields_in.get("code"):
