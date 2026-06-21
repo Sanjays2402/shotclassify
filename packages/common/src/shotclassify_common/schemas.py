@@ -107,6 +107,28 @@ class ReceiptFields(BaseModel):
     # Dashboards use this to surface refund volume and net revenue
     # without re-parsing every receipt.
     refund_amount: float | None = None
+    # Loyalty / membership programme identifier printed for repeat
+    # customers (``Member: 12345``, ``Loyalty #ABC-99``, ``Rewards
+    # ID: 4477``). Stored as a string verbatim because programmes
+    # mix digits with letters and dashes. The store / register
+    # numbers below cover the OTHER common identifier slots a
+    # receipt can carry; loyalty_id is specifically the
+    # customer-side identifier (linked to a person), distinct from
+    # the store / register identifiers (linked to a location /
+    # terminal).
+    loyalty_id: str | None = None
+    # Store / branch identifier printed at the top of multi-location
+    # chain receipts (``Store #1234``, ``Branch 045``, ``Location
+    # No. 12``). String because chains mix numeric and alphabetic
+    # codes. Dashboards group sales by store using this slot.
+    store_id: str | None = None
+    # POS terminal / register identifier printed alongside the
+    # cashier line on most receipts (``REG 02``, ``Register #3``,
+    # ``Terminal 5``, ``Till 04``). String for symmetry with the
+    # other id fields. Dashboards use this to spot a specific
+    # terminal that is consistently dropping line items or
+    # producing voids.
+    register_id: str | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 

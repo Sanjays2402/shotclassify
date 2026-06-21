@@ -496,6 +496,120 @@ def _find_refund_amount(text: str) -> float | None:
     return None
 
 
+# Loyalty / membership / store / register identifier extraction.
+# Receipts carry three logically distinct identifiers in addition to
+# the order / invoice number already covered:
+#
+#   LOYALTY        - customer-side membership identifier. Common shapes:
+#                    ``Member: 12345``, ``Loyalty #ABC-99``,
+#                    ``Rewards ID: 4477``, ``Member ID 99001``,
+#                    ``Loyalty Number 1234``, ``Reward Member #88``.
+#                    Distinct from the order number because it
+#                    persists across visits; dashboards group by it
+#                    to surface frequent-customer behaviour.
+#   STORE / BRANCH - location-side identifier. ``Store #1234``,
+#                    ``Branch 045``, ``Location 12``, ``Shop No. 7``.
+#                    Multi-location chains print this near the
+#                    address block. Dashboards roll up by store.
+#   REGISTER/TILL  - terminal-side identifier. ``REG 02``,
+#                    ``Register #3``, ``Terminal 5``, ``Till 04``,
+#                    ``POS 12``, ``Lane 4``. Identifies which
+#                    physical checkout produced the receipt.
+#
+# The matchers below capture each identifier verbatim (string) so
+# alphanumeric mixes like ``Store #ABC-1234`` survive. Length is
+# bounded 1..30 chars to keep OCR runs out. Within a single matcher
+# the FIRST occurrence wins because these IDs almost always print
+# once near the header.
+#
+# Value regex permits alphanumerics with internal ``./-`` punctuation.
+# A leading ``#`` is consumed by the keyword pattern (so the captured
+# value is bare) because dashboards almost always re-render the hash
+# as part of the label.
+_ID_VALUE = r"(?:[A-Za-z0-9][A-Za-z0-9./\-]{0,28}[A-Za-z0-9]|[A-Za-z0-9])"
+
+_LOYALTY_KEYWORDS: tuple[str, ...] = (
+    r"loyalty\s+(?:no\.?|number|id|#)",
+    r"loyalty",
+    r"rewards?\s+(?:no\.?|number|id|#)",
+    r"reward\s+member\s*#?",
+    r"rewards?",
+    r"member\s+(?:no\.?|number|id|#)",
+    r"membership\s+(?:no\.?|number|id|#)",
+    r"member",
+)
+_STORE_KEYWORDS: tuple[str, ...] = (
+    r"store\s+(?:no\.?|number|id|#)",
+    r"store",
+    r"branch\s+(?:no\.?|number|id|#)",
+    r"branch",
+    r"location\s+(?:no\.?|number|id|#)",
+    r"location",
+    r"shop\s+(?:no\.?|number|id|#)",
+)
+_REGISTER_KEYWORDS: tuple[str, ...] = (
+    r"register\s+(?:no\.?|number|id|#)",
+    r"register",
+    r"reg\s*#?",
+    r"terminal\s+(?:no\.?|number|id|#)",
+    r"terminal",
+    r"till\s+(?:no\.?|number|id|#)",
+    r"till",
+    r"pos\s+(?:no\.?|number|id|#)",
+    r"lane\s+(?:no\.?|number|id|#)",
+    r"lane",
+)
+
+
+def _find_keyword_id(text: str, keywords: tuple[str, ...]) -> str | None:
+    """Return the first non-empty alphanumeric value following any of
+    the keywords in priority order, or ``None``.
+
+    Each keyword pattern accepts an optional ``:`` / ``-`` / ``=``
+    separator, optional ``#`` prefix on the value, and a single
+    value token. The value must contain at least one digit so a
+    stray prose match (``Store closed``) does not pass. Leading
+    word-boundary is enforced via a negative lookbehind on alphas
+    so ``Bookstore #1`` doesn't fire the ``Store`` matcher (because
+    ``Bookstore`` has alpha char immediately before ``store``).
+    """
+    if not text:
+        return None
+    for kw in keywords:
+        pat = re.compile(
+            rf"(?<![A-Za-z]){kw}\s*[:\-=]?\s*#?\s*(?P<val>{_ID_VALUE})",
+            re.IGNORECASE,
+        )
+        m = pat.search(text)
+        if not m:
+            continue
+        val = m.group("val").strip()
+        if not any(c.isdigit() for c in val):
+            continue
+        val = val.rstrip(".,;:)")
+        if not val:
+            continue
+        if not (1 <= len(val) <= 30):
+            continue
+        return val
+    return None
+
+
+def _find_loyalty_id(text: str) -> str | None:
+    """Return the loyalty / member / rewards identifier, or None."""
+    return _find_keyword_id(text, _LOYALTY_KEYWORDS)
+
+
+def _find_store_id(text: str) -> str | None:
+    """Return the store / branch / location identifier, or None."""
+    return _find_keyword_id(text, _STORE_KEYWORDS)
+
+
+def _find_register_id(text: str) -> str | None:
+    """Return the register / terminal / till / POS identifier, or None."""
+    return _find_keyword_id(text, _REGISTER_KEYWORDS)
+
+
 def _guess_vendor(text: str) -> str | None:
     for raw in text.splitlines():
         line = raw.strip()
@@ -738,6 +852,9 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         tax_mode=_detect_tax_mode(text),
         party_size=_detect_party_size(text),
         refund_amount=_find_refund_amount(text),
+        loyalty_id=_find_loyalty_id(text),
+        store_id=_find_store_id(text),
+        register_id=_find_register_id(text),
         items=_parse_items(text),
     )
 
@@ -750,7 +867,8 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     for f in (
         "vendor", "date", "subtotal", "tax", "tip", "discount", "total",
         "currency", "payment_method", "order_number", "tax_mode",
-        "party_size", "refund_amount",
+        "party_size", "refund_amount", "loyalty_id", "store_id",
+        "register_id",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
