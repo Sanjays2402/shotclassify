@@ -112,6 +112,15 @@ class ChatFields(BaseModel):
     messages: list[dict[str, str]] = Field(default_factory=list)
     hashtags: list[str] = Field(default_factory=list)
     mentions: list[str] = Field(default_factory=list)
+    # Read / delivered / unread status markers visible in the
+    # screenshot. Each entry is a dict with at minimum a ``status``
+    # tag (``delivered`` / ``read`` / ``unread`` / ``sent`` /
+    # ``seen`` / ``typing``) and optionally a ``time`` (normalised by
+    # parse_timestamp) so dashboards can answer "when was the last
+    # message read?" without re-scanning the OCR text. Stored as a
+    # list of dicts to mirror how ``messages`` is shaped; ordering
+    # preserves first-seen-in-OCR order.
+    statuses: list[dict[str, str]] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):

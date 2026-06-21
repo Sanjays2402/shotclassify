@@ -36,6 +36,114 @@ _MENTION_RE = re.compile(r"(?<![\w&.])@([A-Za-z_][A-Za-z0-9_.\-]{0,49})")
 _CHANNEL_MENTIONS = ("@channel", "@here", "@everyone")
 
 
+# Read / delivered / unread / typing status markers. Each entry
+# matches the canonical phrase printed by the major chat platforms.
+# Pattern groups: (canonical_status_tag, regex). The regex captures
+# an optional trailing timestamp into a ``time`` named group when
+# present (iMessage's ``Read 11:14 AM`` shape, WhatsApp's ``Read at
+# 11:14``); platforms that omit the time (``Delivered`` on its own
+# line) leave the ``time`` group None.
+_STATUS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # iMessage "Read 11:14 AM" / "Read at 11:14" / "Read yesterday".
+    # The time portion is optional so a bare "Read" line still tags.
+    ("read", re.compile(
+        r"\bRead(?:\s+(?:at|on))?\s*(?P<time>"
+        r"\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]\.?)?"
+        r"|yesterday|today"
+        r")?\b",
+    )),
+    # iMessage "Delivered" + optional trailing time. Distinct from
+    # "Read" so we tag separately.
+    ("delivered", re.compile(
+        r"\bDelivered(?:\s+(?:at|on))?\s*(?P<time>"
+        r"\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]\.?)?"
+        r"|yesterday|today"
+        r")?\b",
+    )),
+    # WhatsApp/Telegram "Seen" + optional time. Used in lieu of "Read"
+    # by some platforms.
+    ("seen", re.compile(
+        r"\bSeen(?:\s+(?:at|on))?\s*(?P<time>"
+        r"\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]\.?)?"
+        r"|yesterday|today)?\b",
+    )),
+    # "Sent" with optional time. Less common as a status indicator
+    # but appears in some platforms (Telegram outgoing badge).
+    ("sent", re.compile(
+        r"\bSent(?:\s+(?:at|on))?\s*(?P<time>"
+        r"\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]\.?)?"
+        r")?\b",
+    )),
+    # Unread count badge: "3 unread messages" / "Unread" / "2 unread".
+    # Captures the count (when present) into the ``time`` slot
+    # repurposed as ``count`` later -- but the simpler form just
+    # tags the unread state.
+    ("unread", re.compile(
+        r"\b(?:(?P<time>\d+)\s+)?[Uu]nread(?:\s+messages?)?\b",
+    )),
+    # Typing indicator: "Alice is typing..." / "typing...".
+    ("typing", re.compile(
+        r"\b(?:[A-Z][\w ]{0,24}\s+is\s+)?[Tt]yping\b(?:\s*\.{0,3})?",
+    )),
+)
+
+
+_MAX_STATUSES = 20
+
+
+def _extract_statuses(text: str) -> list[dict[str, str]]:
+    """Return unique status markers found in ``text``.
+
+    Each entry has at minimum a ``status`` key (``read`` /
+    ``delivered`` / ``seen`` / ``sent`` / ``unread`` / ``typing``)
+    and optionally a ``time`` key when the marker carried a
+    trailing time / day. ``parse_timestamp`` normalises the time
+    into ``HH:MM`` 24h form when it looks like a clock; non-clock
+    times (``yesterday`` / ``today``) are stored verbatim.
+
+    De-duplicates on the (status, time-or-count) pair so a screenshot
+    that shows the same "Read 11:14 AM" twice does not bloat the list.
+    Preserves first-seen-in-OCR order across all matchers (sorting
+    by source-text offset, not by matcher iteration order, so a
+    "Delivered" line that appears BEFORE a "Read" line lands first).
+    Capped at 20 entries.
+    """
+    if not text:
+        return []
+    candidates: list[tuple[int, dict[str, str]]] = []
+    for tag, pattern in _STATUS_PATTERNS:
+        for m in pattern.finditer(text):
+            time_raw = (m.groupdict().get("time") or "").strip()
+            entry: dict[str, str] = {"status": tag}
+            if time_raw:
+                if tag == "unread":
+                    # The captured "time" group is actually the unread
+                    # count for this pattern. Store as count for
+                    # clarity in downstream consumers.
+                    entry["count"] = time_raw
+                else:
+                    # Try to normalise to ``HH:MM`` via parse_timestamp;
+                    # fall back to the raw form (``yesterday`` / etc.).
+                    normalised = parse_timestamp(time_raw) or time_raw
+                    entry["time"] = normalised
+            candidates.append((m.start(), entry))
+    # Sort by source-text offset so the order matches what a human
+    # reading the screenshot top-to-bottom would see, rather than the
+    # matcher iteration order.
+    candidates.sort(key=lambda x: x[0])
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for _, entry in candidates:
+        key = (entry["status"], entry.get("time", "") or entry.get("count", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(entry)
+        if len(out) >= _MAX_STATUSES:
+            break
+    return out
+
+
 _MAX_TAGS = 50
 _MAX_MENTIONS = 50
 
@@ -260,10 +368,28 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
             seen_mentions.add(m.lower())
             mentions.append(m)
 
+    # Status markers (read / delivered / unread / typing / seen / sent)
+    # found in the OCR text are merged with any caller-supplied
+    # statuses. The merge de-dupes on the (status, time-or-count) key
+    # so an LLM-supplied "Read 11:14 AM" plus an OCR-parsed identical
+    # marker collapses to one entry. Caller order is preserved first.
+    statuses: list[dict[str, str]] = list(existing.statuses) if existing else []
+    seen_status: set[tuple[str, str]] = set()
+    for s in statuses:
+        key = (s.get("status", ""), s.get("time", "") or s.get("count", ""))
+        seen_status.add(key)
+    for s in _extract_statuses(text):
+        key = (s.get("status", ""), s.get("time", "") or s.get("count", ""))
+        if key in seen_status:
+            continue
+        seen_status.add(key)
+        statuses.append(s)
+
     return ChatFields(
         platform=platform,
         participants=participants,
         messages=messages,
         hashtags=hashtags,
         mentions=mentions,
+        statuses=statuses,
     )
