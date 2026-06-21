@@ -365,6 +365,101 @@ def detect_ts_features(code: str) -> list[str]:
     return found
 
 
+# Minified JS / TS detection. Bundlers (webpack, esbuild, rollup,
+# terser, uglify) collapse JS / TS sources into one or a few very long
+# lines with near-zero whitespace. Common signals:
+#
+#   * one or a small number of very long source lines (avg line
+#     length above ~250 chars is a strong indicator),
+#   * very few newlines after ``;`` / ``{`` / ``}`` separators
+#     (hand-written code newlines after most of these),
+#   * single-character identifiers everywhere (``t``, ``e``, ``n``,
+#     ``r``) -- not enforced as a hard rule because some prod code
+#     still uses them, but contributes to the score,
+#   * a leading IIFE wrapper ``!function(){...}()`` or webpack
+#     runtime preamble ``(self.webpackChunk...``.
+#
+# We combine these into a tiny scoring function. The heuristic is
+# intentionally conservative: it returns True only when the avg line
+# length is high AND the newline-after-separator ratio is low. A
+# 30-line minified-ish snippet that still pretty-prints will return
+# False -- prefer recall on real bundles over precision on edge cases.
+_BUNDLER_PREAMBLES = (
+    "(self.webpackChunk",
+    "webpackBootstrap",
+    "webpackJsonp",
+    "function(modules)",
+    "!function(",
+    "var __webpack_modules__",
+    "globalThis.webpackChunk",
+    "// minified",
+)
+
+
+def detect_minified_js(code: str, language: str | None = None) -> bool:
+    """Return ``True`` when ``code`` looks like minified / bundled JS or TS.
+
+    Only relevant for JS-family languages (javascript / typescript /
+    jsx / tsx). For other languages we return ``False`` unconditionally
+    because the heuristics (avg line length, separators) are tuned to
+    JS bundle output.
+    """
+    if not code or not code.strip():
+        return False
+    if language is not None:
+        lang = language.lower()
+        if lang not in {"javascript", "typescript", "jsx", "tsx", "js", "ts"}:
+            return False
+    # Direct hit on a known bundler preamble => minified for sure.
+    head = code[:400]
+    for sig in _BUNDLER_PREAMBLES:
+        if sig in head:
+            return True
+    lines = code.splitlines()
+    if not lines:
+        return False
+    # Strip trailing empties so the avg isn't dragged down by them.
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines:
+        return False
+    # Avg non-empty line length.
+    non_empty = [ln for ln in lines if ln.strip()]
+    if not non_empty:
+        return False
+    avg_len = sum(len(ln) for ln in non_empty) / len(non_empty)
+    max_len = max(len(ln) for ln in non_empty)
+    # Count semicolons / braces that DON'T have a newline immediately
+    # after them. Hand-written code newlines after most of these; a
+    # bundle packs them onto one line.
+    sep_total = code.count(";") + code.count("{") + code.count("}")
+    if sep_total == 0:
+        # No JS separators at all -- can't conclude minified.
+        return False
+    # Count separators that have a newline within the next 2 chars
+    # (covers ``;\n``, ``;\r\n``, ``; \n``).
+    sep_with_newline = 0
+    for i, ch in enumerate(code):
+        if ch in ";{}":
+            for j in range(i + 1, min(i + 3, len(code))):
+                if code[j] == "\n":
+                    sep_with_newline += 1
+                    break
+                if not code[j].isspace():
+                    break
+    newline_ratio = sep_with_newline / sep_total
+    # Decision rule:
+    #   * Avg line length > 250  OR  any line > 500 chars  AND
+    #   * Fewer than 30% of separators have a newline after them.
+    # The "max_len > 500" catch handles bundles that have a few short
+    # comments above one giant minified body (common with sourcemap
+    # comments). Both branches require the low newline-ratio so a
+    # legitimate long-template-literal snippet doesn't false-positive.
+    long_lines = avg_len > 250 or max_len > 500
+    low_newline_ratio = newline_ratio < 0.30
+    return long_lines and low_newline_ratio
+
+
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     code = (existing.code if existing and existing.code else ocr.text or "").strip()
     language = (existing.language if existing and existing.language else None) or detect_language(code)
@@ -386,10 +481,16 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if not ts_features and language and language.lower() in {"typescript", "tsx", "ts"}:
         ts_features = detect_ts_features(code)
+    # Minified-bundle detection. Caller-supplied value (if any) wins;
+    # heuristic fills the default False when the caller didn't set it.
+    minified = bool(existing.minified) if existing and existing.minified else False
+    if not minified:
+        minified = detect_minified_js(code, language)
     return CodeFields(
         language=language,
         code=code,
         line_count=len(code.splitlines()),
         dialect=dialect,
         ts_features=ts_features,
+        minified=minified,
     )

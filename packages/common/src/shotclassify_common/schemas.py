@@ -122,6 +122,15 @@ class CodeFields(BaseModel):
     # (``foo?.bar``), ``non_null_assert`` (``foo!``). Tags are unique
     # per snippet; empty list when the snippet is non-TS or has none.
     ts_features: list[str] = Field(default_factory=list)
+    # ``True`` when the snippet looks like minified / bundled JS or
+    # TS (long single-line statements, near-zero whitespace, no
+    # newlines after ``;`` / ``{`` / ``}``). ``False`` otherwise.
+    # Dashboards use this to surface "looks bundled" annotations on
+    # code captures so a reviewer knows not to read the snippet
+    # line-by-line. Only meaningful for languages == javascript /
+    # typescript / jsx / tsx; the detector returns False for other
+    # languages even when their line stats look minified.
+    minified: bool = False
 
 
 class ErrorFields(BaseModel):

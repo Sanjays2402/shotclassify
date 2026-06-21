@@ -124,6 +124,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             line_count=int(c.get("line_count") or len(str(c.get("code", "")).splitlines())),
             dialect=c.get("dialect"),
             ts_features=c.get("ts_features") or [],
+            minified=bool(c.get("minified") or False),
         )
     if e := fields_in.get("error"):
         fields.error = ErrorFields(**{k: e.get(k) for k in ErrorFields.model_fields})
