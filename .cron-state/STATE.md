@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (40 features tracked)
+## Roadmap (45 features tracked)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -78,6 +78,13 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 47. [x] Error: SQL database error extraction (framework='sql'; PostgreSQL ERROR:/LINE N: shape, MySQL ERROR NNNN (SQLSTATE): shape, SQLite Error: with vocab anchor, MSSQL Msg NNNN, Level N, State N + next-line message; PostgreSQL and SQLite regexes CASE-SENSITIVE to prevent generic "Error:" prose false-positives; dialect priority MySQL -> MSSQL -> SQLite -> PostgreSQL; runs BEFORE HTTP in else branch; 13-cause likely_cause catalogue).
 28. [x] Code: comment-density heuristic (new `CodeFields.comment_density` float 0..1; per-language comment-leader catalogue covers #/// /-- /; /% /<!-- families across 40+ language tags; block-comment openers /* / """ / ''' / =begin count when at start of line; "text" catchall defaults to # leader; pure data formats (json/csv/tsv) return 0.0; blank lines excluded from denominator; rounded to 2 decimal places; LLM wire-format updated).
 
+### Done in tick 9 (5 features)
+67. [x] Extract: cross-category MAC-address extractor into raw["macs"] (EUI-48; colon / dash / Cisco dot-quad input shapes; canonical lowercase colon-separated output regardless of input shape; null MAC and broadcast MAC rejected as non-device identifiers; IPv6 spans masked before scanning; cap 50).
+58. [x] Extract: cross-category timezone extractor into raw["timezones"] (numeric UTC offsets +05:30 / -0800 / UTC+1 with hour range -12..+14 and minute 0..59; Z suffix on ISO-8601-ish timestamps normalising to +00; 33 named abbreviations UTC/GMT/PST/PDT/EST/EDT/CST/CDT/MST/MDT/BST/CET/CEST/IST/JST/KST/AEST/AEDT/ACST/ACDT/AWST/HST/AKST/AKDT/NZST/NZDT/WET/WEST/EET/EEST/MSK/SGT/HKT/PHT; IANA Region/City including 3-part America/Argentina/Buenos_Aires; canonical normalised output deduping +0530 vs +05:30 to +05:30 and -08 vs -0800 to -08; cap 50).
+51. [x] Extract: cross-category credit-card extractor into raw["credit_cards"] (Luhn-validated 13..19 digit PANs with brand from BIN: Visa / Mastercard inc 2221-2720 / Amex / Discover / JCB / Diners / UnionPay; masked **** / XXXX / ....last4 PANs with brand inferred from same-line brand keyword; output BIN+last4 only, full PAN NEVER stored as security guarantee; pairs with existing `credit_card` redact mode; cap 50).
+57. [x] PII redact: address mode (US street + suffix + optional unit + optional city + STATE ZIP / ZIP+4; UK postcode tail SW1A 1AA / M1 1AE; cardinal direction prefix N/S/E/W; house-number range 101-103 and split 1/2; Apt/Suite/Ste/Unit/# prefixes; 28 street suffixes including Trail/Loop/Row; capitalised street name required to avoid lowercase prose false-positives; added to PII_REDACT_MODES allow-list).
+62. [x] Code: line-numbering detection (new `CodeFields.numbered` bool; four prefix shapes: `1: code` / `1| code` / `1\tcode` / right-aligned `  1  code` with 2+ spaces; sticky pipe form `1|code` accepted; detector runs FIRST in enrich_code so language / dialect / framework / minified / interpreter / comment-density all see the de-numbered body; 3-line minimum; non-decreasing line numbers required; mixed-separator rejected; first-line decides spaced-vs-sticky mode so deeper code indentation is preserved; LLM wire-format updated).
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -89,23 +96,23 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 43. [ ] Code: import-set extraction (new `CodeFields.imports` list of imported modules/packages, per language).
 45. [ ] Error: Swift / Objective-C crash log parsing (framework=swift; `Fatal error: Unexpectedly found nil`, `*** Terminating app due to uncaught exception`).
 46. [ ] Error: Kotlin coroutine exception parsing (framework=kotlin; `kotlinx.coroutines.JobCancellationException`, `at ... CoroutineScopeKt`).
-51. [ ] Extract: cross-category credit-card detection (PAN-shaped digit runs that pass Luhn; redact to BIN+last4 in `raw["pii"]`).
 52. [ ] Extract: cross-category ICAO / IATA airport-code extractor into `raw["airports"]` for travel screenshots.
 53. [ ] Chart: bar-chart series-label OCR refinement (split the legend block into a clean `ChartFields.series` list).
 54. [ ] Chart: percent annotations vs raw values heuristic (new `ChartFields.value_unit`: `%` / `count` / `currency` based on axis tick text).
 55. [ ] UI mockup: layout-style guess (new `UIMockupFields.layout_kind`: `dashboard` / `landing` / `form` / `settings` / `modal`).
-56. [ ] PII redact: phone-number redaction mode (`phone` mode; normalises to `<PHONE>` stub).
-57. [ ] PII redact: physical-address redaction mode (`address` mode; one-line US/UK street + city + zip patterns).
-58. [ ] Extract: cross-category time-zone offset extractor (UTC offsets like `+05:30`, `-0800`, `Z`; named zones like `PST` / `JST` / `IST`).
+56. [ ] PII redact: phone-number redaction mode (`phone` mode; normalises to `<PHONE>` stub). (Note: a tight `phone` regex already exists in redact.py; this would refine to the `<PHONE>` stub form.)
 59. [ ] Extract: cross-category currency-amount extractor into `raw["amounts"]` (cross-category so a code snippet or chat message that quotes a price is surfaced; symbol + ISO code aware).
 60. [ ] Receipt: signature / signed-by detection (`Signature: _____`, `Signed by: Bob`, `X____` line markers).
 61. [ ] Receipt: barcode / SKU extraction at the line-item level (`SKU: 1234567`, `Barcode: 0123456789012`).
-62. [ ] Code: line-numbering detection (when the snippet starts every line with a number+space, strip the prefix and store `CodeFields.numbered = True`).
 63. [ ] Receipt: tender / change-given detection (new ReceiptFields.change; "Tendered 20.00 / Change 7.50" shape).
 64. [ ] Code: TODO / FIXME comment count surfaced as CodeFields.todo_count for code-review screenshots.
 65. [ ] Chat: link preview block detection (the inline OG-card with title + description that platforms inline for shared URLs).
 66. [ ] Error: AWS Lambda / boto3 client error extraction (BotoCoreError, ClientError with operation_name + error_code).
-67. [ ] Extract: cross-category MAC-address extractor into raw["macs"] (colon-separated + dash-separated 48-bit forms).
+68. [ ] Extract: cross-category bitcoin / ethereum / solana address extractor into `raw["crypto"]` (base58 BTC P2PKH/P2SH/SegWit-Bech32, EIP-55 ETH, base58 SOL).
+69. [ ] Receipt: tip-jar / suggested-tip table detection (the "10% 12.34 / 15% 18.51 / 20% 24.68" footer table).
+70. [ ] Code: license-header detection (top-of-file BSD / MIT / Apache 2.0 / GPL-3 / MPL banner; new CodeFields.license tag).
+71. [ ] Chart: pie-slice percent extraction from in-pie labels (new ChartFields.slices list of {label, percent}).
+72. [ ] PII redact: drivers-license-number redaction mode (per-state US shape catalogues, the most common 7-9 alphanumeric forms).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -226,6 +233,33 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     Shared helpers: _find_keyword_id (loyalty/store/register),
     _find_keyword_name (cashier/server), _comment_leaders_for
     (40+ language tags catalogued).
+
+- 2026-06-21 07:57 PT (tick 9, Cake): 5 features.
+  - da26aca feat(extract): cross-category MAC-address extractor into raw["macs"]
+  - ef37860 feat(extract): cross-category timezone extractor into raw["timezones"]
+  - 0bd340d feat(extract): cross-category credit-card extractor into raw["credit_cards"]
+  - 841ea1d feat(redact): physical-address redaction mode (US + UK postcode)
+  - 62f0270 feat(extract/code): line-numbering detection (strip gutter into CodeFields.numbered)
+  - Gate: ruff at baseline 536 (one B007 fixup on the
+    line-numbering enumerate(lines) loop variable, folded via
+    --fixup + --autosquash into the line-numbering commit, plus
+    one F401 fixup for unused pytest import in
+    test_code_numbered.py also folded via --fixup) + pytest 2129
+    passed / 3 skipped in 117.02s. 271 new tests across the 5
+    features (50 + 79 + 52 + 58 + 32). New CodeFields field
+    shipped: numbered. LLM wire format in classify/client.py
+    updated for numbered. Five new cross-category raw keys:
+    raw["macs"], raw["timezones"], raw["credit_cards"]. New
+    PII redact mode `address` added to PII_REDACT_MODES
+    allow-list. Roadmap refilled with 5 new items (68..72) so
+    the backlog stays at 25+ open. Security guarantee on
+    credit_cards: extractor returns BIN+last4 ONLY, full PAN
+    never stored in output -- pairs with existing
+    `credit_card` redact mode (which strips full PAN from
+    persisted OCR text). Line-numbering detector runs FIRST
+    in enrich_code so every downstream detector (language,
+    dialect, ts_features, minified, interpreter, comment
+    density) sees the de-numbered body.
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
@@ -421,3 +455,73 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
   accepts both syntaxes. Result is rounded to 2 decimal places
   because finer precision is meaningless given OCR noise and
   small snippet sizes.
+- `extract_macs` accepts EUI-48 in three input shapes (colon-
+  separated, dash-separated, Cisco dot-quad) and emits canonical
+  lowercase colon-separated form so the same MAC printed three
+  different ways collapses to one entry. The null MAC and
+  broadcast MAC are rejected because neither identifies a
+  specific device. IPv6 spans are MASKED before scanning so a
+  compressed IPv6 like `fe80::aa:bb:cc:dd:ee:ff` doesn't get
+  carved up into a false-positive MAC. The mask matches both
+  the compressed (`::`) and full 8-group IPv6 shapes.
+- `extract_timezones` matches four shapes: numeric UTC offsets
+  with hour bounded -12..+14 per IANA, the Z suffix only when
+  adjacent to an ISO-8601-ish digit (a bare `Z` in prose
+  rejects), 33 named abbreviations enforced as whole-word
+  tokens (so `IST` inside `EXIST` doesn't fire), and IANA
+  Region/City with the documented top-level region list
+  (Africa / America / Antarctica / Arctic / Asia / Atlantic /
+  Australia / Europe / Indian / Pacific / Etc) -- city tolerates
+  hyphenated names (America/Port-au-Prince) and three-part
+  zones (America/Argentina/Buenos_Aires). Canonical normalisation:
+  +0530 / +05:30 -> +05:30, -08 / -0800 -> -08, Z -> +00.
+  IANA matches consume their spans first so a Region/City
+  containing `-05` doesn't double-tag as a numeric offset.
+- `extract_credit_cards` returns a list of `{brand, bin, last4}`
+  dicts. The full PAN is NEVER returned (security guarantee
+  enforced by test). Luhn-validated 13..19 digit PANs with
+  brand from BIN: Visa (4xxx, lengths 13/16/19), Mastercard
+  (51-55 + 2221-2720 length 16), Amex (34/37 length 15),
+  Discover (6011 / 65 / 644-649 length 16), JCB (3528-3589
+  length 16), Diners (300-305 / 36 / 38-39 length 14),
+  UnionPay (62 lengths 16-19). PANs with valid Luhn but
+  uncatalogued BIN tag as brand=None. Masked **** / XXXX /
+  .... PANs with brand inferred from the SAME-LINE brand
+  keyword (Visa / Mastercard / Master Card / MC / Amex /
+  American Express / Discover / JCB / Diners / Diners Club /
+  UnionPay / Union Pay). Brand keyword matching enforces
+  word boundaries so `masterclass` doesn't pin a `master`
+  brand. Pairs with the existing `credit_card` redact mode in
+  shotclassify_common.redact -- extractor surfaces BIN+last4
+  metadata; redactor swaps the raw PAN with the
+  [REDACTED:credit_card] placeholder before persistence.
+- `address` redact mode catches one-line US / UK postal
+  addresses: NUMBER + STREET-NAME + suffix (28 suffixes
+  including Trail / Loop / Row), optional Apt / Suite / Ste /
+  Unit / # prefix, optional ", City", optional ", STATE ZIP"
+  US tail (5-digit or 5+4) or ", City, POSTCODE" UK tail
+  (SW1A 1AA / M1 1AE). Multi-word street names (Martin Luther
+  King Blvd) and multi-word cities (San Francisco) supported.
+  Cardinal direction prefix (`123 N Main St`,
+  `200 W. Pine Ave`). House-number range (`101-103 Oak Ave`)
+  and split (`1/2 Pine Rd`). Capitalised street name required
+  -- lowercase `123 main st` is rejected because lowercase
+  street names are usually prose noise.
+- `CodeFields.numbered` is set by `detect_numbered` which runs
+  FIRST in `enrich_code` so every downstream detector
+  (language, dialect, ts_features, minified, interpreter,
+  comment_density) sees the de-numbered code. Four prefix
+  shapes recognised: `1: code` (colon + mandatory single
+  separator space), `1| code` or `1|code` (pipe, sticky or
+  spaced), `1\tcode` (tab), `  1  code` (right-aligned column
+  with 2-space minimum). Detection rules are strict to bound
+  false-positive risk: 3-line minimum, every non-blank line
+  must match the SAME pattern (mixed-separator rejects),
+  numbers must be non-decreasing (gaps OK, decreasing
+  rejects). The FIRST matched line decides spaced-vs-sticky
+  mode for the pipe / colon patterns -- if the first line's
+  rest starts with a space we treat the snippet as
+  "spaced form" and strip exactly one leading space from
+  every line's rest (so `2|    return 1` keeps 4 spaces, not
+  3). If first line is sticky (`1|def foo()`), no stripping
+  happens anywhere.
