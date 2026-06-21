@@ -269,6 +269,51 @@ _OBJC_EXC = re.compile(
 )
 
 
+# Kotlin coroutine exception parsing. Kotlin coroutines extend the JVM
+# stacktrace shape with two distinctive markers that let us tag the
+# crash as a coroutine-specific failure (helpful when triaging
+# suspended-function bugs):
+#
+# JobCancellationException (cooperative cancellation):
+#   kotlinx.coroutines.JobCancellationException: Job was cancelled;
+#       job=StandaloneCoroutine{Cancelling}@1a2b3c4d
+#       at kotlinx.coroutines.JobSupport.cancelMakeCompleting(JobSupport.kt:1543)
+#       at kotlinx.coroutines.AbstractCoroutine.cancel(AbstractCoroutine.kt:107)
+#
+# Coroutine frames inside a regular Throwable trace:
+#   java.lang.IllegalStateException: oops
+#       at com.app.MainKt$main$1.invokeSuspend(Main.kt:12)
+#       at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(...)
+#       at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:106)
+#       at kotlinx.coroutines.scheduling.CoroutineScheduler.runWorker(...)
+#
+# Discriminator: a top-level ``kotlinx.coroutines.X`` exception class,
+# OR a frame line that contains ``kotlinx.coroutines.`` or a synthesised
+# ``invokeSuspend`` frame (the suspending-function wrapper Kotlin
+# generates). We tag the framework as ``kotlin`` regardless of which
+# exception class is on top so dashboards can group all coroutine
+# failures together. The branch sits BEFORE the JVM branch in
+# parse_error_text because the same trace would otherwise tag as ``jvm``
+# (Kotlin compiles to JVM bytecode and the frame shape is the same).
+_KOTLIN_COROUTINE_EXC = re.compile(
+    r"^(?:Caused\s+by\s*:\s*)?(?P<exc>kotlinx\.coroutines\.\w+(?:Exception|Error))"
+    r"[ \t]*:?[ \t]*(?P<msg>[^\n]*)$",
+    re.MULTILINE,
+)
+_KOTLIN_COROUTINE_FRAME = re.compile(
+    r"\bat\s+(?:kotlinx\.coroutines\.[\w$.]+|[\w$.]+\$\w+\$\d+\.invokeSuspend)",
+)
+# Kotlin frame file/line extractor. Kotlin compiles to JVM and prints
+# frames as ``at com.app.Pkg.Fn(File.kt:NN)`` -- distinct from Java
+# frames only by the ``.kt`` extension. We use this to pull the
+# innermost Kotlin source location once we've decided to tag the crash
+# as kotlin.
+_KOTLIN_FRAME_KT = re.compile(
+    r"^\s*at\s+[\w$.]+\(([\w./\-]+\.kts?):(\d+)\)",
+    re.MULTILINE,
+)
+
+
 # SQL database error parsing. Each major SQL engine prints distinct
 # error preludes that let us pick the dialect:
 #
@@ -461,6 +506,27 @@ def parse_swift_crash(text: str) -> tuple[str, str, str | None, int | None] | No
     don't include one inline so the slots stay ``None``.
     """
     return _parse_swift_crash(text)
+
+
+def parse_kotlin_coroutine(
+    text: str,
+) -> tuple[str | None, str | None, str | None, int | None] | None:
+    """Return ``(exception, message, file or None, line or None)`` for a
+    Kotlin coroutine crash, or ``None`` when no coroutine signature is
+    present.
+
+    A coroutine signature is either a top-level
+    ``kotlinx.coroutines.XException`` exception class, OR any frame
+    that references ``kotlinx.coroutines.`` / the synthesised
+    ``invokeSuspend`` wrapper Kotlin emits for suspending functions.
+
+    When the top exception IS a ``kotlinx.coroutines.`` class we
+    surface that as the exception; otherwise we fall through to the
+    standard JVM ``ClassName: message`` line. File / line are pulled
+    from the innermost Kotlin ``.kt`` / ``.kts`` frame, skipping the
+    Java framework plumbing on the bottom of the trace.
+    """
+    return _parse_kotlin_coroutine(text)
 
 
 def parse_sql_error(text: str) -> tuple[str, str, str, int | None] | None:
@@ -910,6 +976,86 @@ def _swift_likely_cause(exception: str | None, message: str | None) -> str | Non
     return None
 
 
+def _parse_kotlin_coroutine(
+    text: str,
+) -> tuple[str | None, str | None, str | None, int | None] | None:
+    """Return ``(exception, message, file or None, line or None)`` for a
+    Kotlin coroutine crash, or ``None`` when no coroutine signature is
+    present.
+
+    Two discriminators trigger the branch: a top-level
+    ``kotlinx.coroutines.X`` exception class, OR a regular Throwable
+    trace whose frame list contains either ``kotlinx.coroutines.`` or
+    a synthesised ``invokeSuspend`` frame (the suspending-function
+    wrapper the Kotlin compiler emits). When the top exception IS a
+    ``kotlinx.coroutines.`` class we surface that as the exception;
+    otherwise we surface whatever exception class appears in the
+    standard JVM ``ClassName: message`` line.
+
+    File / line come from the innermost Kotlin (.kt / .kts) frame.
+    A pure-Java frame (.java) is ignored as the location because the
+    coroutine root cause is almost always in Kotlin code -- Java
+    frames on the bottom are framework plumbing (kotlinx.coroutines /
+    JobSupport / DispatchedTask) that doesn't help triage.
+    """
+    if not text:
+        return None
+    # First check: do we even see a coroutine signal?
+    coroutine_exc = _KOTLIN_COROUTINE_EXC.search(text)
+    coroutine_frame = _KOTLIN_COROUTINE_FRAME.search(text)
+    if not coroutine_exc and not coroutine_frame:
+        return None
+    # Exception class: prefer the coroutine-specific name when present;
+    # otherwise fall back to the standard JVM exception header.
+    exc: str | None
+    msg: str | None
+    if coroutine_exc:
+        exc = coroutine_exc.group("exc")
+        msg = coroutine_exc.group("msg").strip() or None
+    else:
+        java = _JAVA_EXC.search(text)
+        if java:
+            exc = java.group(1)
+            msg = java.group(2).strip() or None
+        else:
+            exc = None
+            msg = None
+    # Innermost Kotlin frame for file/line. Walk every frame; the LAST
+    # one wins (matches the existing python / dotnet / go conventions).
+    file_: str | None = None
+    line_: int | None = None
+    for m in _KOTLIN_FRAME_KT.finditer(text):
+        file_, line_ = m.group(1), int(m.group(2))
+    return exc, msg, file_, line_
+
+
+def _kotlin_likely_cause(exception: str | None, message: str | None) -> str | None:
+    """Return operator-friendly hints for common Kotlin coroutine crashes."""
+    exc = (exception or "").lower()
+    msg = (message or "").lower()
+    if "jobcancellationexception" in exc or "job was cancelled" in msg:
+        return "Coroutine job was cancelled; check cancellation handler / scope."
+    if "timeoutcancellationexception" in exc or "timed out waiting" in msg:
+        return "withTimeout exceeded; raise the timeout or add fast-fail."
+    if "channelclosedexception" in exc or "channel was closed" in msg:
+        return "Channel closed under sender or receiver; fix close() lifecycle."
+    if "deadlock" in msg and "coroutine" in msg:
+        return "Coroutines deadlocked; check Dispatchers and blocking calls."
+    if "kotlinnullpointerexception" in exc or ("npe" in exc and "kotlin" in exc):
+        return "Force-unwrapped a null value (!!); use ?: or ?.let."
+    if "uninitializedpropertyaccessexception" in exc:
+        return "Accessed lateinit before initialization; init before use."
+    if "illegalstateexception" in exc and ("suspend" in msg or "coroutine" in msg):
+        return "Suspending call from wrong context; check Dispatcher / Job state."
+    if "illegalstateexception" in exc:
+        return "Object in invalid state for the operation; inspect lifecycle."
+    if "concurrentmodificationexception" in exc:
+        return "Collection mutated during iteration; copy or use synchronized."
+    if "kotlinx.coroutines" in exc:
+        return "Coroutine framework error; inspect the JobSupport / Dispatcher trace."
+    return None
+
+
 def _likely_cause(framework: str, exception: str | None, message: str | None) -> str | None:
     exc = (exception or "").lower()
     msg = (message or "").lower()
@@ -1113,6 +1259,28 @@ def parse_error_text(text: str) -> ErrorFields:
             exception=exc,
             message=msg,
             likely_cause=_swift_likely_cause(exc, msg),
+            file=file_,
+            line=line_,
+        )
+    elif _parse_kotlin_coroutine(text) is not None:
+        # Kotlin coroutine crash. Placed BEFORE the JVM branch because
+        # Kotlin compiles to JVM bytecode and the frame shape is the
+        # same -- without this branch a coroutine cancellation would
+        # tag as ``jvm`` and dashboards would lose the coroutine-specific
+        # signal (Job lifecycle, suspending functions, Dispatchers).
+        # The discriminator is either a top-level
+        # ``kotlinx.coroutines.X`` exception class OR a frame that
+        # references ``kotlinx.coroutines.`` / ``invokeSuspend`` so a
+        # pure-Java trace that happens to throw IllegalStateException
+        # is NOT stolen from JVM.
+        kt = _parse_kotlin_coroutine(text)
+        assert kt is not None  # narrowed by the elif guard
+        exc, msg, file_, line_ = kt
+        return ErrorFields(
+            framework="kotlin",
+            exception=exc,
+            message=msg,
+            likely_cause=_kotlin_likely_cause(exc, msg),
             file=file_,
             line=line_,
         )
