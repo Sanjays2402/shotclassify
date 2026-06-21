@@ -321,6 +321,89 @@ def _detect_tax_mode(text: str) -> str | None:
     return "inclusive" if first_inclusive <= first_exclusive else "exclusive"
 
 
+# Party size / split-bill detection. Restaurant receipts print a
+# small set of phrases when the bill represents more than one cover:
+#
+#   "Party of 4"                 -> 4
+#   "Party Size: 6"              -> 6
+#   "Party 2"                    -> 2     (bare, after a comma/header)
+#   "Guests: 3" / "Guests 3"     -> 3
+#   "Guest count: 5"             -> 5
+#   "# of Guests 4"              -> 4
+#   "# Guests 4"                 -> 4
+#   "No. of Guests 2"            -> 2
+#   "Covers: 8"                  -> 8     (POS / industry term)
+#   "Split 3 ways"               -> 3
+#   "Split between 4"            -> 4
+#   "Split 4 ways"               -> 4
+#   "Per Person (4)"             -> 4     (when the parens give a count)
+#
+# Order: cover-count terms ("Party of", "Guests:", "Covers:") are
+# checked BEFORE the split-bill terms ("Split N ways") because a
+# receipt that prints both ("Party of 4 ... Split 4 ways") should
+# tag the party size, not the split count, when they conflict. We
+# bound the captured int to 1..50; anything outside that is OCR
+# noise or a wrong match.
+_PARTY_HINTS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bparty\s+of\s+(\d{1,2})\b", re.IGNORECASE),
+    re.compile(r"\bparty\s+size\s*[:\-]?\s*(\d{1,2})\b", re.IGNORECASE),
+    re.compile(r"\bguest\s+count\s*[:\-]?\s*(\d{1,2})\b", re.IGNORECASE),
+    # Allow leading ``#`` / ``No.`` for ``# of Guests N`` / ``No. of Guests N``.
+    re.compile(
+        r"(?:#\s*(?:of\s+)?|no\.?\s*of\s+)guests?\s*[:\-]?\s*(\d{1,2})\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bguests?\s*[:\-]?\s*(\d{1,2})\b", re.IGNORECASE),
+    re.compile(r"\bcovers?\s*[:\-]?\s*(\d{1,2})\b", re.IGNORECASE),
+    # Bare ``Party N`` only when preceded by start-of-line or a colon/
+    # comma so a stray sentence "the party N celebrated" doesn't fire.
+    re.compile(r"(?:^|[:,]\s*)party\s+(\d{1,2})\b", re.IGNORECASE | re.MULTILINE),
+)
+_SPLIT_HINTS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bsplit\s+(\d{1,2})\s+ways?\b", re.IGNORECASE),
+    re.compile(r"\bsplit\s+between\s+(\d{1,2})\b", re.IGNORECASE),
+    re.compile(r"\bsplit\s+by\s+(\d{1,2})\b", re.IGNORECASE),
+    # "Per person (4)" / "Per-person 4" -- the parens are optional.
+    re.compile(r"\bper[\s\-]person\s*\(?\s*(\d{1,2})\s*\)?\b", re.IGNORECASE),
+)
+
+
+def _detect_party_size(text: str) -> int | None:
+    """Return the cover count / split count printed on the receipt, or
+    ``None``.
+
+    Party-of / guests / covers cues win over split-bill cues when both
+    appear, because the cover count is the source of truth (a 4-cover
+    bill that happens to be split 3 ways still has 4 guests). Within a
+    single regex group the FIRST match wins -- the count is usually
+    printed once near the header. Bounded to 1..50; values outside that
+    range are rejected as OCR noise or wrong matches.
+    """
+    if not text:
+        return None
+    for pat in _PARTY_HINTS:
+        m = pat.search(text)
+        if not m:
+            continue
+        try:
+            n = int(m.group(1))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= n <= 50:
+            return n
+    for pat in _SPLIT_HINTS:
+        m = pat.search(text)
+        if not m:
+            continue
+        try:
+            n = int(m.group(1))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= n <= 50:
+            return n
+    return None
+
+
 def _guess_vendor(text: str) -> str | None:
     for raw in text.splitlines():
         line = raw.strip()
@@ -561,6 +644,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         payment_method=_detect_payment_method(text),
         order_number=_find_order_number(text),
         tax_mode=_detect_tax_mode(text),
+        party_size=_detect_party_size(text),
         items=_parse_items(text),
     )
 
@@ -573,6 +657,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     for f in (
         "vendor", "date", "subtotal", "tax", "tip", "discount", "total",
         "currency", "payment_method", "order_number", "tax_mode",
+        "party_size",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))

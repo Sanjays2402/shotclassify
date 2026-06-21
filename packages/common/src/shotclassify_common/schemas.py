@@ -92,6 +92,13 @@ class ReceiptFields(BaseModel):
     # whether the subtotal should be displayed as the pre-tax base or
     # the customer-facing all-in price.
     tax_mode: str | None = None
+    # Party size / split-bill count. Restaurant receipts commonly
+    # print ``Party of 4`` / ``Guests: 2`` / ``Split 3 ways`` near
+    # the header or footer. Stored as an int so dashboards can sum
+    # covers across the period or derive per-person spend
+    # (``total / party_size``). ``None`` when the receipt gives no
+    # cover-count signal (a typical retail receipt, for example).
+    party_size: int | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
