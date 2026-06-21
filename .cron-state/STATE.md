@@ -1,6 +1,6 @@
 # shotclassify autoship state
 
-Branch: `feature/autoship` (off `main`)
+**Active branch: `main`** — commit and push DIRECTLY to main every tick. No feature branches.
 Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 
 ## Stack snapshot
