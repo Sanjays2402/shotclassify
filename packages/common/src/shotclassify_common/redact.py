@@ -124,6 +124,45 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b"
         ),
     ),
+    (
+        # Postal address (one-line US / UK street + city + zip). The
+        # ``address`` mode targets the contact-line shape that appears
+        # on receipts ("123 Main St, Springfield, IL 62704"),
+        # signatures, document captures of shipping labels, and chat
+        # captures of contact cards. We deliberately do NOT try to be
+        # exhaustive -- a serious address parser belongs in a
+        # downstream service. This regex catches the common one-line
+        # forms with high precision and accepts the occasional miss
+        # on multi-line addresses.
+        #
+        # Accepted shapes:
+        # * US: "[apt-prefix? ]NUMBER STREET[, CITY[, STATE ZIP]]"
+        #   street tail uses the common suffix vocabulary (St / Street
+        #   / Ave / Avenue / Blvd / Boulevard / Rd / Road / Dr / Drive
+        #   / Ln / Lane / Way / Ct / Court / Plaza / Pkwy / Parkway /
+        #   Hwy / Highway / Sq / Square / Ter / Terrace / Pl / Place /
+        #   Trail / Cir / Circle / Loop / Row).
+        # * Optional unit suffix (Apt 4B / Suite 200 / #12 / Unit C).
+        # * Optional ", CITY", optional ", STATE ZIP" tail (US 5- or
+        #   5+4-digit ZIP; UK postcode shape with one or two leading
+        #   letters, then digits and a final letter pair).
+        "address",
+        re.compile(
+            r"\b\d{1,6}(?:[-/]\d{1,6})?\s+"  # house number
+            r"(?:[NSEW]\.?\s+)?"  # optional cardinal direction
+            r"[A-Z][A-Za-z0-9.'-]*"  # street name first token
+            r"(?:\s+[A-Z][A-Za-z0-9.'-]*){0,4}"  # additional street tokens
+            r"\s+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Rd|Road|Dr|Drive"
+            r"|Ln|Lane|Way|Ct|Court|Plaza|Pkwy|Parkway|Hwy|Highway"
+            r"|Sq|Square|Ter|Terrace|Pl|Place|Trail|Cir|Circle|Loop|Row"
+            r")\.?"
+            r"(?:\s*,?\s*(?:Apt|Suite|Ste|Unit|#)\.?\s*[A-Z0-9-]+)?"
+            r"(?:\s*,\s*[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)*"
+            r"(?:\s*,\s*(?:[A-Z]{2}\s+\d{5}(?:-\d{4})?"
+            r"|[A-Z]{1,2}\d[A-Z\d]?\s+\d[A-Z]{2}))?"
+            r")?"
+        ),
+    ),
 )
 
 

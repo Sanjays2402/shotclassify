@@ -284,6 +284,12 @@ PII_REDACT_MODES: tuple[str, ...] = (
     "aws_access_key",
     "github_token",
     "slack_token",
+    # Postal address mode added in autoship tick 9. Targets the
+    # one-line "123 Main St, Springfield, IL 62704" shape that
+    # appears on receipts, signatures, shipping labels, and contact
+    # cards. US 5- and 5+4-digit ZIPs plus UK postcode shapes are
+    # handled in the same matcher.
+    "address",
 )
 
 
