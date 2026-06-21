@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from shotclassify_common import Category, ExtractedFields, OCRResult
 
+from .airports import extract_airports
 from .chat import enrich_chat
 from .code import enrich_code
 from .credit_cards import extract_credit_cards
@@ -174,5 +175,23 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if cards:
         out.raw = dict(out.raw or {})
         out.raw["credit_cards"] = cards
+
+    # Cross-category: stash airport codes (IATA + ICAO) found in the
+    # OCR text under raw["airports"]. Airport codes surface on every
+    # travel-related capture -- boarding passes, flight-search
+    # results, frequent-flyer dashboards, itinerary emails, chat
+    # threads sharing trip plans. We accept IATA (3 letters) when
+    # the code sits in our curated catalogue OR has a travel-
+    # vocabulary anchor (flight / gate / depart / etc) on the same
+    # or previous line OR forms a XXX-XXX / XXX -> XXX route pair.
+    # ICAO (4 letters) requires the curated catalogue OR a
+    # vocabulary anchor with a valid region prefix. Currency codes,
+    # country codes, and common prose acronyms are rejected
+    # unconditionally so a CSS / API / USD line doesn't bleed into
+    # the list.
+    airports = extract_airports(text)
+    if airports:
+        out.raw = dict(out.raw or {})
+        out.raw["airports"] = airports
 
     return out
