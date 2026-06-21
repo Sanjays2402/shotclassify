@@ -460,6 +460,98 @@ def detect_minified_js(code: str, language: str | None = None) -> bool:
     return long_lines and low_newline_ratio
 
 
+# Shebang interpreter detection. The leading ``#!/path/to/x`` line
+# (the "shebang") gives Unix-flavoured scripts a portable way to
+# declare their interpreter. We pull the short interpreter name --
+# the last path segment, or the argument when ``env`` is used as the
+# wrapper -- so dashboards can group "ran under bash" without having
+# to parse the full path.
+#
+# Recognised shapes:
+#
+#   #!/bin/bash                  -> bash
+#   #!/usr/bin/bash              -> bash
+#   #!/usr/bin/env bash          -> bash      (env-wrapped form)
+#   #!/usr/bin/env -S python3 -O -> python3   (env -S split-args form)
+#   #!/usr/bin/python3.11        -> python3.11
+#   #!/usr/bin/perl              -> perl
+#   #!/usr/local/bin/ruby        -> ruby
+#   #!/usr/bin/env node          -> node
+#   #!/bin/sh                    -> sh
+#
+# Edge cases handled:
+#
+# * leading whitespace before the ``#!`` is rejected -- a real
+#   shebang MUST be the first two bytes of the file. OCR noise can
+#   strip the leading line; we conservatively require the strict
+#   form.
+# * ``env`` invocations capture the FIRST non-flag argument as the
+#   interpreter. ``env -S python3 -O`` -> ``python3``;
+#   ``env --split-string=python3`` is also handled.
+# * Windows ``rem`` / ``::`` comments and DOS BOM-prefixed scripts
+#   are NOT shebangs -- we don't try to parse them.
+# * A shebang inside a docstring / heredoc / multiline string is
+#   NOT pulled because we only look at the first line of the
+#   snippet.
+_SHEBANG_RE = re.compile(
+    r"^#!\s*(?P<path>\S+)(?:\s+(?P<args>[^\n]*))?$"
+)
+# ``env`` flag set we know how to skip: short flags (``-S``,
+# ``-i``), long flags (``--ignore-environment``, ``--split-string``,
+# ``--null``, ``--debug``, ``--unset=NAME``). When ``--split-string``
+# carries the interpreter inline (``--split-string=python3``) we
+# pull the value after the ``=``.
+_ENV_FLAG_RE = re.compile(r"^-{1,2}[A-Za-z]")
+
+
+def detect_interpreter(code: str) -> str | None:
+    """Return the interpreter named in the leading shebang, or None.
+
+    Only the FIRST line of ``code`` is consulted -- a shebang
+    further down the snippet isn't a real shebang (it's just a
+    comment in the body). ``env``-wrapped invocations are handled
+    so ``#!/usr/bin/env bash`` returns ``bash``; ``env -S python3
+    -O`` returns ``python3``. Leading whitespace before the ``#!``
+    is rejected because a real shebang must occupy the first two
+    bytes of the file.
+    """
+    if not code:
+        return None
+    first_line = code.split("\n", 1)[0]
+    # Reject a leading-whitespace shebang -- the kernel exec(2)
+    # parser does too.
+    if first_line[:2] != "#!":
+        return None
+    m = _SHEBANG_RE.match(first_line)
+    if not m:
+        return None
+    path = m.group("path")
+    args = (m.group("args") or "").strip()
+    # Last path segment is the candidate interpreter (``/bin/bash``
+    # -> ``bash``). Strip any drive prefix from a Windows-style path
+    # (``C:\bash``) by splitting on both separators.
+    candidate = path.rsplit("/", 1)[-1]
+    candidate = candidate.rsplit("\\", 1)[-1]
+    # ``env`` wrapper: the interpreter is the first non-flag arg.
+    # Also handle ``env --split-string=python3`` inline form.
+    if candidate == "env" and args:
+        for token in args.split():
+            # Inline ``--key=value`` -- pull the value when key is
+            # ``--split-string`` (the only env flag that carries
+            # the interpreter inline).
+            if token.startswith("--split-string="):
+                return token.split("=", 1)[1] or None
+            if _ENV_FLAG_RE.match(token):
+                # Skip env's own flag and continue scanning.
+                continue
+            # First non-flag token IS the interpreter.
+            return token
+        # Only flags after ``env`` -> can't determine interpreter.
+        return None
+    # Non-env shebang: candidate is the interpreter directly.
+    return candidate or None
+
+
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     code = (existing.code if existing and existing.code else ocr.text or "").strip()
     language = (existing.language if existing and existing.language else None) or detect_language(code)
@@ -486,6 +578,13 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     minified = bool(existing.minified) if existing and existing.minified else False
     if not minified:
         minified = detect_minified_js(code, language)
+    # Shebang interpreter. Caller-supplied value wins; otherwise pull
+    # from the leading shebang line if present.
+    interpreter = (
+        existing.interpreter if existing and existing.interpreter else None
+    )
+    if interpreter is None:
+        interpreter = detect_interpreter(code)
     return CodeFields(
         language=language,
         code=code,
@@ -493,4 +592,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         dialect=dialect,
         ts_features=ts_features,
         minified=minified,
+        interpreter=interpreter,
     )

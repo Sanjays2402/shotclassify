@@ -2,6 +2,7 @@
 from .chat import enrich_chat, parse_timestamp
 from .code import (
     detect_framework,
+    detect_interpreter,
     detect_language,
     detect_minified_js,
     detect_sql_dialect,
@@ -33,6 +34,7 @@ __all__ = [
     "enrich_receipt",
     "parse_receipt_text",
     "detect_framework",
+    "detect_interpreter",
     "detect_language",
     "detect_minified_js",
     "detect_sql_dialect",

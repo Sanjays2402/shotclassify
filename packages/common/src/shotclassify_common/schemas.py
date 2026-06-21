@@ -139,6 +139,12 @@ class CodeFields(BaseModel):
     # typescript / jsx / tsx; the detector returns False for other
     # languages even when their line stats look minified.
     minified: bool = False
+    # Shebang interpreter pulled from a leading ``#!/path/to/x`` or
+    # ``#!/usr/bin/env x`` line. Stored as the short interpreter name
+    # (``python3``, ``bash``, ``node``, ``ruby``, etc.) so dashboards
+    # can group "scripts run under bash" without parsing the full
+    # path. ``None`` when the snippet has no shebang.
+    interpreter: str | None = None
 
 
 class ErrorFields(BaseModel):
