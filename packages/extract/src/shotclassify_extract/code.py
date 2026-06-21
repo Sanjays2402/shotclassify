@@ -552,6 +552,152 @@ def detect_interpreter(code: str) -> str | None:
     return candidate or None
 
 
+# Comment-density heuristic. We map a language tag to the leading
+# token(s) that open a line comment in that language, then count
+# what fraction of NON-BLANK lines start with one of those tokens.
+#
+# Single-line comment leaders by language family:
+#
+#   ``#``    Python / Ruby / Shell / Bash / Zsh / Fish / Perl /
+#            Elixir / R / Make / YAML / Conf / Dockerfile / TOML.
+#   ``//``   C / C++ / Java / JavaScript / TypeScript / Go / Rust /
+#            C# / Kotlin / Swift / Scala / PHP / Dart / Groovy / D.
+#   ``--``   SQL / Lua / Haskell / Ada / VHDL / Eiffel.
+#   ``;``    Lisp / Scheme / Clojure / Common Lisp / Racket / Asm.
+#   ``%``    Erlang / MATLAB / LaTeX / Prolog.
+#   ``'``    VB / VB.NET / VBScript / Smalltalk.
+#   ``REM``  BASIC / Batch.
+#   ``<!--`` HTML / XML / SVG (line-leading XML/HTML comments).
+#
+# Block-comment leaders that count when sitting at the start of a
+# line:
+#
+#   ``/*``  C-family multi-line.
+#   ``"""``  Python triple-quoted docstring (also ``'''``).
+#   ``=begin``  Ruby multi-line.
+#
+# Languages we DON'T recognise default to the ``#`` set because that
+# leader is the most common across configuration / scripting languages
+# and gives a reasonable answer for any uncatalogued language.
+_COMMENT_LEADERS_BY_LANGUAGE: dict[str, tuple[str, ...]] = {
+    # ``#`` family
+    "python": ("#", '"""', "'''"),
+    "ruby": ("#", "=begin"),
+    "shell": ("#",),
+    "bash": ("#",),
+    "sh": ("#",),
+    "zsh": ("#",),
+    "fish": ("#",),
+    "perl": ("#",),
+    "elixir": ("#",),
+    "r": ("#",),
+    "make": ("#",),
+    "makefile": ("#",),
+    "yaml": ("#",),
+    "yml": ("#",),
+    "toml": ("#",),
+    "conf": ("#",),
+    "dockerfile": ("#",),
+    # ``//`` family
+    "c": ("//", "/*"),
+    "cpp": ("//", "/*"),
+    "c++": ("//", "/*"),
+    "java": ("//", "/*"),
+    "javascript": ("//", "/*"),
+    "js": ("//", "/*"),
+    "typescript": ("//", "/*"),
+    "ts": ("//", "/*"),
+    "tsx": ("//", "/*"),
+    "jsx": ("//", "/*"),
+    "go": ("//", "/*"),
+    "rust": ("//", "/*"),
+    "c#": ("//", "/*"),
+    "csharp": ("//", "/*"),
+    "kotlin": ("//", "/*"),
+    "swift": ("//", "/*"),
+    "scala": ("//", "/*"),
+    "php": ("//", "#", "/*"),  # PHP accepts both ``//`` and ``#``
+    "dart": ("//", "/*"),
+    "groovy": ("//", "/*"),
+    # ``--`` family
+    "sql": ("--", "/*"),
+    "lua": ("--", "--[["),
+    "haskell": ("--", "{-"),
+    # ``;`` family
+    "lisp": (";",),
+    "scheme": (";",),
+    "clojure": (";",),
+    # ``%`` family
+    "erlang": ("%",),
+    "matlab": ("%", "%{"),
+    "latex": ("%",),
+    # ``<!--`` (HTML / XML)
+    "html": ("<!--",),
+    "xml": ("<!--",),
+    "svg": ("<!--",),
+}
+# Languages we recognise but want to treat as having no defined
+# comment leader (so the density is always 0.0). Pure data formats
+# only -- ``text`` is NOT in this set because a snippet whose
+# language detection landed on ``text`` (the catchall fallback)
+# is often a script-like body where the ``#`` leader gives the
+# right answer. We default ``text`` through the generic ``#``
+# fallback rather than zeroing it out.
+_NO_COMMENT_LANGUAGES = {"json", "csv", "tsv"}
+
+
+def _comment_leaders_for(language: str | None) -> tuple[str, ...]:
+    """Return the comment-leader tokens for ``language``.
+
+    Unknown languages default to ``("#",)`` because ``#`` is the most
+    common single-character leader across configuration / scripting
+    files. Pure data languages (JSON, CSV) return an empty tuple so
+    their density is always 0.0.
+    """
+    if not language:
+        return ("#",)
+    lang = language.lower().strip()
+    if lang in _NO_COMMENT_LANGUAGES:
+        return ()
+    return _COMMENT_LEADERS_BY_LANGUAGE.get(lang, ("#",))
+
+
+def detect_comment_density(code: str, language: str | None = None) -> float:
+    """Return the fraction of NON-BLANK lines that open with a comment
+    leader for ``language``, as a float in ``[0.0, 1.0]``.
+
+    Blank lines are excluded from the denominator so a snippet padded
+    with blank rows doesn't artificially lower the density. The
+    numerator counts every non-blank line whose first non-whitespace
+    token matches one of the language's comment leaders (including
+    block-comment openers like ``/*`` and ``\"\"\"``). When the
+    snippet is empty or has no recognisable comment leader for the
+    language, the result is ``0.0``.
+
+    Rounded to 2 decimal places because finer precision is meaningless
+    given OCR noise and small snippet sizes.
+    """
+    if not code or not code.strip():
+        return 0.0
+    leaders = _comment_leaders_for(language)
+    if not leaders:
+        return 0.0
+    total = 0
+    comments = 0
+    for raw in code.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        total += 1
+        for leader in leaders:
+            if stripped.startswith(leader):
+                comments += 1
+                break
+    if total == 0:
+        return 0.0
+    return round(comments / total, 2)
+
+
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     code = (existing.code if existing and existing.code else ocr.text or "").strip()
     language = (existing.language if existing and existing.language else None) or detect_language(code)
@@ -585,6 +731,20 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if interpreter is None:
         interpreter = detect_interpreter(code)
+    # Comment density. Caller-supplied value wins (a non-zero value);
+    # otherwise compute from the code body against the detected
+    # language's comment leaders. Note the default 0.0 means "no
+    # caller value"; we recompute whenever the existing field is at
+    # the default so a caller that explicitly passed 0.0 will see
+    # the recomputed value (which is also 0.0 for non-commented
+    # snippets, so the behaviour is consistent).
+    comment_density = (
+        existing.comment_density
+        if existing and existing.comment_density
+        else 0.0
+    )
+    if comment_density == 0.0:
+        comment_density = detect_comment_density(code, language)
     return CodeFields(
         language=language,
         code=code,
@@ -593,4 +753,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         ts_features=ts_features,
         minified=minified,
         interpreter=interpreter,
+        comment_density=comment_density,
     )

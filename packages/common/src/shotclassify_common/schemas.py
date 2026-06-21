@@ -183,6 +183,28 @@ class CodeFields(BaseModel):
     # can group "scripts run under bash" without parsing the full
     # path. ``None`` when the snippet has no shebang.
     interpreter: str | None = None
+    # Comment density of the snippet as a fraction in [0.0, 1.0]:
+    # the share of NON-BLANK lines whose first non-whitespace token
+    # opens a comment for the snippet's language. Examples:
+    #
+    #   * Python / Ruby / Shell / Yaml: ``#``
+    #   * JS / TS / Java / C / C++ / Go / Rust / C# / Kotlin / Swift /
+    #     PHP / Scala: ``//``
+    #   * SQL / Lua / Haskell: ``--``
+    #   * Lisp / Scheme / Clojure: ``;``
+    #   * Erlang / Elixir: ``%`` and ``#`` respectively
+    #
+    # Block-comment openers (``/*``, ``"""``, ``'''``, ``<!--``) DO
+    # count when they sit at the start of a line. The denominator
+    # excludes blank lines so a file padded with extra newlines
+    # doesn't artificially lower the density.
+    #
+    # 0.0 means "no comments" (or all-blank snippet); 1.0 means
+    # "every non-blank line is a comment" (a documentation-only
+    # snippet). Dashboards use this to surface heavily-commented
+    # snippets (educational examples) vs raw code (production
+    # output) without an LLM round trip.
+    comment_density: float = 0.0
 
 
 class ErrorFields(BaseModel):

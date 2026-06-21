@@ -1,6 +1,7 @@
 """Category-specific extractors that polish LLM output using OCR text."""
 from .chat import enrich_chat, parse_timestamp
 from .code import (
+    detect_comment_density,
     detect_framework,
     detect_interpreter,
     detect_language,
@@ -41,6 +42,7 @@ __all__ = [
     "detect_minified_js",
     "detect_sql_dialect",
     "detect_ts_features",
+    "detect_comment_density",
     "enrich_code",
     "enrich_error",
     "parse_error_text",
