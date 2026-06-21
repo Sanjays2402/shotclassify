@@ -698,8 +698,161 @@ def detect_comment_density(code: str, language: str | None = None) -> float:
     return round(comments / total, 2)
 
 
+# Line-number prefix patterns. Each candidate captures (1) the number
+# itself and (2) the separator + trailing space(s), so we can strip
+# the matched prefix from the line. Tried in order most-specific-first
+# so an ambiguous line like ``1: foo`` lands on the ``: `` shape,
+# not the bare ``1 foo`` shape (which would also match but with a
+# different separator semantic).
+_LINE_NUMBER_PATTERNS = (
+    # Each entry is ``(regex, strip_one_separator_space)``. When the
+    # second element is True, a leading space in the captured ``rest``
+    # is consumed as the separator before storing -- this lets
+    # ``2| return 1`` collapse to ``return 1`` while ``2|    return 1``
+    # keeps its 4-space indentation.
+    #
+    # ``  1: foo()`` -- pasted from a doc / blog with leading whitespace.
+    # Requires exactly one separator space / tab; further leading
+    # spaces in rest are preserved as code indentation.
+    (re.compile(r"^[ \t]*(?P<num>\d{1,5}):[ \t](?P<rest>.*)$"), False),
+    # ``1| foo()`` -- code review / diff style. Sticky form
+    # ``1|foo()`` is also accepted (no space after pipe); when a
+    # space IS present it's consumed as the separator.
+    (re.compile(r"^[ \t]*(?P<num>\d{1,5})\|(?P<rest>.*)$"), True),
+    # ``  1\tfoo()`` -- cat -n / pr -n style (tab separator). The tab
+    # is consumed; the rest is preserved verbatim (including any
+    # leading spaces that are part of the code's indentation).
+    (re.compile(r"^[ \t]*(?P<num>\d{1,5})\t(?P<rest>.*)$"), False),
+    # ``  1  foo()`` -- right-aligned column with 2+ spaces. The
+    # 2-space minimum is the separator boundary; any further leading
+    # spaces in ``rest`` are kept as code indentation.
+    (re.compile(r"^[ \t]*(?P<num>\d{1,5})[ \t]{2}(?P<rest>.*)$"), False),
+)
+
+# Minimum number of NON-BLANK lines required before we even attempt
+# line-number detection. A 1- or 2-line snippet is too short to
+# distinguish a numbered listing from "two ints on consecutive lines".
+_MIN_NUMBERED_LINES = 3
+
+# Minimum fraction of non-blank lines that must satisfy a numbered
+# pattern before we declare the snippet numbered. 1.0 - tolerance =
+# strict pass; we set the tolerance to 0.0 because real numbered
+# listings number EVERY line, and even one un-numbered line in the
+# middle is a strong signal that the snippet is NOT numbered.
+_NUMBERED_THRESHOLD = 1.0
+
+
+def detect_numbered(code: str) -> tuple[bool, str]:
+    """Decide whether ``code`` was captured with a line-number prefix
+    column, and if so return the de-numbered body.
+
+    Returns a ``(is_numbered, body)`` tuple. ``body`` is the original
+    code when ``is_numbered`` is False, or the de-numbered code (with
+    the prefix column stripped from every non-blank line) when
+    ``is_numbered`` is True. Blank lines in the input are preserved
+    in the output regardless.
+
+    Detection rules:
+
+    1. There must be at least :data:`_MIN_NUMBERED_LINES` non-blank
+       lines to attempt detection (too short and the signal is
+       unreliable).
+    2. Every non-blank line must match the SAME prefix pattern; the
+       pattern can be any of: ``<n>:`` / ``<n>|`` / ``<n>\\t`` /
+       ``<n>  `` (right-aligned column with 2+ spaces). Mixing
+       patterns within a single snippet rejects detection.
+    3. The numbers don't have to be strictly sequential -- a code
+       review excerpt might paste lines 45..47 then 78..80 -- but
+       they all have to be ascending non-decreasing.
+
+    When the matched separator is a single space / tab (``: `` or
+    ``| `` or the trailing space of the right-aligned column), that
+    boundary character is consumed but any further spaces are
+    preserved as code indentation. This means ``2|    return 1``
+    keeps all four indent spaces, while ``2| return 1`` consumes
+    the one separator space and yields ``return 1``.
+
+    This is intentionally strict. A loose detector would mis-tag a
+    code snippet whose first column happens to look numeric (e.g.,
+    a CSV / table) as a numbered listing and silently drop the
+    leading column. Strict matching keeps that false-positive risk
+    bounded.
+    """
+    if not code or not code.strip():
+        return False, code
+    lines = code.splitlines()
+    non_blank_indices = [i for i, ln in enumerate(lines) if ln.strip()]
+    if len(non_blank_indices) < _MIN_NUMBERED_LINES:
+        return False, code
+
+    for pattern, strip_one_space in _LINE_NUMBER_PATTERNS:
+        matches: list[re.Match[str]] = []
+        ok = True
+        last_num = -1
+        for i in non_blank_indices:
+            m = pattern.match(lines[i])
+            if m is None:
+                ok = False
+                break
+            num = int(m.group("num"))
+            if num < last_num:
+                # Numbers must be non-decreasing across the snippet.
+                ok = False
+                break
+            last_num = num
+            matches.append(m)
+        if not ok:
+            continue
+        # If we reached here every non-blank line matched the same
+        # pattern with non-decreasing numbers. Build the de-numbered
+        # body. We preserve blank lines verbatim.
+        #
+        # Separator-space handling: when the pattern supports the
+        # sticky form (e.g. ``2|code`` alongside ``2| code``), we use
+        # the FIRST matched line as the reference. If that line's
+        # rest starts with a space, we treat the snippet as "spaced
+        # form" and strip exactly one leading space from every line's
+        # rest (preserving deeper indentation). If the first line's
+        # rest does NOT start with a space, we treat the snippet as
+        # "sticky form" and don't strip anything -- in which case
+        # rest is already correct.
+        spaced_form = (
+            strip_one_space
+            and bool(matches)
+            and matches[0].group("rest").startswith(" ")
+        )
+        out_lines: list[str] = []
+        m_iter = iter(matches)
+        for ln in lines:
+            if not ln.strip():
+                out_lines.append(ln)
+                continue
+            m = next(m_iter)
+            rest = m.group("rest")
+            if spaced_form and rest.startswith(" "):
+                rest = rest[1:]
+            out_lines.append(rest)
+        return True, "\n".join(out_lines)
+
+    return False, code
+
+
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     code = (existing.code if existing and existing.code else ocr.text or "").strip()
+    # Line-number prefix detection. Runs FIRST because every downstream
+    # detector (language, dialect, ts_features, minified, interpreter,
+    # comment density) wants to see the de-numbered code. Caller-
+    # supplied ``numbered = True`` is preserved (we trust the caller's
+    # signal) but we still re-run the strip so the code body is
+    # canonical. When the caller hasn't set it, we run the detector and
+    # use its result.
+    caller_numbered = bool(existing.numbered) if existing else False
+    is_numbered, stripped = detect_numbered(code)
+    if caller_numbered or is_numbered:
+        code = stripped
+        numbered = True
+    else:
+        numbered = False
     language = (existing.language if existing and existing.language else None) or detect_language(code)
     # Dialect narrowing runs only when the inferred language looks like
     # SQL -- it's a no-op for every other language, so the cost is a
@@ -754,4 +907,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         minified=minified,
         interpreter=interpreter,
         comment_density=comment_density,
+        numbered=numbered,
     )

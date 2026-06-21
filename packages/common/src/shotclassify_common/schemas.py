@@ -205,6 +205,23 @@ class CodeFields(BaseModel):
     # snippets (educational examples) vs raw code (production
     # output) without an LLM round trip.
     comment_density: float = 0.0
+    # ``True`` when the snippet was captured with a line-number
+    # prefix column (every non-blank line starts ``<n>: code`` or
+    # ``<n> code`` or ``<n>|code``). The detector strips the prefix
+    # column from ``code`` before storage so dashboards render the
+    # actual source without the line-number gutter. Common shapes:
+    #
+    #   * ``1: foo()``        -- pasted from a doc / blog
+    #   * ``1| foo()``        -- pasted from a code review tool
+    #   * ``  1  foo()``      -- right-aligned column (cat -n style)
+    #   * ``1 foo()``         -- minimal form
+    #
+    # When ``numbered = True``, ``code`` is the de-numbered body and
+    # ``line_count`` reflects the de-numbered line count (which is
+    # identical to the original line count, since stripping a prefix
+    # column doesn't remove any lines). Dashboards use this to surface
+    # "looks copy-pasted from a doc with line numbers" annotations.
+    numbered: bool = False
 
 
 class ErrorFields(BaseModel):
