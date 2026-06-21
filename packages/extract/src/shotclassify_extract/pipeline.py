@@ -7,6 +7,7 @@ from .chat import enrich_chat
 from .code import enrich_code
 from .emails import extract_emails
 from .error import enrich_error
+from .git_shas import extract_git_shas
 from .identifiers import extract_identifiers
 from .network import extract_network
 from .paths import extract_paths
@@ -112,5 +113,18 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if uuids:
         out.raw = dict(out.raw or {})
         out.raw["uuids"] = uuids
+
+    # Cross-category: stash git commit SHAs found in the OCR text
+    # under raw["git_shas"]. SHAs appear in error stacktraces that
+    # cite the release tag, code snippet docstrings, terminal
+    # ``git log`` output, document build provenance, and chat PR
+    # references. Full 40-hex SHAs are matched standalone; short
+    # 7..12 hex SHAs require a git-vocabulary context (commit /
+    # revision / rev / Fixes: / Refs: etc.) to avoid false-
+    # positiving on UUIDs and color codes. Output is lowercase.
+    git_shas = extract_git_shas(text)
+    if git_shas:
+        out.raw = dict(out.raw or {})
+        out.raw["git_shas"] = git_shas
 
     return out

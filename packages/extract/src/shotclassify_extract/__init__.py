@@ -18,6 +18,7 @@ from .error import (
     parse_rust_panic,
     parse_syntax_caret,
 )
+from .git_shas import extract_git_shas
 from .identifiers import extract_identifiers
 from .network import extract_network
 from .paths import extract_paths
@@ -53,4 +54,5 @@ __all__ = [
     "extract_identifiers",
     "extract_phones",
     "extract_uuids",
+    "extract_git_shas",
 ]
