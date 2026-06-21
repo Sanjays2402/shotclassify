@@ -258,6 +258,113 @@ def detect_sql_dialect(code: str) -> str | None:
     return None
 
 
+# TypeScript-specific feature extraction. The simple language detector
+# already tags a snippet as TypeScript when it sees ``: string`` /
+# ``: number`` / ``interface `` / ``type ``, but those are only the
+# minimum signals. Dashboards want richer information about which
+# TypeScript-only constructs the snippet uses:
+#
+#   decorator         - leading ``@`` on a class/method (``@Component``)
+#   as_cast           - the ``foo as Bar`` type assertion (TS-only;
+#                       JS does not have this syntax)
+#   angle_cast        - the legacy ``<Bar>foo`` type assertion (used
+#                       in .ts files but not .tsx because the angle
+#                       brackets collide with JSX)
+#   generic           - generic type parameter declaration on a
+#                       function / class / interface / type (``<T>`` /
+#                       ``<T, U>``)
+#   enum              - ``enum X { ... }`` declaration (TS-only)
+#   readonly          - ``readonly`` modifier on a property / param
+#   abstract          - ``abstract class`` / ``abstract method`` (TS-only)
+#   access_modifier   - ``public`` / ``private`` / ``protected`` on
+#                       a class member (TS-only; JS has private fields
+#                       via ``#name`` but not these keywords)
+#   namespace         - ``namespace X { ... }`` declaration (TS-only)
+#   optional_chain    - ``foo?.bar`` (also in ES2020 JS, but TS code
+#                       commonly uses it -- surfaced for dashboards)
+#   non_null_assert   - ``foo!`` non-null assertion (TS-only)
+#
+# We compile each pattern once at module load. Detection is a single
+# pass through the patterns (none overlap, none feed back). The
+# result list preserves the iteration order so dashboards can render
+# consistently.
+_TS_FEATURE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # Decorator: leading ``@`` followed by an Identifier at the start
+    # of a line (after optional indent). The ``(?!`` lookahead excludes
+    # mid-line ``@`` (a template / object key like ``key@1``).
+    ("decorator", re.compile(r"^\s*@[A-Z]\w*(?:\([^)]*\))?\s*$", re.MULTILINE)),
+    # ``as`` cast: ``foo as Bar`` / ``foo as Bar<T>``. We anchor on
+    # the preceding identifier / paren and the trailing TypeName so a
+    # plain English ``treat as constant`` won't fire.
+    ("as_cast", re.compile(
+        r"[\w)\]]\s+as\s+(?:[A-Z]\w*(?:<[^>]*>)?|unknown|any|string|number|"
+        r"boolean|object|void|never)\b",
+    )),
+    # Legacy angle-bracket cast: ``<Bar>foo`` / ``<Bar<T>>foo``. The
+    # body must start with an uppercase letter (a type name) so JSX
+    # tags ``<div>`` / ``<MyComponent ...>`` don't false-positive.
+    ("angle_cast", re.compile(r"<[A-Z]\w*(?:<[^>]+>)?>(?=[\w\(\[])")),
+    # Generic type parameter on a function / class / interface / type
+    # declaration. We anchor on the declaration keyword to avoid
+    # confusing comparison operators ``a < b`` and JSX ``<div>``.
+    ("generic", re.compile(
+        r"\b(?:function|class|interface|type|const|let|var)\s+\w+\s*<[A-Z]\w*"
+        r"(?:\s*(?:extends\s+[\w<>.,\s]+|,\s*[A-Z]\w*))*\s*>",
+    )),
+    # Bare ``enum X``. The keyword is unique to TS and never appears as
+    # a plain identifier in modern JS.
+    ("enum", re.compile(r"\benum\s+[A-Z]\w*\s*[{=]")),
+    # ``readonly`` modifier on a property / param. Word-bounded so a
+    # comment containing the word ``readonly`` doesn't trigger.
+    ("readonly", re.compile(r"\breadonly\s+[\w_$]+\s*[:?]")),
+    # ``abstract`` modifier on a class / method.
+    ("abstract", re.compile(r"\babstract\s+(?:class|[\w_$]+\s*\()")),
+    # Access modifier: ``public`` / ``private`` / ``protected`` on a
+    # class member. Word-bounded on the left so a generic comment
+    # containing ``public foo`` would still tag (acceptable -- the
+    # word is a reserved keyword in TS). The trailing identifier must
+    # be followed by ``:`` (property), ``(`` (method), or ``?`` /
+    # ``=`` (optional / default) so prose words after ``private``
+    # don't false-positive.
+    ("access_modifier", re.compile(
+        r"\b(?:public|private|protected)\s+(?:readonly\s+|static\s+|"
+        r"abstract\s+)?[\w_$]+\s*[:(?=]",
+    )),
+    # ``namespace X { ... }``. Keyword unique to TS.
+    ("namespace", re.compile(r"\bnamespace\s+[A-Z]\w*\s*\{")),
+    # Optional chaining: ``foo?.bar``. Bracketed optional chain
+    # (``foo?.[x]``) and function call optional chain (``foo?.()``)
+    # also count. Anchored on a word char before the ``?`` so a ternary
+    # ``a ? b : c`` doesn't false-positive.
+    ("optional_chain", re.compile(r"[\w\])]\?\.(?:\w|\(|\[)")),
+    # Non-null assertion: ``foo!`` / ``foo!.bar``. Word-bounded on
+    # both sides so a logical-not ``!foo`` and an inequality ``foo !=``
+    # don't false-positive. The ``!`` must be followed by ``.`` /
+    # ``(`` / ``[`` / ``;`` / whitespace / end-of-string.
+    ("non_null_assert", re.compile(r"\w!(?=[.(\[;,\s]|$)")),
+)
+
+
+def detect_ts_features(code: str) -> list[str]:
+    """Return the set of TypeScript-only features ``code`` exercises.
+
+    Each tag fires at most once per snippet (de-duped by tag name);
+    the order matches the declared pattern catalogue so dashboards
+    render consistently across snippets.
+    """
+    if not code or not code.strip():
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    for tag, pattern in _TS_FEATURE_PATTERNS:
+        if tag in seen:
+            continue
+        if pattern.search(code):
+            seen.add(tag)
+            found.append(tag)
+    return found
+
+
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     code = (existing.code if existing and existing.code else ocr.text or "").strip()
     language = (existing.language if existing and existing.language else None) or detect_language(code)
@@ -269,9 +376,20 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     dialect = existing.dialect if existing and existing.dialect else None
     if dialect is None and language and language.lower().startswith("sql"):
         dialect = detect_sql_dialect(code)
+    # TypeScript-specific feature extraction. Runs only when language
+    # is typescript / tsx so we don't mis-tag a plain JS snippet that
+    # happens to contain ``as`` as a regular identifier. Caller-
+    # supplied ts_features are preserved verbatim; the heuristic only
+    # fills the slot when the caller left it empty.
+    ts_features: list[str] = (
+        list(existing.ts_features) if existing and existing.ts_features else []
+    )
+    if not ts_features and language and language.lower() in {"typescript", "tsx", "ts"}:
+        ts_features = detect_ts_features(code)
     return CodeFields(
         language=language,
         code=code,
         line_count=len(code.splitlines()),
         dialect=dialect,
+        ts_features=ts_features,
     )

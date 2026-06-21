@@ -111,6 +111,17 @@ class CodeFields(BaseModel):
     # ``sqlite`` / ``mssql``. ``None`` means either non-SQL code or
     # ambiguous ANSI SQL without dialect-specific syntax.
     dialect: str | None = None
+    # When ``language == "typescript"``, surface the TypeScript-only
+    # features the snippet exercises. Each entry is a short tag in:
+    # ``decorator`` (``@Component``), ``as_cast`` (``foo as Bar``),
+    # ``angle_cast`` (``<Bar>foo``), ``generic`` (``Array<T>``,
+    # ``function<T>(...)``), ``enum`` (``enum X { ... }``),
+    # ``readonly`` (``readonly x``), ``abstract`` (``abstract class``),
+    # ``access_modifier`` (``private`` / ``public`` / ``protected``),
+    # ``namespace`` (``namespace X { ... }``), ``optional_chain``
+    # (``foo?.bar``), ``non_null_assert`` (``foo!``). Tags are unique
+    # per snippet; empty list when the snippet is non-TS or has none.
+    ts_features: list[str] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):

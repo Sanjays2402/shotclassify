@@ -1,6 +1,6 @@
 """Category-specific extractors that polish LLM output using OCR text."""
 from .chat import enrich_chat, parse_timestamp
-from .code import detect_framework, detect_language, detect_sql_dialect, enrich_code
+from .code import detect_framework, detect_language, detect_sql_dialect, detect_ts_features, enrich_code
 from .emails import extract_emails
 from .error import (
     enrich_error,
@@ -24,6 +24,7 @@ __all__ = [
     "detect_framework",
     "detect_language",
     "detect_sql_dialect",
+    "detect_ts_features",
     "enrich_code",
     "enrich_error",
     "parse_error_text",
