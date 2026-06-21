@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (45 features tracked)
+## Roadmap (50 features tracked)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -85,6 +85,13 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 57. [x] PII redact: address mode (US street + suffix + optional unit + optional city + STATE ZIP / ZIP+4; UK postcode tail SW1A 1AA / M1 1AE; cardinal direction prefix N/S/E/W; house-number range 101-103 and split 1/2; Apt/Suite/Ste/Unit/# prefixes; 28 street suffixes including Trail/Loop/Row; capitalised street name required to avoid lowercase prose false-positives; added to PII_REDACT_MODES allow-list).
 62. [x] Code: line-numbering detection (new `CodeFields.numbered` bool; four prefix shapes: `1: code` / `1| code` / `1\tcode` / right-aligned `  1  code` with 2+ spaces; sticky pipe form `1|code` accepted; detector runs FIRST in enrich_code so language / dialect / framework / minified / interpreter / comment-density all see the de-numbered body; 3-line minimum; non-decreasing line numbers required; mixed-separator rejected; first-line decides spaced-vs-sticky mode so deeper code indentation is preserved; LLM wire-format updated).
 
+### Done in tick 10 (5 features)
+45. [x] Error: Swift / Objective-C crash log parsing (new framework='swift'; Swift fatalError() / preconditionFailure / Swift runtime failure preludes; ObjC NSException `*** Terminating app due to uncaught exception 'NSXxxException', reason: '...'` shape; ObjC wins over Swift in hybrid logs because the NSException class is the more useful identifier; branch placed AFTER PHP because PHP's `Fatal error: Uncaught X:` is more specific (Swift fatals never carry `Uncaught` keyword); file/line pulled from Swift `: file X.swift, line N` directive when present, ObjC stays None because backtrace is OCR-mangled; 12-cause likely_cause catalogue covering nil-unwrap / NSInvalidArgument / NSRange / NSInternalInconsistency / Swift index-out-of-range / division-by-zero / precondition / assertion / NSFile / NSURL / objc_exception_throw).
+46. [x] Error: Kotlin coroutine exception parsing (new framework='kotlin'; placed BEFORE JVM branch because Kotlin compiles to JVM bytecode and frame shape is identical; discriminator is either a top-level `kotlinx.coroutines.XException` exception class OR a frame referencing `kotlinx.coroutines.` / synthesised `invokeSuspend` wrapper; top-level coroutine class wins as exception slot, otherwise falls through to standard JVM `ClassName: message` header for the throw class; file/line pulled from INNERMOST Kotlin `.kt`/`.kts` frame, skipping pure-Java framework plumbing on the bottom; 10-cause likely_cause catalogue covering JobCancellation / TimeoutCancellation / ChannelClosed / deadlock / KotlinNPE / UninitializedPropertyAccess / IllegalState-coroutine-vs-general / ConcurrentModification / generic coroutine fallback).
+60. [x] Receipt: signature / signed-by detection (new `ReceiptFields.signature` dict; `{"present": True}` for blank-box placeholder lines, `{"present": True, "name": "Bob"}` for named signers; 9 worded keyword variants Customer/Cardholder/Merchant/Authorized/Authorised signature, Signed/Authorized/Authorised by, Signature; bare `X____` placeholder line with X-only separator `:` or `.` (NOT `-` so X-Ray/X-Wing/hyphenated compounds don't false-positive); X11 / digit-led tails rejected; ALL-CAPS no-vowel acronyms after X rejected as not-a-name; placeholder runs `_____`/`-----`/`.....` recognised; worded matchers reject prose leads except bullet-prefixed ones; LLM wire-format updated).
+64. [x] Code: TODO / FIXME marker count into `CodeFields.todo_count` (case-sensitive ALL-CAPS markers TODO/FIXME/XXX/HACK/BUG/NOTE/OPTIMIZE; must be preceded by language-appropriate comment leader anywhere on line via reused `_comment_leaders_for` catalogue from comment-density detector; followed by non-alphanumeric/non-underscore boundary so TODOIST/BUGGY/XXXX don't false-positive; multiple markers per line count separately; pure data languages json/csv/tsv short-circuit to 0; documented trade-off: markers inside string literals NOT excluded because we don't tokenise; LLM wire-format updated).
+70. [x] Code: license-header detection into `CodeFields.license` (12 SPDX-style tags: apache-2.0/mit/gpl-3.0/gpl-2.0/lgpl-3.0/agpl-3.0/bsd-2-clause/bsd-3-clause/mpl-2.0/isc/unlicense/cc0-1.0; needle-group catalogue per license, ALL needles in a group must match (AND), ANY group passes (OR); longer/more-distinctive licenses checked FIRST so full BSD-3-Clause header tags as bsd-3-clause not MIT (BSD also contains "permission is granted" wording); first 30 header lines scanned only; per-line comment-leader prefix `//`/`/*`/`*`/`#`/`--`/`;`/`%` stripped before flattening so C-style multi-line `* Mozilla Public * License` collapses across the asterisk boundary; case-insensitive throughout; LLM wire-format updated).
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -94,25 +101,25 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 40. [ ] Chat: voice-note / image / video attachment markers (`🎤 Voice (0:42)`, `📷 Photo`, `[Image]`, `[Voice note 0:23]`).
 42. [ ] Code: JSDoc / docstring extraction (top-level docstring captured into `CodeFields.docstring` for Python / JS / Java / Go).
 43. [ ] Code: import-set extraction (new `CodeFields.imports` list of imported modules/packages, per language).
-45. [ ] Error: Swift / Objective-C crash log parsing (framework=swift; `Fatal error: Unexpectedly found nil`, `*** Terminating app due to uncaught exception`).
-46. [ ] Error: Kotlin coroutine exception parsing (framework=kotlin; `kotlinx.coroutines.JobCancellationException`, `at ... CoroutineScopeKt`).
 52. [ ] Extract: cross-category ICAO / IATA airport-code extractor into `raw["airports"]` for travel screenshots.
 53. [ ] Chart: bar-chart series-label OCR refinement (split the legend block into a clean `ChartFields.series` list).
 54. [ ] Chart: percent annotations vs raw values heuristic (new `ChartFields.value_unit`: `%` / `count` / `currency` based on axis tick text).
 55. [ ] UI mockup: layout-style guess (new `UIMockupFields.layout_kind`: `dashboard` / `landing` / `form` / `settings` / `modal`).
 56. [ ] PII redact: phone-number redaction mode (`phone` mode; normalises to `<PHONE>` stub). (Note: a tight `phone` regex already exists in redact.py; this would refine to the `<PHONE>` stub form.)
 59. [ ] Extract: cross-category currency-amount extractor into `raw["amounts"]` (cross-category so a code snippet or chat message that quotes a price is surfaced; symbol + ISO code aware).
-60. [ ] Receipt: signature / signed-by detection (`Signature: _____`, `Signed by: Bob`, `X____` line markers).
 61. [ ] Receipt: barcode / SKU extraction at the line-item level (`SKU: 1234567`, `Barcode: 0123456789012`).
 63. [ ] Receipt: tender / change-given detection (new ReceiptFields.change; "Tendered 20.00 / Change 7.50" shape).
-64. [ ] Code: TODO / FIXME comment count surfaced as CodeFields.todo_count for code-review screenshots.
 65. [ ] Chat: link preview block detection (the inline OG-card with title + description that platforms inline for shared URLs).
 66. [ ] Error: AWS Lambda / boto3 client error extraction (BotoCoreError, ClientError with operation_name + error_code).
 68. [ ] Extract: cross-category bitcoin / ethereum / solana address extractor into `raw["crypto"]` (base58 BTC P2PKH/P2SH/SegWit-Bech32, EIP-55 ETH, base58 SOL).
 69. [ ] Receipt: tip-jar / suggested-tip table detection (the "10% 12.34 / 15% 18.51 / 20% 24.68" footer table).
-70. [ ] Code: license-header detection (top-of-file BSD / MIT / Apache 2.0 / GPL-3 / MPL banner; new CodeFields.license tag).
 71. [ ] Chart: pie-slice percent extraction from in-pie labels (new ChartFields.slices list of {label, percent}).
 72. [ ] PII redact: drivers-license-number redaction mode (per-state US shape catalogues, the most common 7-9 alphanumeric forms).
+73. [ ] Receipt: gift-card / promo-code redemption detection (new ReceiptFields.gift_card_applied amount + ReceiptFields.promo_code string; "Gift card -25.00" / "Promo code SAVE10 applied" shapes).
+74. [ ] Code: copyright-holder extraction (new CodeFields.copyright list of {holder, year} dicts, parsed from "Copyright (c) 2024 ACME Corp" / "(C) 2020-2024" header lines).
+75. [ ] Extract: cross-category social-handle extractor (Twitter/X @handle, GitHub user/repo, LinkedIn /in/foo) into raw["social"] -- distinct from chat mentions because the OCR may carry a code snippet that quotes a handle.
+76. [ ] Receipt: delivery-fee / service-charge extraction (new ReceiptFields.delivery_fee and ReceiptFields.service_charge -- restaurant + food-delivery dashboards split these from tip and tax).
+77. [ ] Chat: edited-message marker detection (`(edited)` / `(edited 2m)` tails appended to message bodies on iMessage/Slack/Discord -- surface a parallel `edits` list on ChatFields).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -260,6 +267,32 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     in enrich_code so every downstream detector (language,
     dialect, ts_features, minified, interpreter, comment
     density) sees the de-numbered body.
+
+- 2026-06-21 11:07 PT (tick 10, Cake): 5 features.
+  - fd30aa2 feat(extract/error): Swift / Objective-C crash log parsing
+  - 93262be feat(extract/error): Kotlin coroutine exception parsing
+  - 2491260 feat(extract/receipt): signature / signed-by detection
+  - b860ca4 feat(extract/code): TODO / FIXME marker count into CodeFields.todo_count
+  - b1737dd feat(extract/code): license-header detection into CodeFields.license
+  - Gate: ruff at baseline 536 (one F541 fixup on the bare
+    rf-string in the signature detector folded via --fixup +
+    --autosquash into the signature commit, plus one E501
+    line-too-long fixup in the kotlin test file also folded
+    via --fixup) + pytest 2324 passed / 3 skipped in 126.89s.
+    195 new tests across the 5 features (27 + 28 + 42 + 56 +
+    42). New fields shipped: ReceiptFields.signature dict,
+    CodeFields.todo_count int, CodeFields.license str. LLM
+    wire format in classify/client.py updated for all three.
+    Two new error-framework tags: swift, kotlin. Roadmap
+    refilled with 5 new items (73..77) so backlog stays at
+    25+ open. Branch placement: Swift sits AFTER PHP because
+    PHP's `Fatal error: Uncaught X:` is more specific than
+    Swift's bare `Fatal error:` (Swift fatals never carry
+    `Uncaught`); Kotlin sits BEFORE JVM because Kotlin
+    compiles to JVM bytecode and would otherwise tag as
+    `jvm`. License catalogue uses needle-group AND/OR
+    matching so the longer BSD-3-Clause header wins over the
+    overlapping MIT phrasing.
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
