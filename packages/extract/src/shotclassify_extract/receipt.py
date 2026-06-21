@@ -728,6 +728,146 @@ def _find_server(text: str) -> str | None:
     return _find_keyword_name(text, _SERVER_KEYWORDS)
 
 
+# Signature / signed-by detection. Credit-card slips and delivery
+# receipts commonly print a signature line near the bottom:
+#
+#   Signature: ________________
+#   Signature: Bob Smith
+#   X___________________________
+#   X: Bob Smith
+#   Signed by: Bob Smith
+#   Customer signature: Alice
+#   Cardholder signature: ___________
+#   Authorized by: Charlie
+#
+# We surface a small dict so dashboards can distinguish a present-but-
+# blank signature box from a named signer. The detector tries each
+# keyword in priority order (most-specific first); the first non-empty
+# match wins.
+_SIGNATURE_KEYWORDS: tuple[str, ...] = (
+    r"customer\s+signature",
+    r"cardholder\s+signature",
+    r"merchant\s+signature",
+    r"authorized\s+signature",
+    r"authorised\s+signature",
+    r"authorized\s+by",
+    r"authorised\s+by",
+    r"signed\s+by",
+    r"signature",
+    # Bare ``X`` placeholder line: ``X____`` (with the underscore
+    # filler) or ``X: Bob`` (with a name) or ``X.`` (handled below).
+    r"x",
+)
+# Captured signer-name tail. We accept the same letter / dot / dash /
+# apostrophe set as the cashier / server matchers so multi-part names
+# (``Mary-Jane O'Brien``) survive. Bounded 1..30 chars; the trailing
+# trim normalises whitespace.
+_SIGNATURE_NAME_TAIL = r"(?P<name>[A-Za-z][A-Za-z .'\-]{0,29})"
+# Placeholder-only tail: any run of underscores / dashes / dots / spaces
+# / or the literal word ``_____`` (commonly OCR'd as a mix). Empty
+# string is also accepted as ``present`` because some receipts print
+# the bare ``Signature:`` keyword and rely on a visual line beneath.
+_SIGNATURE_PLACEHOLDER = re.compile(r"^[\s_\-.]*$")
+
+
+def _find_signature(text: str) -> dict[str, str | bool] | None:
+    """Return a signature dict (``{"present": True}`` or
+    ``{"present": True, "name": "Bob"}``), or ``None`` when no
+    signature line is present.
+
+    Detection rule: scan each line; the first matching keyword wins.
+    When the value after the keyword looks like a real name we
+    surface it under the ``name`` key; when the value is empty or
+    purely placeholder characters (underscores / dashes / dots /
+    spaces) we surface ``{"present": True}`` only.
+
+    The bare ``X`` keyword is matched conservatively: it must sit at
+    the START of a line (after optional whitespace) and be followed
+    by either a placeholder run OR a separator (``:`` / space) + name.
+    A stray ``X`` in prose (``X-Ray``, ``X11``) is rejected by the
+    word-boundary requirement.
+    """
+    if not text:
+        return None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        for kw in _SIGNATURE_KEYWORDS:
+            if kw == "x":
+                # Bare ``X`` -- only fire at start of line with the
+                # placeholder / name shape immediately after. The
+                # separator between ``X`` and the rest may be ``:`` /
+                # ``.`` or whitespace; we explicitly DO NOT accept
+                # ``-`` as a separator because ``X-Ray`` / ``X-Wing``
+                # / hyphenated compound words would otherwise look
+                # like signature lines.
+                m = re.match(
+                    r"^[Xx](?:\s*[:.]?\s*(?P<rest>.*))?$",
+                    line,
+                )
+                if not m:
+                    continue
+                rest = (m.group("rest") or "").strip()
+                # Reject hyphen-led rest (``X-Ray``, ``X-Wing``) --
+                # this is a hyphenated compound, not a signature.
+                if rest.startswith("-"):
+                    continue
+                # Reject if the captured ``X`` is actually part of a
+                # word. We have a non-placeholder rest; require it to
+                # start with a letter (a name) and not a digit
+                # (X11) or a digit-letter mix.
+                if rest and not _SIGNATURE_PLACEHOLDER.match(rest):
+                    if not rest[0].isalpha():
+                        continue
+                    # Reject single-token all-caps that looks like
+                    # an acronym/code rather than a name (X RAY,
+                    # X TERMINAL). A real signed name has a vowel.
+                    if rest.isupper() and not any(c in "AEIOUaeiou" for c in rest):
+                        continue
+                if not rest or _SIGNATURE_PLACEHOLDER.match(rest):
+                    return {"present": True}
+                # Name capture for the bare-X case.
+                nm = re.match(_SIGNATURE_NAME_TAIL, rest)
+                if nm:
+                    name = nm.group("name").strip().rstrip(".,;:-")
+                    if "  " in name:
+                        name = name.split("  ", 1)[0].strip()
+                    name = re.sub(r"\s+", " ", name)
+                    if name and any(c.isalpha() for c in name):
+                        return {"present": True, "name": name}
+                return {"present": True}
+            # Worded keyword (Signature / Signed by / etc).
+            pat = re.compile(
+                rf"^(?P<lead>.*?)(?<![A-Za-z]){kw}\s*[:\-]?\s*(?P<rest>.*)$",
+                re.IGNORECASE,
+            )
+            m = pat.match(line)
+            if not m:
+                continue
+            # Reject when the keyword sits deep inside the line and
+            # the lead text looks like prose (e.g. ``please sign at
+            # the X``) -- only fire when the keyword is at the start
+            # of the line OR after a small prefix that itself is
+            # signature-context (a star / dash bullet).
+            lead = m.group("lead").strip()
+            if lead and not re.match(r"^[\*\-\u2022]+$", lead):
+                continue
+            rest = m.group("rest").strip()
+            if not rest or _SIGNATURE_PLACEHOLDER.match(rest):
+                return {"present": True}
+            nm = re.match(_SIGNATURE_NAME_TAIL, rest)
+            if nm:
+                name = nm.group("name").strip().rstrip(".,;:-")
+                if "  " in name:
+                    name = name.split("  ", 1)[0].strip()
+                name = re.sub(r"\s+", " ", name)
+                if name and any(c.isalpha() for c in name):
+                    return {"present": True, "name": name}
+            return {"present": True}
+    return None
+
+
 def _guess_vendor(text: str) -> str | None:
     for raw in text.splitlines():
         line = raw.strip()
@@ -975,6 +1115,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         register_id=_find_register_id(text),
         cashier=_find_cashier(text),
         server=_find_server(text),
+        signature=_find_signature(text),
         items=_parse_items(text),
     )
 
@@ -988,7 +1129,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "vendor", "date", "subtotal", "tax", "tip", "discount", "total",
         "currency", "payment_method", "order_number", "tax_mode",
         "party_size", "refund_amount", "loyalty_id", "store_id",
-        "register_id", "cashier", "server",
+        "register_id", "cashier", "server", "signature",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))

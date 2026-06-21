@@ -145,6 +145,19 @@ class ReceiptFields(BaseModel):
     # Restaurant dashboards use this to compute per-server tip
     # rates and table-turnover metrics.
     server: str | None = None
+    # Signature / signed-by marker printed on credit-card slips and
+    # delivery receipts. The capture is a small dict so dashboards
+    # can distinguish a present-but-blank signature box from a named
+    # signer:
+    #
+    #   {"present": True}                 -- bare ``Signature: _____`` or
+    #                                       ``X____`` placeholder, no name
+    #   {"present": True, "name": "Bob"}  -- ``Signed by: Bob`` /
+    #                                       ``Signature: Bob`` (named)
+    #
+    # ``None`` when the receipt prints no signature line at all
+    # (typical for retail point-of-sale receipts).
+    signature: dict[str, str | bool] | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
