@@ -138,6 +138,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             todo_count=int(c.get("todo_count") or 0),
             license=c.get("license"),
             docstring=c.get("docstring"),
+            imports=c.get("imports") or [],
         )
     if e := fields_in.get("error"):
         fields.error = ErrorFields(**{k: e.get(k) for k in ErrorFields.model_fields})

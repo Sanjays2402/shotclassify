@@ -290,6 +290,28 @@ class CodeFields(BaseModel):
     # Dashboards use this to surface a 1-sentence summary on a
     # code-snippet card without forcing an LLM round trip.
     docstring: str | None = None
+    # List of import / require / use statements found in the snippet.
+    # Each entry is the most canonical short identifier we can pull
+    # off the import statement:
+    #
+    #   * Python ``from foo.bar import baz``          -> ``foo.bar``
+    #   * Python ``import foo`` / ``import foo as f`` -> ``foo``
+    #   * Python ``import foo.bar.baz``               -> ``foo.bar.baz``
+    #   * JS ``import { x } from 'react'``            -> ``react``
+    #   * JS ``import 'side-effects'``                -> ``side-effects``
+    #   * JS ``const x = require('pkg')``             -> ``pkg``
+    #   * Java ``import com.foo.Bar;``                -> ``com.foo.Bar``
+    #   * Go ``import "github.com/x/y"``              -> ``github.com/x/y``
+    #   * Go grouped ``import ( "fmt"; "os" )``       -> ``fmt`` + ``os``
+    #   * Rust ``use std::collections::HashMap;``     -> ``std::collections::HashMap``
+    #   * Ruby ``require 'json'``                     -> ``json``
+    #   * Ruby ``require_relative './foo'``           -> ``./foo``
+    #   * PHP ``use Foo\\Bar\\Baz;``                  -> ``Foo\\Bar\\Baz``
+    #
+    # De-duplicated; first-seen order preserved. Capped at 50 entries.
+    # Dashboards use this to surface "uses X library" annotations and
+    # group snippets by stack without forcing an LLM round trip.
+    imports: list[str] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):

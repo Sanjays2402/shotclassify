@@ -1311,6 +1311,220 @@ def detect_docstring(code: str, language: str | None = None) -> str | None:
     return None
 
 
+# Import / require / use extraction. We scan the snippet for the
+# major import syntaxes used across mainstream languages and surface
+# the most-canonical short identifier for each. The detector is
+# deliberately deterministic and regex-based -- we don't want a
+# heavyweight per-language parser dependency, and OCR text is messy
+# enough that a strict parser would reject many real-world snippets.
+#
+# Recognised syntaxes (regex priority is most-specific-first):
+#
+#   * Python ``from X import a, b``  -> X (just the module)
+#   * Python ``import X.Y as Z``     -> X.Y
+#   * Python ``import X, Y, Z``      -> X, Y, Z (comma-separated list)
+#   * JS / TS ``import { a, b } from 'X'`` / ``import X from 'X'`` ->
+#     X (the quoted module name)
+#   * JS / TS ``import 'X'``         -> X (side-effect import)
+#   * JS ``require('X')`` / ``require("X")`` -> X
+#   * Java / Kotlin / Scala ``import X.Y.Z`` / ``import X.*`` -> X.Y.Z / X.*
+#   * Go ``import "X"`` (single) / parenthesised group with one quoted
+#     module per line.
+#   * Rust ``use X::Y::Z;`` -> X::Y::Z; also handles braced re-export
+#     ``use X::Y::{A, B};`` by capturing the prefix ``X::Y``.
+#   * Ruby ``require 'X'`` / ``require_relative './X'`` -> X / ./X.
+#   * PHP ``use Foo\\Bar\\Baz`` / ``require_once 'X'`` -> Foo\\Bar\\Baz / X.
+#
+# Capped at 50 entries; de-duplicated case-sensitively (mirrors how
+# package managers treat the names); first-seen order preserved.
+_MAX_IMPORTS = 50
+
+# Python `from X import ...`. We capture X.
+_PY_FROM_IMPORT_RE = re.compile(
+    r"^\s*from\s+(?P<mod>\.+|\.*[A-Za-z_][\w.]*)\s+import\s+",
+    re.MULTILINE,
+)
+# Python `import X` / `import X as Y` / `import X, Y, Z`. We capture
+# the comma list, then split.
+_PY_IMPORT_RE = re.compile(
+    r"^\s*import\s+(?P<mods>[\w. ,]+?)(?:\s+as\s+\w+)?\s*$",
+    re.MULTILINE,
+)
+
+# JS / TS `import ... from 'X'` / `import ... from "X"`. Captures X.
+# The leading import head can be a default name, a `{ a, b }` named
+# list, a `* as ns` namespace import, or any combination.
+_JS_IMPORT_FROM_RE = re.compile(
+    r"""^\s*import\s+
+        (?:
+            [\w*${},\s]+
+            \s+from\s+
+        )?
+        ['"](?P<mod>[^'"]+)['"]\s*;?\s*$
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
+# JS `require('X')` / `require("X")`. Anchored on the call so a string
+# argument elsewhere in the snippet doesn't false-positive.
+_JS_REQUIRE_RE = re.compile(r"\brequire\s*\(\s*['\"](?P<mod>[^'\"]+)['\"]\s*\)")
+
+# Java / Kotlin / Scala `import com.foo.Bar;` or `import com.foo.*;`.
+# Bounded so we don't capture trailing whitespace / comment.
+_JVM_IMPORT_RE = re.compile(
+    r"^\s*import\s+(?:static\s+)?(?P<mod>[\w.]+(?:\.\*)?)\s*;?\s*(?://.*)?$",
+    re.MULTILINE,
+)
+
+# Go single-line `import "X"`. Captures X. Distinct from Python's
+# `import X` because Go requires quotes around the import path.
+_GO_IMPORT_SINGLE_RE = re.compile(
+    r"^\s*import\s+(?:\w+\s+)?\"(?P<mod>[^\"]+)\"\s*$",
+    re.MULTILINE,
+)
+
+# Rust `use std::collections::HashMap;` / `use foo::{a, b};`.
+_RUST_USE_RE = re.compile(
+    r"^\s*(?:pub\s+)?use\s+(?P<mod>[\w:]+(?:::\{[^}]*\})?)\s*;?\s*$",
+    re.MULTILINE,
+)
+
+# Ruby `require 'X'` / `require "X"` / `require_relative './X'`.
+_RUBY_REQUIRE_RE = re.compile(
+    r"^\s*(?:require|require_relative|load|autoload)\s+(?:['\"])(?P<mod>[^'\"]+)(?:['\"])\s*$",
+    re.MULTILINE,
+)
+
+# PHP `use Foo\\Bar\\Baz;` (namespace import).
+_PHP_USE_RE = re.compile(
+    r"^\s*use\s+(?:function\s+|const\s+)?(?P<mod>\\?[A-Za-z_][\\\w]*(?:\\[A-Za-z_][\\\w]*)*)"
+    r"(?:\s+as\s+\w+)?\s*;\s*$",
+    re.MULTILINE,
+)
+# PHP `require 'X'` / `require_once "X"` / `include "X"`.
+_PHP_INCLUDE_RE = re.compile(
+    r"^\s*(?:require_once|require|include_once|include)\s*\(?\s*['\"](?P<mod>[^'\"]+)['\"]\s*\)?\s*;\s*$",
+    re.MULTILINE,
+)
+
+
+def _extract_go_grouped_imports(text: str) -> list[tuple[int, str]]:
+    """Return ``(offset, module)`` tuples for Go ``import ( ... )`` blocks.
+
+    Walks the snippet for parenthesised import groups and extracts
+    each quoted module path from inside. Returns the source-text
+    offset of each match for stable ordering.
+    """
+    out: list[tuple[int, str]] = []
+    for m in re.finditer(r"^\s*import\s*\(\s*$", text, re.MULTILINE):
+        start = m.end()
+        end = text.find(")", start)
+        if end < 0:
+            continue
+        body = text[start:end]
+        for sm in re.finditer(r"(?:\w+\s+)?\"([^\"]+)\"", body):
+            out.append((start + sm.start(), sm.group(1)))
+    return out
+
+
+def extract_imports(code: str, language: str | None = None) -> list[str]:
+    """Return the import / require / use statements found in ``code``.
+
+    The detector runs every language's matcher against the snippet and
+    deduplicates the result. We do NOT gate by ``language`` because OCR
+    captures often mix shells, configs, and code -- a snippet tagged as
+    ``shell`` may still contain an ``import`` line from a heredoc.
+    Output preserves first-seen-in-text order across all matchers.
+
+    The ``language`` argument is accepted but currently unused; we keep
+    it in the signature so callers can pass a hint without rework if a
+    future revision wants to use it.
+    """
+    if not code or not code.strip():
+        return []
+    _ = language  # reserved for future per-language tuning
+    candidates: list[tuple[int, str]] = []
+
+    # 1) Python `from X import ...` -- captures the module side only.
+    for m in _PY_FROM_IMPORT_RE.finditer(code):
+        mod = m.group("mod").strip()
+        if mod:
+            candidates.append((m.start(), mod))
+
+    # 2) Python `import X` / `import X.Y as Z` / `import X, Y`.
+    #    Split on commas to handle the multi-import form.
+    for m in _PY_IMPORT_RE.finditer(code):
+        mods_raw = m.group("mods").strip()
+        # Skip the JVM-style `import com.foo.Bar;` which the JVM regex
+        # picks up too -- but harmless because we de-dupe afterward.
+        # Reject if the body contains characters Python imports don't
+        # have (e.g. starting with `*`, common in JVM `.*` wildcards).
+        if "*" in mods_raw:
+            continue
+        for mod in mods_raw.split(","):
+            mod = mod.strip()
+            # Strip trailing `as alias` from individual entries (rare
+            # but legal: `import x as a, y as b`).
+            if " as " in mod:
+                mod = mod.split(" as ", 1)[0].strip()
+            if mod:
+                candidates.append((m.start(), mod))
+
+    # 3) JS / TS `import ... from 'X'` and bare `import 'X'`.
+    for m in _JS_IMPORT_FROM_RE.finditer(code):
+        candidates.append((m.start(), m.group("mod")))
+
+    # 4) JS `require('X')`.
+    for m in _JS_REQUIRE_RE.finditer(code):
+        candidates.append((m.start(), m.group("mod")))
+
+    # 5) Java / Kotlin / Scala `import com.foo.Bar;` -- captured by
+    #    the JVM regex which requires the trailing `;`. We accept
+    #    `import com.foo.*;` (wildcard) as a single entry.
+    for m in _JVM_IMPORT_RE.finditer(code):
+        candidates.append((m.start(), m.group("mod")))
+
+    # 6) Go single-line `import "X"` and grouped `import ( ... )`.
+    for m in _GO_IMPORT_SINGLE_RE.finditer(code):
+        candidates.append((m.start(), m.group("mod")))
+    for offset, mod in _extract_go_grouped_imports(code):
+        candidates.append((offset, mod))
+
+    # 7) Rust `use a::b::c;` / `use a::b::{c, d};`.
+    for m in _RUST_USE_RE.finditer(code):
+        mod = m.group("mod").strip()
+        # If the import uses a braced re-export, strip the brace tail
+        # and keep the prefix.
+        if "::{" in mod:
+            mod = mod.split("::{", 1)[0]
+        if mod:
+            candidates.append((m.start(), mod))
+
+    # 8) Ruby `require 'X'`.
+    for m in _RUBY_REQUIRE_RE.finditer(code):
+        candidates.append((m.start(), m.group("mod")))
+
+    # 9) PHP `use Foo\\Bar\\Baz;` and `require_once 'X';`.
+    for m in _PHP_USE_RE.finditer(code):
+        mod = m.group("mod").lstrip("\\")
+        if mod:
+            candidates.append((m.start(), mod))
+    for m in _PHP_INCLUDE_RE.finditer(code):
+        candidates.append((m.start(), m.group("mod")))
+
+    # Order by source-text offset so the list matches reading order.
+    candidates.sort(key=lambda x: x[0])
+    seen: set[str] = set()
+    out: list[str] = []
+    for _off, mod in candidates:
+        if mod in seen:
+            continue
+        seen.add(mod)
+        out.append(mod)
+        if len(out) >= _MAX_IMPORTS:
+            break
+    return out
+
+
 # Line-number prefix patterns. Each candidate captures (1) the number
 # itself and (2) the separator + trailing space(s), so we can strip
 # the matched prefix from the line. Tried in order most-specific-first
@@ -1543,6 +1757,13 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if docstring is None:
         docstring = detect_docstring(code, language)
+    # Import / require / use statements. Caller-supplied list wins
+    # (preserved verbatim); otherwise scan the snippet for the major
+    # import syntaxes (Python / JS / TS / Java / Kotlin / Scala / Go /
+    # Rust / Ruby / PHP) and surface the canonical short module names.
+    imports = list(existing.imports) if existing and existing.imports else []
+    if not imports:
+        imports = extract_imports(code, language)
     return CodeFields(
         language=language,
         code=code,
@@ -1556,4 +1777,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         todo_count=todo_count,
         license=license_tag,
         docstring=docstring,
+        imports=imports,
     )
