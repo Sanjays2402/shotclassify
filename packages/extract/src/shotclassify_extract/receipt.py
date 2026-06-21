@@ -160,6 +160,96 @@ def _detect_payment_method(text: str) -> str | None:
     return None
 
 
+# Order / invoice / receipt-number detection. Recognised printer
+# vocabularies (case-insensitive, in priority order so a long header
+# wins over a short one when both appear):
+#
+#   Invoice No: ABC-12345        ->  ABC-12345
+#   Invoice #: 99001             ->  99001
+#   Order #12345                 ->  12345  (hash is part of the keyword)
+#   Order Number: 12345          ->  12345
+#   Receipt No. ABC-099          ->  ABC-099
+#   Reference: TKT-2024-007      ->  TKT-2024-007
+#   Order ID 99001               ->  99001
+#   Ref # 12345                  ->  12345
+#   Transaction ID 7788          ->  7788
+#   Check #45                    ->  45     (US restaurant pattern)
+#
+# Order matters: ``invoice`` keywords are checked before ``order``
+# before ``receipt`` before ``reference`` / ``transaction`` so a
+# receipt that prints BOTH "Invoice No 1" and "Order ID 2" tags as
+# the invoice (more business-formal source of truth on most printers).
+# Within a single keyword we use the FIRST occurrence because the
+# number typically appears once at the top of the receipt.
+#
+# The token regex permits alphanumerics, dashes, dots, and slashes
+# (some POS systems print ``2024/07/00099`` style numbers). Length
+# is bounded to 2..40 chars so a 2-digit ``Check #45`` still matches
+# while OCR runs (40+ chars) are rejected.
+_ORDER_KEYWORDS: tuple[tuple[str, str], ...] = (
+    # (display_keyword_for_regex, internal_tag)
+    (r"invoice\s+(?:no\.?|number|#)", "invoice"),
+    (r"invoice", "invoice_bare"),
+    (r"order\s+(?:no\.?|number|id|#)", "order"),
+    (r"order", "order_bare"),
+    (r"receipt\s+(?:no\.?|number|#)", "receipt"),
+    (r"check\s*#", "check"),
+    (r"transaction\s+(?:id|#)", "transaction"),
+    (r"ref(?:erence)?\s*#?", "reference"),
+    (r"confirmation\s+(?:no\.?|number|#)", "confirmation"),
+)
+# Value: an alphanumeric-bookended run of 2..40 chars with internal
+# ``./-`` punctuation, OR a single alphanumeric (the 1-char fallback
+# for ``#1`` style numbers). Order matters in the alternation -- the
+# longer form is tried first so ``ABC-12345`` is not truncated to
+# ``A``. Internal punctuation is bounded to ``./-`` so a value never
+# eats a sentence comma.
+_ORDER_VALUE = (
+    r"(?:[A-Za-z0-9][A-Za-z0-9./\-]{0,38}[A-Za-z0-9]|[A-Za-z0-9])"
+)
+
+
+def _find_order_number(text: str) -> str | None:
+    """Return the order / invoice / receipt / reference number, or None.
+
+    Loops through the keyword catalogue in priority order. For each
+    keyword, accepts an optional ``:`` / ``-`` / ``=`` separator,
+    optional whitespace, then a single value token. The value must
+    contain at least one digit (so a stray ``Reference: see below``
+    sentence does NOT match -- ``see`` has no digits). A leading
+    ``#`` is preserved because dashboards almost always render it
+    back with the hash. The keyword's last word ``no`` / ``no.`` /
+    ``number`` / ``id`` / ``#`` is consumed by the regex so the value
+    matcher does not see it.
+
+    First keyword to match wins. Within a keyword, the FIRST
+    occurrence wins because the number usually appears once at the
+    top of the receipt; falling-back vendors that print a duplicate
+    at the bottom should still match the same value.
+    """
+    if not text:
+        return None
+    for keyword_re, _tag in _ORDER_KEYWORDS:
+        pat = re.compile(
+            rf"(?<![A-Za-z])(?:{keyword_re})\s*[:\-=]?\s*(?P<val>{_ORDER_VALUE})",
+            re.IGNORECASE,
+        )
+        m = pat.search(text)
+        if not m:
+            continue
+        val = m.group("val").strip()
+        # Require at least one digit so a non-numeric tail (``ref see``)
+        # does not pass as the number.
+        if not any(c.isdigit() for c in val):
+            continue
+        # Strip a stray trailing punctuation that the regex absorbed.
+        val = val.rstrip(".,;:)")
+        if not val:
+            continue
+        return val
+    return None
+
+
 def _guess_vendor(text: str) -> str | None:
     for raw in text.splitlines():
         line = raw.strip()
@@ -398,6 +488,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         total=total,
         currency=_detect_currency(text),
         payment_method=_detect_payment_method(text),
+        order_number=_find_order_number(text),
         items=_parse_items(text),
     )
 
@@ -409,7 +500,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     merged = existing.model_copy()
     for f in (
         "vendor", "date", "subtotal", "tax", "tip", "discount", "total",
-        "currency", "payment_method",
+        "currency", "payment_method", "order_number",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))

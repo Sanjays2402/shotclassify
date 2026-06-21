@@ -77,6 +77,12 @@ class ReceiptFields(BaseModel):
     total: float | None = None
     currency: str | None = None
     payment_method: str | None = None
+    # Order / invoice / receipt number printed near the top or bottom
+    # of most receipts. Stored as a string because vendors mix digits
+    # with letters (``ABC-12345``, ``INV-00099``, ``#TKT-2024-007``).
+    # Captured verbatim from the OCR pass (with any ``#`` prefix kept
+    # because dashboards almost always render it back with the hash).
+    order_number: str | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
