@@ -921,6 +921,396 @@ def detect_license(code: str) -> str | None:
     return None
 
 
+# Docstring / JSDoc extraction. We surface the first structured
+# documentation block we can find at the top of the snippet so
+# dashboards can show a one-sentence summary on a code-snippet card
+# without an LLM round trip. Three families of documentation comment
+# are recognised:
+#
+#   * Python triple-quoted docstrings (``\"\"\"...\"\"\"`` or ``'''...'''``)
+#     either at module level (the very first non-blank statement) or
+#     as the first statement inside the first top-level ``def`` /
+#     ``class`` body. Both single-line and multi-line triple-quoted
+#     strings are accepted; per-line indentation matching the wrapping
+#     block is stripped from the surfaced body.
+#   * JSDoc-style ``/** ... */`` blocks immediately above the first
+#     top-level declaration (``function`` / ``class`` / ``const`` /
+#     ``let`` / ``var`` in JS-family; ``public``/``private``/etc. in
+#     Java/C#/Kotlin; ``func`` in Go/Swift; ``fn``/``pub fn`` in
+#     Rust; ``def`` in Python and Ruby for completeness). The
+#     ``/**`` / ``*/`` delimiters and the per-line ``*`` continuation
+#     prefixes are stripped so the surfaced body reads as natural
+#     prose.
+#   * Rust ``///`` line-doc-comment runs (collapsed into one paragraph)
+#     and ``//!`` inner-doc-comment runs. The ``///`` prefix is
+#     stripped from each line; consecutive lines are joined with a
+#     single space so dashboards render a clean one-paragraph summary.
+#
+# Detection rules:
+#
+#   1. We only look at the first 60 lines of the snippet. A docstring
+#      that sits deeper than that is unlikely to be the top-level one
+#      we want.
+#   2. The block must be the FIRST documentation comment in the
+#      snippet (we don't merge multiple blocks). If a JSDoc block
+#      precedes a Python docstring (a weird hybrid case) the JSDoc
+#      wins because it appears first.
+#   3. The block must precede or be the body of a top-level
+#      declaration. A floating ``/** ... */`` with no following
+#      declaration is rejected as a free-form comment.
+#
+# We return the cleaned body verbatim -- no truncation, no summary
+# extraction, no JSDoc-tag parsing (``@param`` / ``@returns`` are
+# preserved as-is in the output). Future tickets can add structured
+# tag parsing if dashboards ask for it.
+_DOC_DECLARATION_RE = re.compile(
+    r"^\s*(?:export\s+|public\s+|private\s+|protected\s+|static\s+|"
+    r"async\s+|abstract\s+|final\s+|virtual\s+|override\s+|"
+    r"@\w+(?:\([^)]*\))?\s+|pub\s+)*"
+    r"(?:function|class|interface|type|enum|namespace|const|let|var|"
+    r"def|func|fn|module|trait|impl|struct|object|companion)\b"
+)
+
+# Python decorator line. A docstring can sit below a string of
+# decorators; we look past them to find the def/class.
+_PYTHON_DECORATOR_RE = re.compile(r"^\s*@[\w.]+(?:\([^)]*\))?\s*$")
+
+# Python def / class header. Followed by ``:`` so we don't bite into
+# a type annotation that happens to use the word ``def``.
+_PYTHON_DEF_HEADER_RE = re.compile(
+    r"^(\s*)(?:async\s+)?(?:def|class)\s+\w+.*:\s*(?:#.*)?$"
+)
+
+
+def _clean_jsdoc_body(block: str) -> str:
+    """Strip ``/**`` / ``*/`` delimiters and per-line ``*`` continuations.
+
+    Joins the cleaned lines with ``\\n`` and trims leading/trailing
+    whitespace so the surfaced body reads as natural prose.
+    """
+    body = block.strip()
+    # Strip the leading ``/**`` and trailing ``*/``.
+    if body.startswith("/**"):
+        body = body[3:]
+    elif body.startswith("/*"):
+        body = body[2:]
+    if body.endswith("*/"):
+        body = body[:-2]
+    # Per-line strip of ``*`` continuations. A line is either entirely
+    # ``*`` whitespace (a separator) or ``* ...`` content (strip the
+    # leader and one separator space).
+    cleaned: list[str] = []
+    for raw in body.splitlines():
+        ln = raw.rstrip()
+        stripped = ln.lstrip()
+        if stripped.startswith("*"):
+            after = stripped[1:]
+            # Strip one separator space / tab if present.
+            if after.startswith((" ", "\t")):
+                after = after[1:]
+            cleaned.append(after.rstrip())
+        else:
+            cleaned.append(stripped.rstrip())
+    # Collapse leading / trailing blank lines and trim outer whitespace.
+    while cleaned and not cleaned[0].strip():
+        cleaned.pop(0)
+    while cleaned and not cleaned[-1].strip():
+        cleaned.pop()
+    return "\n".join(cleaned).strip()
+
+
+def _clean_python_docstring(body: str) -> str:
+    """Dedent and trim a Python docstring body.
+
+    Mirrors ``inspect.cleandoc`` semantics: strips leading/trailing
+    blank lines, then dedents by the minimum indentation of the
+    non-first lines. The triple-quote delimiters are expected to be
+    already stripped before this is called.
+    """
+    lines = body.splitlines()
+    if not lines:
+        return ""
+    first = lines[0]
+    rest = lines[1:]
+    # Strip leading / trailing blank lines from rest.
+    while rest and not rest[-1].strip():
+        rest.pop()
+    if rest:
+        indents = [len(ln) - len(ln.lstrip()) for ln in rest if ln.strip()]
+        if indents:
+            common = min(indents)
+            rest = [ln[common:] if ln.strip() else "" for ln in rest]
+    out = first.strip() + ("\n" + "\n".join(rest) if rest else "")
+    return out.strip()
+
+
+def _extract_jsdoc_block(lines: list[str]) -> str | None:
+    """Find a ``/** ... */`` block immediately above a declaration.
+
+    Scans the first 60 lines for a ``/**`` start, walks forward until
+    the matching ``*/``, then checks that the NEXT non-blank line
+    (skipping decorator-only lines) looks like a top-level
+    declaration. Returns the cleaned docstring body on success,
+    ``None`` otherwise.
+    """
+    window = lines[:60]
+    n = len(window)
+    i = 0
+    while i < n:
+        ln = window[i].lstrip()
+        is_jsdoc = (
+            ln.startswith("/**")
+            or (
+                ln.startswith("/*")
+                and "*/" not in ln
+                and i + 1 < n
+                and window[i + 1].lstrip().startswith("*")
+            )
+        )
+        if is_jsdoc:
+            # Walk forward to find ``*/``.
+            block_lines = [window[i]]
+            if "*/" in ln:
+                # Single-line ``/** ... */``.
+                end = i
+            else:
+                end = -1
+                for j in range(i + 1, n):
+                    block_lines.append(window[j])
+                    if "*/" in window[j]:
+                        end = j
+                        break
+                if end < 0:
+                    return None
+            # Find the next non-blank line after the block, walking
+            # past any decorator-only lines (``@Foo(...)`` on its own
+            # line is common for Angular / NestJS / Java annotations).
+            k = end + 1
+            while k < n:
+                stripped = window[k].strip()
+                if not stripped:
+                    k += 1
+                    continue
+                # A pure decorator/annotation line followed by a
+                # declaration on the next line is treated as part of
+                # the declaration -- skip past it.
+                if re.match(r"^@\w[\w.]*(?:\([^)]*\))?\s*$", stripped):
+                    k += 1
+                    continue
+                break
+            if k >= n:
+                # Block sits at the very tail of our window with no
+                # following declaration -- treat as a floating comment.
+                return None
+            following = window[k]
+            if not _DOC_DECLARATION_RE.match(following):
+                return None
+            return _clean_jsdoc_body("\n".join(block_lines))
+        # Skip non-doc comments and shebang lines without consuming
+        # them as the doc block.
+        i += 1
+    return None
+
+
+def _extract_rust_doc_block(lines: list[str]) -> str | None:
+    """Collapse a run of ``///`` or ``//!`` line-doc comments.
+
+    Returns the joined paragraph (lines joined with ``\\n``) when at
+    least one such line is found AND a top-level declaration follows
+    the run. ``None`` otherwise.
+    """
+    window = lines[:60]
+    n = len(window)
+    i = 0
+    # Skip leading blanks and a possible shebang line.
+    while i < n and (not window[i].strip() or window[i].lstrip().startswith("#!")):
+        i += 1
+    if i >= n:
+        return None
+    # Identify the start of a doc-comment run.
+    start = i
+    has_doc = False
+    prefix: str | None = None
+    while i < n:
+        stripped = window[i].lstrip()
+        if stripped.startswith("///"):
+            if prefix is None:
+                prefix = "///"
+            if prefix == "///":
+                has_doc = True
+                i += 1
+                continue
+            break
+        if stripped.startswith("//!"):
+            if prefix is None:
+                prefix = "//!"
+            if prefix == "//!":
+                has_doc = True
+                i += 1
+                continue
+            break
+        break
+    if not has_doc:
+        return None
+    # The run is window[start:i]. The next non-blank line must look
+    # like a Rust top-level declaration so we don't grab a free-form
+    # doc comment that floats in the middle of a file.
+    k = i
+    while k < n and not window[k].strip():
+        k += 1
+    if k < n and not _DOC_DECLARATION_RE.match(window[k]):
+        # Inner-doc-comments (``//!``) often sit at the top of a
+        # module without an immediately-following declaration --
+        # accept that case unconditionally.
+        if prefix != "//!":
+            return None
+    # Strip the prefix from each line of the run and trim whitespace.
+    cleaned: list[str] = []
+    assert prefix is not None
+    for ln in window[start:i]:
+        stripped = ln.lstrip()
+        body = stripped[len(prefix):]
+        if body.startswith((" ", "\t")):
+            body = body[1:]
+        cleaned.append(body.rstrip())
+    return "\n".join(cleaned).strip()
+
+
+def _extract_python_docstring(lines: list[str]) -> str | None:
+    """Find a Python triple-quoted docstring.
+
+    Two valid positions:
+      * Module-level: the very first non-blank, non-comment statement.
+      * Inside the first top-level def/class body, as the first
+        statement (after any decorators).
+
+    Returns the cleaned docstring body (dedented, surrounding
+    quotes stripped) or ``None``.
+    """
+    window = lines[:60]
+    n = len(window)
+    i = 0
+    # Skip leading blanks, shebangs, encoding comments, and bare
+    # comment lines.
+    while i < n:
+        stripped = window[i].strip()
+        if not stripped:
+            i += 1
+            continue
+        if stripped.startswith("#"):
+            i += 1
+            continue
+        # `from __future__` lines are allowed before a module docstring
+        # in some snippet shapes; we still look past them when scanning.
+        break
+    if i >= n:
+        return None
+    # 1) Module-level docstring: first statement is a triple-quoted string.
+    first = window[i].lstrip()
+    for quote in ('"""', "'''"):
+        if first.startswith(quote):
+            return _read_python_triple_string(window, i, quote)
+    # 2) Look for the first top-level def/class and inspect its body
+    #    for a docstring. Skip past decorator lines.
+    while i < n:
+        ln = window[i]
+        stripped = ln.strip()
+        if not stripped:
+            i += 1
+            continue
+        if _PYTHON_DECORATOR_RE.match(ln):
+            i += 1
+            continue
+        m = _PYTHON_DEF_HEADER_RE.match(ln)
+        if not m:
+            return None
+        # Body starts on the next non-blank line.
+        j = i + 1
+        while j < n and not window[j].strip():
+            j += 1
+        if j >= n:
+            return None
+        body_first = window[j].lstrip()
+        for quote in ('"""', "'''"):
+            if body_first.startswith(quote):
+                return _read_python_triple_string(window, j, quote)
+        return None
+    return None
+
+
+def _read_python_triple_string(lines: list[str], start: int, quote: str) -> str | None:
+    """Read a triple-quoted Python string starting at ``lines[start]``."""
+    head = lines[start].lstrip()
+    # Single-line form: ``\"\"\"summary\"\"\"`` on one line.
+    rest_of_head = head[len(quote):]
+    if quote in rest_of_head:
+        end_idx = rest_of_head.index(quote)
+        body = rest_of_head[:end_idx]
+        return body.strip()
+    # Multi-line form: walk until the closing triple-quote.
+    captured: list[str] = [rest_of_head]
+    for j in range(start + 1, min(len(lines), start + 60)):
+        ln = lines[j]
+        if quote in ln:
+            end_idx = ln.index(quote)
+            captured.append(ln[:end_idx])
+            return _clean_python_docstring("\n".join(captured))
+        captured.append(ln)
+    return None
+
+
+def detect_docstring(code: str, language: str | None = None) -> str | None:
+    """Return the cleaned top-level docstring / JSDoc body, or ``None``.
+
+    Recognised positions (matched in declaration-order):
+
+    * JSDoc ``/** ... */`` block immediately above the first top-level
+      declaration. Works for JS / TS / Java / Go / C / C++ / C# /
+      Kotlin / Swift / Rust / PHP -- anywhere the JSDoc convention is
+      used.
+    * Rust ``///`` / ``//!`` line-doc-comment run (only when the
+      detected language looks like Rust).
+    * Python triple-quoted docstring at module level or as the first
+      statement inside the first top-level ``def`` / ``class`` body.
+
+    The first family that yields a non-empty body wins. The
+    ``language`` argument biases the priority order so a Python
+    snippet checks the Python form first (skipping the JSDoc scan),
+    while a JS / TS snippet checks JSDoc first.
+    """
+    if not code or not code.strip():
+        return None
+    lines = code.splitlines()
+    lang = (language or "").lower()
+    # Python-family first when we know the language is Python.
+    if lang in {"python", "py"}:
+        py = _extract_python_docstring(lines)
+        if py:
+            return py
+        return None
+    # Rust-family: prefer ``///`` / ``//!`` line doc-comments.
+    if lang in {"rust", "rs"}:
+        rs = _extract_rust_doc_block(lines)
+        if rs:
+            return rs
+        js = _extract_jsdoc_block(lines)
+        if js:
+            return js
+        return None
+    # Default ordering: JSDoc -> Python -> Rust line-doc. The JSDoc
+    # form is by far the most common in mixed-language repos.
+    js = _extract_jsdoc_block(lines)
+    if js:
+        return js
+    py = _extract_python_docstring(lines)
+    if py:
+        return py
+    rs = _extract_rust_doc_block(lines)
+    if rs:
+        return rs
+    return None
+
+
 # Line-number prefix patterns. Each candidate captures (1) the number
 # itself and (2) the separator + trailing space(s), so we can strip
 # the matched prefix from the line. Tried in order most-specific-first
@@ -1143,6 +1533,16 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if license_tag is None:
         license_tag = detect_license(code)
+    # Top-level docstring / JSDoc body. Caller-supplied value wins;
+    # otherwise scan the snippet for the first structured doc block
+    # (Python triple-quoted, JSDoc ``/** ... */``, or Rust ``///`` /
+    # ``//!`` line-doc-comment run). Returns None when no doc block is
+    # present so a code-only snippet stays at the default None.
+    docstring = (
+        existing.docstring if existing and existing.docstring else None
+    )
+    if docstring is None:
+        docstring = detect_docstring(code, language)
     return CodeFields(
         language=language,
         code=code,
@@ -1155,4 +1555,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         numbered=numbered,
         todo_count=todo_count,
         license=license_tag,
+        docstring=docstring,
     )

@@ -267,6 +267,29 @@ class CodeFields(BaseModel):
     # Dashboards use this to surface license-attribution annotations
     # and to flag GPL-family snippets in code-review screenshots.
     license: str | None = None
+    # Top-level docstring / JSDoc captured from the snippet. We look
+    # for the structured documentation comment that sits above the
+    # first top-level declaration:
+    #
+    #   * Python: ``\"\"\"summary\"\"\"`` / ``'''summary'''`` at module
+    #     level OR as the first statement inside the first top-level
+    #     ``def`` / ``class`` body.
+    #   * JS / TS / Java / Go / C / C++ / C# / Kotlin / Swift / Rust /
+    #     PHP: the ``/** ... */`` JSDoc block immediately above the
+    #     first top-level ``function`` / ``class`` / ``def`` / ``func``
+    #     / ``fn`` declaration. Per-line ``*`` continuations are
+    #     stripped so the surfaced body is the docstring's natural
+    #     prose.
+    #   * Rust: also accepts the ``///`` line-doc-comment family
+    #     (collapsed into one paragraph) and the ``//!`` inner-doc
+    #     family.
+    #
+    # Stored as the cleaned docstring text -- delimiters stripped,
+    # per-line ``*`` continuations stripped, leading / trailing
+    # whitespace trimmed. ``None`` when no docstring is present.
+    # Dashboards use this to surface a 1-sentence summary on a
+    # code-snippet card without forcing an LLM round trip.
+    docstring: str | None = None
 
 
 class ErrorFields(BaseModel):
