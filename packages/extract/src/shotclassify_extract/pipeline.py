@@ -7,6 +7,7 @@ from .chat import enrich_chat
 from .code import enrich_code
 from .emails import extract_emails
 from .error import enrich_error
+from .identifiers import extract_identifiers
 from .network import extract_network
 from .paths import extract_paths
 from .receipt import enrich_receipt
@@ -70,5 +71,19 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if emails:
         out.raw = dict(out.raw or {})
         out.raw["emails"] = emails
+
+    # Cross-category: stash academic / publishing identifiers (ISBN,
+    # DOI, arXiv, ISSN) found in the OCR text under
+    # raw["identifiers"] as a list of {"type", "value"} dicts. These
+    # show up on document and chart captures most often but a code
+    # snippet's docstring or a chat message can also cite a DOI, so
+    # we run the matcher cross-category and let the consumer filter
+    # by type. Each identifier passes its respective check-digit
+    # validation (EAN-13 / mod-11 / arXiv shape) so 13-digit barcode
+    # noise does not false-positive as an ISBN.
+    identifiers = extract_identifiers(text)
+    if identifiers:
+        out.raw = dict(out.raw or {})
+        out.raw["identifiers"] = identifiers
 
     return out

@@ -9,6 +9,7 @@ from .error import (
     parse_pytest_failure,
     parse_rust_panic,
 )
+from .identifiers import extract_identifiers
 from .network import extract_network
 from .paths import extract_paths
 from .pipeline import enrich
@@ -34,4 +35,5 @@ __all__ = [
     "extract_paths",
     "extract_network",
     "extract_emails",
+    "extract_identifiers",
 ]
