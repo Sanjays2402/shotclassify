@@ -698,6 +698,80 @@ def detect_comment_density(code: str, language: str | None = None) -> float:
     return round(comments / total, 2)
 
 
+# TODO / FIXME action-comment marker catalogue. The seven common
+# action-comment markers used across virtually every codebase. We
+# enforce ALL-CAPS to avoid matching prose words (a sentence about
+# "the bug we fixed" contains the lowercase ``bug`` but isn't an
+# action marker). The markers must be preceded by a comment leader
+# (the language's leader, falling back to ``#``) and followed by a
+# non-alphanumeric boundary so ``TODOIST`` / ``FIXMEAGAIN`` /
+# ``XXXX`` are NOT counted as markers.
+_TODO_MARKERS: tuple[str, ...] = (
+    "TODO",
+    "FIXME",
+    "XXX",
+    "HACK",
+    "BUG",
+    "NOTE",
+    "OPTIMIZE",
+)
+
+
+def detect_todo_count(code: str, language: str | None = None) -> int:
+    """Return the count of TODO / FIXME / XXX / HACK / BUG / NOTE /
+    OPTIMIZE action-comment markers in ``code``.
+
+    Each marker must satisfy ALL of:
+
+    1. ALL-CAPS spelling (case-sensitive). A prose mention like
+       ``the bug we fixed`` is not a marker.
+    2. Preceded somewhere on the same line by a comment leader for
+       ``language`` (or ``#`` for unknown languages). Block-comment
+       openers (``/*``, ``\"\"\"``, ``'''``) count when they sit at the
+       start of a line OR earlier on the same line.
+    3. Followed by a non-alphanumeric / non-underscore boundary so a
+       longer identifier (``TODOIST``, ``BUGGY``, ``XXXX``) is NOT
+       counted.
+
+    Returns ``0`` for an empty snippet or a snippet whose language has
+    no comment syntax (JSON / CSV / TSV). Multiple markers on the
+    same line count separately (``# TODO / FIXME bug``).
+
+    Pure data languages (json / csv / tsv) return 0 unconditionally
+    because they have no comment syntax to host action markers.
+    """
+    if not code or not code.strip():
+        return 0
+    leaders = _comment_leaders_for(language)
+    if not leaders:
+        return 0
+    # Build the marker regex once. The boundary lookahead rejects
+    # contiguous alphanumerics so TODOIST / XXXX don't match.
+    marker_re = re.compile(
+        r"\b(" + "|".join(re.escape(m) for m in _TODO_MARKERS) + r")(?![A-Z0-9_])",
+    )
+    count = 0
+    for raw in code.splitlines():
+        # Find the FIRST comment opener on the line. We accept any
+        # leader at any position (so inline ``foo = 1  # TODO`` counts)
+        # and treat the substring AFTER the leader as the search area
+        # for markers.
+        first_leader_pos: int | None = None
+        for leader in leaders:
+            pos = raw.find(leader)
+            if pos == -1:
+                continue
+            if first_leader_pos is None or pos < first_leader_pos:
+                first_leader_pos = pos
+        if first_leader_pos is None:
+            continue
+        comment_body = raw[first_leader_pos:]
+        # Count every marker occurrence in the comment body. Multiple
+        # markers on the same line each count.
+        count += len(marker_re.findall(comment_body))
+    return count
+
+
 # Line-number prefix patterns. Each candidate captures (1) the number
 # itself and (2) the separator + trailing space(s), so we can strip
 # the matched prefix from the line. Tried in order most-specific-first
@@ -898,6 +972,19 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if comment_density == 0.0:
         comment_density = detect_comment_density(code, language)
+    # TODO / FIXME marker count. Caller-supplied positive value wins;
+    # otherwise we recount on the de-numbered code body against the
+    # detected language's comment leaders. We recount whenever the
+    # existing field is the default 0 because a caller that explicitly
+    # passed 0 will see the same recomputed 0 for a TODO-free snippet
+    # (behaviour is consistent either way).
+    todo_count = (
+        existing.todo_count
+        if existing and existing.todo_count
+        else 0
+    )
+    if todo_count == 0:
+        todo_count = detect_todo_count(code, language)
     return CodeFields(
         language=language,
         code=code,
@@ -908,4 +995,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         interpreter=interpreter,
         comment_density=comment_density,
         numbered=numbered,
+        todo_count=todo_count,
     )

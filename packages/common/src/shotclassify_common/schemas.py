@@ -235,6 +235,21 @@ class CodeFields(BaseModel):
     # column doesn't remove any lines). Dashboards use this to surface
     # "looks copy-pasted from a doc with line numbers" annotations.
     numbered: bool = False
+    # Count of TODO / FIXME / XXX / HACK / BUG / NOTE / OPTIMIZE
+    # action-comment markers in the snippet. Useful for code-review
+    # screenshots where a reviewer wants to surface "this file has 7
+    # TODOs" annotations without re-reading the snippet line by line.
+    #
+    # The detector matches case-sensitive ALL-CAPS markers preceded by
+    # a comment leader (the language's leader, falling back to ``#``
+    # for unknown languages) and followed by a non-alphanumeric
+    # boundary (``:`` / space / parens / end-of-line). Inline
+    # appearances inside a comment count (``# TODO: fix this`` and
+    # ``# Fix the TODO`` both register). Markers inside string
+    # literals are NOT excluded because we don't tokenise -- this is
+    # a conservative overcount we accept as the trade-off for keeping
+    # the detector deterministic and fast.
+    todo_count: int = 0
 
 
 class ErrorFields(BaseModel):

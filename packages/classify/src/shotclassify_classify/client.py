@@ -135,6 +135,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             interpreter=c.get("interpreter"),
             comment_density=float(c.get("comment_density") or 0.0),
             numbered=bool(c.get("numbered") or False),
+            todo_count=int(c.get("todo_count") or 0),
         )
     if e := fields_in.get("error"):
         fields.error = ErrorFields(**{k: e.get(k) for k in ErrorFields.model_fields})

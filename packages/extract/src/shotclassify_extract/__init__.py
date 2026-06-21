@@ -8,6 +8,7 @@ from .code import (
     detect_minified_js,
     detect_numbered,
     detect_sql_dialect,
+    detect_todo_count,
     detect_ts_features,
     enrich_code,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "detect_minified_js",
     "detect_numbered",
     "detect_sql_dialect",
+    "detect_todo_count",
     "detect_ts_features",
     "detect_comment_density",
     "enrich_code",
