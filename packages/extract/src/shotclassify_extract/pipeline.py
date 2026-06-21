@@ -14,6 +14,7 @@ from .network import extract_network
 from .paths import extract_paths
 from .phones import extract_phones
 from .receipt import enrich_receipt
+from .timezones import extract_timezones
 from .urls import extract_urls
 from .uuids import extract_uuids
 
@@ -142,5 +143,20 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if macs:
         out.raw = dict(out.raw or {})
         out.raw["macs"] = macs
+
+    # Cross-category: stash timezone tokens found in the OCR text
+    # under raw["timezones"]. Timezones surface in chat captures
+    # (message timestamps with offsets), error logs (ISO-8601
+    # timestamps), receipts (merchant's local time), calendar shots,
+    # and terminal date(1) output. Output normalises numeric offsets
+    # to canonical +hh / +hh:mm form, the Z suffix to +00, named
+    # abbreviations to uppercase, and IANA names to their canonical
+    # Region/City form so the same zone printed multiple ways
+    # collapses to one entry. Z-suffix matches only when adjacent to
+    # an ISO-8601-ish digit so a bare "Z" in prose doesn't fire.
+    timezones = extract_timezones(text)
+    if timezones:
+        out.raw = dict(out.raw or {})
+        out.raw["timezones"] = timezones
 
     return out
