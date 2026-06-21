@@ -250,6 +250,77 @@ def _find_order_number(text: str) -> str | None:
     return None
 
 
+# Tax-mode detection. Receipts almost always carry an explicit cue
+# about whether the printed prices are inclusive of tax (the customer
+# pays exactly what's on the line) or exclusive (tax is added at the
+# end). Both phrasings show up across vendors so we match a broad set:
+#
+#   inclusive:  "VAT included", "incl. VAT", "tax included",
+#               "incl. tax", "incl GST", "GST inclusive",
+#               "all prices include tax", "prices incl. VAT",
+#               "inclusive of GST" / "inclusive of HST".
+#   exclusive:  "+ tax", "plus tax", "tax extra", "tax not included",
+#               "excl. tax", "excl. VAT", "exclusive of GST", "ex GST",
+#               "ex VAT", "prices exclude tax".
+#
+# Inclusive wins ties because most ambiguous wording ("plus 8% tax
+# included") is a printer typo where the merchant meant inclusive.
+# When neither is present we return None and the dashboard can fall
+# back to inferring from subtotal vs total math.
+_TAX_INCLUSIVE_HINTS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:vat|tax|gst|hst|pst|qst)\s+included\b", re.IGNORECASE),
+    re.compile(r"\bincl(?:\.|usive)?\s+(?:of\s+)?(?:vat|tax|gst|hst)\b", re.IGNORECASE),
+    re.compile(r"\b(?:vat|tax|gst|hst)\s+incl(?:\.|usive)?\b", re.IGNORECASE),
+    re.compile(r"\b(?:all\s+)?prices?\s+include\s+(?:vat|tax|gst)\b", re.IGNORECASE),
+    re.compile(r"\binclusive\s+of\s+(?:vat|tax|gst|hst)\b", re.IGNORECASE),
+)
+_TAX_EXCLUSIVE_HINTS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\+\s*(?:vat|tax|gst|hst)\b", re.IGNORECASE),
+    re.compile(r"\bplus\s+(?:vat|tax|gst|hst)\b", re.IGNORECASE),
+    re.compile(r"\b(?:vat|tax|gst|hst)\s+extra\b", re.IGNORECASE),
+    re.compile(r"\b(?:vat|tax|gst|hst)\s+not\s+included\b", re.IGNORECASE),
+    re.compile(r"\bexcl(?:\.|usive)?\s+(?:of\s+)?(?:vat|tax|gst|hst)\b", re.IGNORECASE),
+    re.compile(r"\b(?:vat|tax|gst|hst)\s+excl(?:\.|usive)?\b", re.IGNORECASE),
+    re.compile(r"\bex\s+(?:vat|gst|hst)\b", re.IGNORECASE),
+    re.compile(r"\bprices?\s+exclude\s+(?:vat|tax|gst)\b", re.IGNORECASE),
+    re.compile(r"\bexclusive\s+of\s+(?:vat|tax|gst|hst)\b", re.IGNORECASE),
+)
+
+
+def _detect_tax_mode(text: str) -> str | None:
+    """Return ``"inclusive"`` / ``"exclusive"`` / ``None`` for the
+    text's tax-mode cue.
+
+    Inclusive cues are checked first because the most common
+    "ambiguous" wording (``+ 8% VAT included``) is almost always a
+    misprint where the merchant meant inclusive. A receipt that
+    prints both an inclusive cue and an exclusive cue (rare but
+    possible -- a multi-page invoice with summary + addendum)
+    resolves to the FIRST one seen in OCR order so the dashboard's
+    answer matches what a human reading top-to-bottom would settle
+    on.
+    """
+    if not text:
+        return None
+    first_inclusive: int | None = None
+    first_exclusive: int | None = None
+    for pat in _TAX_INCLUSIVE_HINTS:
+        m = pat.search(text)
+        if m and (first_inclusive is None or m.start() < first_inclusive):
+            first_inclusive = m.start()
+    for pat in _TAX_EXCLUSIVE_HINTS:
+        m = pat.search(text)
+        if m and (first_exclusive is None or m.start() < first_exclusive):
+            first_exclusive = m.start()
+    if first_inclusive is None and first_exclusive is None:
+        return None
+    if first_inclusive is None:
+        return "exclusive"
+    if first_exclusive is None:
+        return "inclusive"
+    return "inclusive" if first_inclusive <= first_exclusive else "exclusive"
+
+
 def _guess_vendor(text: str) -> str | None:
     for raw in text.splitlines():
         line = raw.strip()
@@ -489,6 +560,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         currency=_detect_currency(text),
         payment_method=_detect_payment_method(text),
         order_number=_find_order_number(text),
+        tax_mode=_detect_tax_mode(text),
         items=_parse_items(text),
     )
 
@@ -500,7 +572,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     merged = existing.model_copy()
     for f in (
         "vendor", "date", "subtotal", "tax", "tip", "discount", "total",
-        "currency", "payment_method", "order_number",
+        "currency", "payment_method", "order_number", "tax_mode",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))

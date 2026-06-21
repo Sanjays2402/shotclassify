@@ -83,6 +83,15 @@ class ReceiptFields(BaseModel):
     # Captured verbatim from the OCR pass (with any ``#`` prefix kept
     # because dashboards almost always render it back with the hash).
     order_number: str | None = None
+    # How the printed prices relate to tax: ``inclusive`` when the
+    # receipt explicitly notes ``VAT included`` / ``tax incl.`` /
+    # ``incl. GST`` (common in EU / AU / NZ / IN), ``exclusive`` when
+    # the receipt prints ``+ tax`` / ``plus tax`` / ``tax extra``
+    # (common in US sales-tax regions), and ``None`` when the receipt
+    # gives no signal either way. Dashboards use this to decide
+    # whether the subtotal should be displayed as the pre-tax base or
+    # the customer-facing all-in price.
+    tax_mode: str | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
