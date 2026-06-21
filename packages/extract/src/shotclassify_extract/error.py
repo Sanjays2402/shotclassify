@@ -222,6 +222,53 @@ _PHP_STACK_FRAME = re.compile(
 # when one of these (or the stack-trace marker above) is present.
 _PHP_TRACE_MARKER = re.compile(r"^\s*Stack\s+trace\s*:\s*$", re.MULTILINE | re.IGNORECASE)
 
+# Swift / Objective-C crash log parsing. Apple platforms (iOS / macOS /
+# watchOS / tvOS) print two distinct crash shapes:
+#
+# Swift fatalError() / preconditionFailure / runtime trap:
+#   Fatal error: Unexpectedly found nil while unwrapping an Optional value:
+#       file MyApp/ContentView.swift, line 42
+#   Fatal error: Index out of range: file MyApp/Foo.swift, line 7
+#   Swift runtime failure: Index out of bounds
+#
+# Objective-C NSException:
+#   *** Terminating app due to uncaught exception 'NSInvalidArgumentException',
+#       reason: '*** -[__NSArrayI objectAtIndex:]: index 5 beyond bounds [0 .. 2]'
+#   *** Terminating app due to uncaught exception 'NSRangeException',
+#       reason: '*** -[NSMutableArray insertObject:atIndex:]: object cannot be nil'
+#
+# Both shapes are framework='swift' (we don't split Swift vs Objective-C
+# because most Apple apps mix them). The exception slot carries the
+# concrete Swift error wording for Swift fatals and the NSException
+# class name for Objective-C throws. File / line come from the trailing
+# ``file X.swift, line N`` directive on Swift fatals; ObjC throws do
+# not include a file by default (only a symbolicated backtrace which
+# OCR rarely captures cleanly) so file/line stay None.
+_SWIFT_FATAL = re.compile(
+    r"^\s*(?:Swift/[\w]+\.swift:\d+:\s*)?"
+    r"Fatal\s+error\s*:\s*"
+    r"(?P<msg>[^:\n][^\n]*?)"
+    r"(?:\s*:\s*file\s+(?P<file>[\w./\\-]+\.(?:swift|m|mm|h)),\s*"
+    r"line\s+(?P<line>\d+))?\s*$",
+    re.MULTILINE,
+)
+# Swift runtime failure prelude. Rarely printed alongside file/line so
+# we capture it as a softer signal that confirms framework='swift' when
+# the canonical Fatal-error prelude is absent.
+_SWIFT_RUNTIME = re.compile(
+    r"^\s*Swift\s+runtime\s+failure\s*:\s*(?P<msg>[^\n]+)$",
+    re.MULTILINE | re.IGNORECASE,
+)
+# Objective-C NSException uncaught-throw. The ``***`` prelude and the
+# ``uncaught exception '<NSExceptionClass>'`` discriminator make this
+# unambiguous. ``reason: '...'`` carries the message.
+_OBJC_EXC = re.compile(
+    r"\*{3}\s*Terminating\s+app\s+due\s+to\s+uncaught\s+exception\s+"
+    r"'(?P<exc>NS\w+(?:Exception|Error))'\s*,\s*"
+    r"reason\s*:\s*'(?P<msg>[^']*)'",
+)
+
+
 # SQL database error parsing. Each major SQL engine prints distinct
 # error preludes that let us pick the dialect:
 #
@@ -397,6 +444,23 @@ def parse_php_fatal(text: str) -> tuple[str, str, str | None, int | None] | None
     form (which sits inside the exception line itself).
     """
     return _parse_php_fatal(text)
+
+
+def parse_swift_crash(text: str) -> tuple[str, str, str | None, int | None] | None:
+    """Return ``(exception, message, file or None, line or None)`` for
+    a Swift fatalError() / Objective-C NSException uncaught throw, or
+    ``None`` when no Apple-platform crash signature is present.
+
+    For Swift the exception slot carries the literal string
+    ``"Fatal error"`` (or ``"Swift runtime failure"`` for runtime
+    traps) because Swift fatals don't have a typed exception class.
+    For Objective-C the exception slot carries the NSException class
+    name (``NSInvalidArgumentException`` / ``NSRangeException`` /
+    etc.). File / line are pulled from the Swift
+    ``: file X.swift, line N`` directive when present; ObjC throws
+    don't include one inline so the slots stay ``None``.
+    """
+    return _parse_swift_crash(text)
 
 
 def parse_sql_error(text: str) -> tuple[str, str, str, int | None] | None:
@@ -773,6 +837,79 @@ def parse_http_status(text: str) -> tuple[int, str | None] | None:
     return None
 
 
+def _parse_swift_crash(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    """Return ``(exception, message, file or None, line or None)`` for
+    a Swift fatalError() / NSException uncaught throw, or ``None``.
+
+    Recognised shapes:
+
+    * Swift ``Fatal error: <msg>: file X.swift, line N``.
+    * Swift ``Fatal error: <msg>`` without the trailing file directive
+      (Xcode debugger output sometimes prints only the message line).
+    * ObjC ``*** Terminating app due to uncaught exception 'NSFooException',
+      reason: '<msg>'``.
+
+    The Swift fatal exception slot is the literal string ``"Fatal error"``
+    because Swift fatals carry no typed exception class; the discriminator
+    is the message wording. ObjC exceptions carry the ``NSXxxException``
+    class as the exception. File / line are pulled from the Swift
+    ``file X, line N`` directive when present; ObjC throws don't carry
+    one inline so the slots stay ``None``.
+    """
+    if not text:
+        return None
+    # ObjC NSException FIRST because the ``***`` prelude is more specific
+    # than the bare Swift ``Fatal error:`` prefix. A crash that has BOTH
+    # (some Swift apps wrap ObjC bridges) tags as ObjC because the
+    # NSException class is the most useful identifier in that case.
+    objc = _OBJC_EXC.search(text)
+    if objc:
+        return objc.group("exc"), objc.group("msg"), None, None
+    swift = _SWIFT_FATAL.search(text)
+    if swift:
+        msg = swift.group("msg").strip().rstrip(":")
+        file_ = swift.group("file")
+        line_ = int(swift.group("line")) if swift.group("line") else None
+        return "Fatal error", msg, file_, line_
+    runtime = _SWIFT_RUNTIME.search(text)
+    if runtime:
+        return "Swift runtime failure", runtime.group("msg").strip(), None, None
+    return None
+
+
+def _swift_likely_cause(exception: str | None, message: str | None) -> str | None:
+    """Return operator-friendly hints for common Swift / ObjC crashes."""
+    exc = (exception or "").lower()
+    msg = (message or "").lower()
+    if "unexpectedly found nil" in msg or "unwrapping an optional" in msg:
+        return "Force-unwrapped a nil Optional; use guard let or if let."
+    if "nsinvalidargumentexception" in exc:
+        return "Invalid argument passed to a Cocoa API; check the call site."
+    if "nsrangeexception" in exc or "index" in msg and "beyond bounds" in msg:
+        return "Index out of bounds; check count before subscripting."
+    if "nsinternalinconsistencyexception" in exc:
+        return "Cocoa internal invariant violated; usually wrong thread or state."
+    if "index out of range" in msg:
+        return "Swift array index outside bounds; check count before subscripting."
+    if "divide by zero" in msg or "division by zero" in msg:
+        return "Division by zero; guard the denominator."
+    if "fatal error: precondition" in msg or "precondition failed" in msg:
+        return "preconditionFailure tripped; check the failing invariant."
+    if "fatal error: assertion" in msg or "assertion failed" in msg:
+        return "assertionFailure tripped; check the failing assertion."
+    if "nilliteral" in msg or "nil while" in msg:
+        return "Operation on nil reference; add a nil-guard or default."
+    if "nsfilenosuchfileerror" in exc or "no such file" in msg:
+        return "File not found on disk; check path and bundle resources."
+    if "nsurlerror" in exc or "url" in msg and ("offline" in msg or "could not connect" in msg):
+        return "URL session error; check network and request URL."
+    if "objc_exception_throw" in msg:
+        return "Objective-C exception thrown from a C bridge."
+    return None
+
+
 def _likely_cause(framework: str, exception: str | None, message: str | None) -> str | None:
     exc = (exception or "").lower()
     msg = (message or "").lower()
@@ -955,6 +1092,27 @@ def parse_error_text(text: str) -> ErrorFields:
             exception=exc,
             message=msg,
             likely_cause=_php_likely_cause(exc, msg),
+            file=file_,
+            line=line_,
+        )
+    elif _parse_swift_crash(text) is not None:
+        # Swift fatalError() / Objective-C NSException. Placed AFTER
+        # PHP because PHP's ``Fatal error: Uncaught X:`` prelude is
+        # more specific than the bare Swift ``Fatal error: <msg>``
+        # prelude (Swift fatals never carry the ``Uncaught`` keyword)
+        # -- this ordering means a PHP fatal that happens to have a
+        # Swift-looking message tail still tags as PHP. We tag
+        # framework='swift' for BOTH Swift and Objective-C because
+        # most Apple apps are mixed-language and dashboards group by
+        # platform, not by source language.
+        swift_hit = _parse_swift_crash(text)
+        assert swift_hit is not None  # narrowed by the elif guard
+        exc, msg, file_, line_ = swift_hit
+        return ErrorFields(
+            framework="swift",
+            exception=exc,
+            message=msg,
+            likely_cause=_swift_likely_cause(exc, msg),
             file=file_,
             line=line_,
         )
