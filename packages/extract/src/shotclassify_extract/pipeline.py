@@ -16,6 +16,7 @@ from .network import extract_network
 from .paths import extract_paths
 from .phones import extract_phones
 from .receipt import enrich_receipt
+from .social import extract_social
 from .timezones import extract_timezones
 from .urls import extract_urls
 from .uuids import extract_uuids
@@ -193,5 +194,23 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if airports:
         out.raw = dict(out.raw or {})
         out.raw["airports"] = airports
+
+    # Cross-category: stash social-media handles (Twitter / X / GitHub /
+    # LinkedIn / Instagram / TikTok / YouTube / Reddit / Mastodon)
+    # found in the OCR text under raw["social"]. Handles surface
+    # across every category -- chat captures cite creators, code
+    # snippets paste GitHub repo links, document captures cite
+    # LinkedIn profiles, error logs reference upstream repos,
+    # receipts print the merchant's Instagram handle. We capture
+    # URL forms always, and @-prefixed handles only when a
+    # platform anchor (twitter / x / insta / etc) sits on the same
+    # line so a generic chat ``@user`` mention doesn't bleed into
+    # the list. Distinct from ChatFields.mentions because that one
+    # is platform-agnostic chat-only; this one is typed social
+    # handles cross-category.
+    social = extract_social(text)
+    if social:
+        out.raw = dict(out.raw or {})
+        out.raw["social"] = social
 
     return out
