@@ -172,6 +172,56 @@ _RUST_PANIC_NEW = re.compile(
     r"(?P<file>[\w./\-]+\.rs):(?P<line>\d+)(?::\d+)?:\s*\n\s*(?P<msg>[^\n]+)",
 )
 
+# PHP fatal-error stacktraces. PHP prints a top-level fatal in one
+# of two shapes:
+#
+#   Fatal error: Uncaught TypeError: Foo::bar(): Argument #1 ($x) must
+#       be of type int, string given, called in /var/www/app/main.php
+#       on line 12 and defined in /var/www/app/lib/Foo.php:42
+#   Stack trace:
+#   #0 /var/www/app/main.php(12): Foo->bar('hi')
+#   #1 {main}
+#     thrown in /var/www/app/lib/Foo.php on line 42
+#
+# Or, in modern Laravel / Symfony console output (no leading prelude):
+#
+#   PHP Fatal error:  Uncaught RuntimeException: boom in /app/index.php:5
+#   Stack trace:
+#   #0 {main}
+#     thrown in /app/index.php on line 5
+#
+# We recognise the exception line (with or without the leading
+# ``PHP `` prefix) and pull file + line from the trailing
+# ``thrown in PATH on line N`` directive because that's the
+# innermost frame. When that directive is absent we fall back to
+# ``in PATH:LINE`` printed inside the exception line itself.
+_PHP_EXC = re.compile(
+    r"^\s*(?:PHP\s+)?Fatal\s+error\s*:\s*Uncaught\s+"
+    r"(?P<exc>[A-Z][\w\\]*(?:Exception|Error|Throwable)?)"
+    r"\s*:?\s*(?P<msg>[^\n]*)$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_PHP_THROWN_IN = re.compile(
+    r"thrown\s+in\s+(?P<file>\S+\.php)\s+on\s+line\s+(?P<line>\d+)",
+    re.IGNORECASE,
+)
+# Inline "in /path.php:LINE" form used when the trace is one-line.
+_PHP_INLINE_LOC = re.compile(
+    r"\bin\s+(?P<file>\S+\.php):(?P<line>\d+)\b",
+)
+# Stack-trace marker ``Stack trace:`` followed by ``#0 ... .php(NN):``
+# frames. Used as a soft confirmation when the ``Fatal error`` prelude
+# is malformed (OCR truncation can drop the prelude); when both the
+# prelude AND a stack-trace frame are missing the branch is skipped.
+_PHP_STACK_FRAME = re.compile(
+    r"^\s*#\d+\s+(?P<file>\S+\.php)\((?P<line>\d+)\)\s*:",
+    re.MULTILINE,
+)
+# Soft Laravel / Symfony banner used as a fall-through hint when the
+# Fatal-error prelude is OCR-truncated. We only TAG framework='php'
+# when one of these (or the stack-trace marker above) is present.
+_PHP_TRACE_MARKER = re.compile(r"^\s*Stack\s+trace\s*:\s*$", re.MULTILINE | re.IGNORECASE)
+
 # Pytest assertion failure. The "long" output shape pytest emits is:
 #   ____________________ test_name ____________________
 #       def test_name():
@@ -281,6 +331,91 @@ def parse_beam_crash(text: str) -> tuple[str, str, str | None, int | None] | Non
     does; older Erlang frames carry only the function/arity).
     """
     return _parse_beam_crash(text)
+
+
+def parse_php_fatal(text: str) -> tuple[str, str, str | None, int | None] | None:
+    """Return ``(exception, message, file or None, line or None)`` for
+    a PHP fatal-error stacktrace, or ``None`` when no PHP fatal
+    signature is present.
+
+    The exception name keeps any namespace prefix (``Symfony\\\\Component
+    \\\\Foo\\\\BarException``) because Laravel / Symfony codebases
+    routinely throw namespace-qualified exceptions. The trailing
+    ``thrown in PATH on line N`` directive is the innermost frame;
+    when that's missing we fall back to the inline ``in PATH:LINE``
+    form (which sits inside the exception line itself).
+    """
+    return _parse_php_fatal(text)
+
+
+def _parse_php_fatal(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    if not text:
+        return None
+    exc_m = _PHP_EXC.search(text)
+    if not exc_m:
+        # Without the explicit ``Fatal error`` prelude we don't claim
+        # the trace. PHP stack traces (``Stack trace:`` + ``#0 ...``)
+        # also appear inside warnings / notices that aren't fatals,
+        # and we don't want to mis-tag those as ``php`` errors.
+        return None
+    exc = exc_m.group("exc").strip()
+    msg = exc_m.group("msg").strip().rstrip(".")
+    # Strip a leading ``in /path/file.php:N`` tail from the message
+    # so the inline-location form doesn't pollute the message text.
+    msg_loc = _PHP_INLINE_LOC.search(msg)
+    if msg_loc:
+        msg = (msg[: msg_loc.start()] + msg[msg_loc.end():]).strip().rstrip(",")
+    # Prefer ``thrown in PATH on line N`` because it's the innermost
+    # frame; fall back to the inline ``in PATH:LINE`` form from the
+    # exception line itself.
+    file_, line_ = None, None
+    thrown = _PHP_THROWN_IN.search(text)
+    if thrown:
+        file_ = thrown.group("file")
+        line_ = int(thrown.group("line"))
+    else:
+        inline = _PHP_INLINE_LOC.search(exc_m.group(0))
+        if inline:
+            file_ = inline.group("file")
+            line_ = int(inline.group("line"))
+    return exc, msg, file_, line_
+
+
+def _php_likely_cause(exception: str | None, message: str | None) -> str | None:
+    """Return operator-friendly hints for common PHP fatal crashes."""
+    exc = (exception or "").lower()
+    msg = (message or "").lower()
+    if "typeerror" in exc or "argument" in msg and "must be of type" in msg:
+        return "Argument type mismatch; check the caller's value against the signature."
+    if "valueerror" in exc:
+        return "Function received a value outside the expected range."
+    if "argumentcounterror" in exc or "too few arguments" in msg:
+        return "Method called with the wrong number of arguments."
+    if "divisionbyzeroerror" in exc or "division by zero" in msg:
+        return "Division by zero; guard the denominator."
+    if "parseerror" in exc or "syntax error" in msg:
+        return "PHP parse error; check the highlighted token / closing brace."
+    if "error" in exc and "class" in msg and "not found" in msg:
+        return "Autoloader could not resolve the class; check use / namespace."
+    if "runtimeexception" in exc:
+        return "Generic runtime failure; inspect the message."
+    if "logicexception" in exc:
+        return "Programming-logic violation; the call should not have happened."
+    if "invalidargumentexception" in exc:
+        return "Argument failed validation; check caller invariants."
+    if "outofboundsexception" in exc or "outofrangeexception" in exc:
+        return "Index / key outside the collection's bounds."
+    if "pdoexception" in exc or "mysqli" in exc:
+        return "Database driver raised; check query SQL and connection state."
+    if "exception" in exc and ("permission" in msg or "denied" in msg):
+        return "Filesystem / socket permission denied; check ownership."
+    if "exception" in exc:
+        return "PHP exception; inspect the message and stack trace."
+    if "error" in exc:
+        return "PHP fatal error; inspect the message and stack trace."
+    return None
 
 
 def _parse_beam_crash(
@@ -634,6 +769,26 @@ def parse_error_text(text: str) -> ErrorFields:
         # mirroring how the Python branch finds the innermost frame.
         for m in _DOTNET_FRAME_FILE.finditer(text):
             file_, line_ = m.group("file").strip(), int(m.group("line"))
+    elif _PHP_EXC.search(text):
+        # PHP fatal-error. Placed BEFORE the JVM branch because the
+        # PHP exception name is also a ``\w+Exception`` / ``\w+Error``
+        # pattern that satisfies _JAVA_EXC. We tag framework='php',
+        # keep any namespace prefix on the exception, and pull file +
+        # line from the trailing ``thrown in PATH on line N`` (the
+        # innermost frame) or from the inline ``in PATH:LINE`` on the
+        # exception line itself when the multi-line stack tail is
+        # absent.
+        php_hit = _parse_php_fatal(text)
+        assert php_hit is not None  # narrowed by the elif guard
+        exc, msg, file_, line_ = php_hit
+        return ErrorFields(
+            framework="php",
+            exception=exc,
+            message=msg,
+            likely_cause=_php_likely_cause(exc, msg),
+            file=file_,
+            line=line_,
+        )
     elif _JAVA_EXC.search(text):
         framework = "jvm"
         em = _JAVA_EXC.search(text)
