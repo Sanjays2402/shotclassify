@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (25 features tracked)
+## Roadmap (35 features tracked)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -50,18 +50,24 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 23. [x] Receipt: per-line percent-off discount inference (`BOGO 50% off Latte 4.00` -> ReceiptLine with discount_pct + discount_amount; new fields).
 24. [x] Extract: cross-category IP / IPv4 / IPv6 / host:port extractor populating `raw["network"]` (URL spans masked, octet/port bounded).
 
+### Done in tick 5 (5 features)
+21. [x] Chat: read/delivered/unread/typing/seen/sent status markers (new `ChatFields.statuses`; time normalised via parse_timestamp; offset-sorted; LLM wire-format updated).
+27. [x] Error: Erlang/Elixir crash report parsing (framework=elixir/erlang; ** prelude branch + parse_beam_crash helper + 11 likely_cause hints).
+29. [x] Extract: cross-category email-address extractor into `raw["emails"]` (RFC-conservative regex, lowercased, mailto stripped, SSH user@host rejected).
+30. [x] Extract: cross-category identifier extractor (ISBN-10/13 + DOI + arXiv + ISSN) into `raw["identifiers"]` (check-digit validated, masked spans between matchers).
+31. [x] Receipt: order/invoice/reference number extraction (new `ReceiptFields.order_number`; invoice/order/receipt/check/transaction/reference/confirmation vocabularies; LLM wire-format updated).
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
 16. [ ] Chat: emoji density + reaction-line extraction (the `:eyes: 3` summary footer).
-21. [ ] Chat: read/delivered/unread status markers (iMessage "Delivered" / "Read" / WhatsApp double-tick) into ChatFields.raw or new field.
 25. [ ] Code: detect minified vs hand-written JS (heuristic: avg line length, lack of newlines after `;` and `{`).
 26. [ ] Receipt: detect tax-inclusive vs exclusive pricing from text cues (`VAT included` / `tax incl.` / `+ tax`).
-27. [ ] Error: Erlang/Elixir crash report parsing (`** (RuntimeError) ... lib/foo.ex:42`).
 28. [ ] Code: comment-density heuristic (% of lines that start with `//` or `#`) as a CodeFields.raw signal.
-29. [ ] Extract: cross-category email-address extractor into `raw["emails"]` (mailto/plain).
-30. [ ] Document: ISBN / DOI / arXiv ID extractor in raw[].
-31. [ ] Receipt: order/invoice number extraction (`Order #12345`, `Invoice No: ABC-99`).
+32. [ ] Chat: emoji reaction counts on a per-message basis (the `❤️ 3 👍 2` footer).
+33. [ ] Error: Python `SyntaxError` with caret line extraction (`^^^^^^^` indicator).
+34. [ ] Receipt: split-bill / parties detection (`Party of 4`, `Split 3 ways`).
+35. [ ] Code: TypeScript-specific signals (decorators, `as` casts, generic type params) beyond the current `: type` tags.
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -106,14 +112,32 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     CodeFields.dialect, ReceiptLine.discount_pct + discount_amount.
     LLM wire format in classify/client.py updated for both.
 
+- 2026-06-20 19:59 PT (tick 5, Cake): 5 features.
+  - 72f8d71 feat(extract): cross-category email-address extractor into raw["emails"]
+  - d8ca652 feat(extract): cross-category identifier extractor (ISBN/DOI/arXiv/ISSN) into raw["identifiers"]
+  - 79c5707 feat(extract/error): Erlang and Elixir crash report parsing
+  - ef30135 feat(extract/receipt): order / invoice / reference number extraction
+  - d8476e9 feat(extract/chat): read / delivered / unread / typing status markers
+  - Gate: ruff at baseline 536 (no new errors, zero fixups needed --
+    files written clean on first pass) + pytest 1269 passed / 3
+    skipped in 129.09s. 132 new tests across the 5 features. New
+    fields shipped: ReceiptFields.order_number, ChatFields.statuses.
+    LLM wire format in classify/client.py updated for both. Two new
+    cross-category raw keys: raw["emails"], raw["identifiers"].
+    BEAM crash branch placed between Go and Ruby in the elif chain;
+    no other branch displaced.
+
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
 - API / middleware features still deferred because of TestClient bootstrap cost.
-- raw["urls"], raw["paths"], and raw["network"] are now all populated
-  cross-category from the same OCR text. The path extractor masks URL
-  spans before scanning, and the network extractor masks URL spans
-  AND consumed IPv4/IPv6/host:port spans before each subsequent matcher,
-  so the three keys never double-count the same substring.
+- raw["urls"], raw["paths"], raw["network"], raw["emails"], and
+  raw["identifiers"] are all populated cross-category from the same
+  OCR text. The path extractor masks URL spans before scanning, the
+  network extractor masks URL + consumed-network spans before each
+  subsequent matcher, the email extractor needs no masking (``@`` and
+  ``://`` never overlap), and the identifier extractor masks consumed
+  spans between matchers (arXiv -> DOI -> ISBN-13 -> ISBN-10 -> ISSN)
+  so a DOI body cannot also tag as an ISBN.
 - HTTP status branch in error extractor is still the final fallback
   before the generic Error/Exception regex. The .NET branch is placed
   AFTER Node and BEFORE JVM so a CLR exception line (which would also
@@ -122,6 +146,12 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
   every segment.
 - Rust panic branch matches `thread '...' panicked` (a verb form
   distinct from Go's `panic:` prelude) so the two never cross.
+- BEAM crash branch matches the literal ``** `` prelude, distinct
+  from every other framework's prelude (Python's ``Traceback``,
+  Node's ``at Object``, Go's ``panic:``, Rust's ``thread '...'
+  panicked``, JVM's ``Exception in thread``, .NET's ``System.X.Y
+  Exception:`` with frame ``at NS.T.M() in foo.cs:line N``). Placed
+  between Go and Ruby in the elif chain; no other branch displaced.
 - pytest is checked FIRST in `parse_error_text` (before Python /
   Node / etc.) but ONLY when both the trailing `FILE:N: ExcName`
   tail AND the `>` source-line indicator are present, so a bare
@@ -132,3 +162,25 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
   `discount_amount` is always positive. The top-level
   `ReceiptFields.discount` is unchanged (still last-match summary
   amount). Per-line and top-level can coexist on the same receipt.
+- `ReceiptFields.order_number` is stored as a string because real-
+  world numbers mix digits with letters and slashes (``INV-00099``,
+  ``2024/07/00099``, ``TKT-2024-007``, ``CONF-12-99``). The hash
+  prefix on ``Order #12345`` sits in the keyword tail, so the value
+  is stored without the hash; dashboards render the hash back as
+  part of the label.
+- `ChatFields.statuses` entries are sorted by source-text offset,
+  not by matcher iteration order, so a "Delivered" line above a
+  "Read" line in the screenshot lands first in the list. De-dupe
+  runs after sorting on the (status, time-or-count) tuple. Cap at
+  20 entries.
+- `extract_emails` lowercases results for storage (per RFC 5321
+  permission and real-world dashboard convention). The `mailto:`
+  prefix is stripped automatically. SSH `user@host` fragments
+  without a dotted TLD are rejected; numeric-only TLDs are rejected
+  to keep `user@host42` config noise out.
+- `extract_identifiers` validates check digits for ISBN-10
+  (mod-11, X-as-10 in last slot), ISBN-13 (EAN-13 mod-10),
+  and ISSN (mod-11, X-as-10 in last slot). Random 13-digit
+  barcode noise is rejected. arXiv requires the ``arXiv:`` prefix
+  so a bare ``2306.12345`` version-string lookalike does not
+  false-positive.
