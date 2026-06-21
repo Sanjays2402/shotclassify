@@ -41,6 +41,83 @@ _DOTNET_FRAME_BARE = re.compile(
     re.MULTILINE,
 )
 
+# Erlang / Elixir crash report shapes. Elixir prints exceptions as:
+#   ** (RuntimeError) some message
+#       (app 0.1.0) lib/foo.ex:42: Foo.bar/2
+#       (elixir 1.14.0) lib/elixir/foo.ex:99: anonymous fn/0 in Foo.baz/0
+# Erlang prints them as:
+#   ** exception error: no function clause matching foo:bar(undefined)
+#        in function  foo:bar/1
+#           called as foo:bar(undefined)
+#        in call from foo:baz/0
+# Both shapes start with the literal ``** `` prefix which is unique
+# enough to be the discriminator. We require either the parenthesised
+# exception (Elixir) or the ``exception <kind>:`` shape (Erlang) on
+# the line.
+_BEAM_EXC_ELIXIR = re.compile(
+    r"^\*\*\s+\((?P<exc>[A-Z][\w.]*(?:Error|Exception)?)\)\s*(?P<msg>.*)$",
+    re.MULTILINE,
+)
+# Erlang prelude: ``** exception error: ...`` / ``** exception throw: ...``
+# / ``** exception exit: ...``. The kind word goes into the exception
+# slot so dashboards can distinguish error vs throw vs exit.
+_BEAM_EXC_ERLANG = re.compile(
+    r"^\*\*\s+exception\s+(?P<exc>error|throw|exit)\s*:\s*(?P<msg>.*)$",
+    re.MULTILINE | re.IGNORECASE,
+)
+# Frame for either runtime. Elixir prints:
+#   ``    (app 0.1.0) lib/foo.ex:42: Foo.bar/2``
+# Erlang prints:
+#   ``     in function  foo:bar/1`` (no file/line)
+#   or, in newer OTP, ``     in function  foo:bar/1 (foo.erl, line 42)``
+# We capture file + line from the Elixir shape and the newer Erlang
+# shape; the older bare-function Erlang line is recognised only as
+# "this looks like BEAM" so the framework tag is still set.
+_BEAM_FRAME_ELIXIR = re.compile(
+    r"^\s*\([\w\s.\-]+\)\s+(?P<file>[\w./\-]+\.(?:ex|exs|erl)):(?P<line>\d+):\s*",
+    re.MULTILINE,
+)
+_BEAM_FRAME_ERLANG = re.compile(
+    r"^\s*in\s+(?:call\s+from\s+|function\s+)([\w.:]+/\d+)"
+    r"(?:\s*\((?P<file>[\w./\-]+\.erl),\s*line\s+(?P<line>\d+)\))?",
+    re.MULTILINE,
+)
+
+
+def _beam_likely_cause(exception: str | None, message: str | None) -> str | None:
+    """Return operator-friendly hints for common BEAM crashes.
+
+    The BEAM runtime has a small set of high-frequency crashes that
+    dominate production logs -- match clauses, undefined functions,
+    badarg, badmap, badkey. The hints are intentionally short.
+    """
+    exc = (exception or "").lower()
+    msg = (message or "").lower()
+    if "no function clause matching" in msg:
+        return "No function clause matched the arguments; add a fallback head."
+    if "no case clause matching" in msg:
+        return "No case clause matched the value; add a catch-all branch."
+    if "undefined function" in msg or "no such function" in msg:
+        return "Function does not exist; check module load and arity."
+    if "badmap" in msg or "bad map" in msg:
+        return "Value passed to map operation was not a map."
+    if "badarg" in msg or "bad argument" in msg:
+        return "Built-in received a bad argument; check the value type."
+    if "badkey" in msg or "key not found" in msg:
+        return "Map lookup with a missing key; use Map.get/3 with default."
+    if "key error" in msg or "keyerror" in exc:
+        return "Map lookup with a missing key; use Map.get/3 with default."
+    if "argumenterror" in exc:
+        return "Argument out of range or wrong type; validate before call."
+    if "runtimeerror" in exc:
+        return "Generic runtime crash; inspect the message."
+    if "matcherror" in exc or "match" in exc and "error" in exc:
+        return "Pattern match failed; the value did not fit the LHS pattern."
+    if "throw" in exc:
+        return "Uncaught throw; wrap the caller in try/catch or fix the throw site."
+    return None
+
+
 # Go panic format:
 #   panic: runtime error: invalid memory address or nil pointer dereference
 #   [signal SIGSEGV...]
@@ -129,6 +206,50 @@ def parse_pytest_failure(
     like pytest output.
     """
     return _parse_pytest_failure(text)
+
+
+def parse_beam_crash(text: str) -> tuple[str, str, str | None, int | None] | None:
+    """Return ``(framework, exception, file or None, line or None)``
+    for an Erlang or Elixir crash report, or ``None`` if no BEAM
+    crash signature is present.
+
+    The framework tag is ``elixir`` when the ``** (ExcModule.Error)``
+    Elixir shape is present and ``erlang`` when the ``** exception
+    error|throw|exit:`` Erlang shape is present. File and line are
+    pulled from the first frame that carries them (Elixir always
+    does; older Erlang frames carry only the function/arity).
+    """
+    return _parse_beam_crash(text)
+
+
+def _parse_beam_crash(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    if not text:
+        return None
+    elixir = _BEAM_EXC_ELIXIR.search(text)
+    if elixir:
+        exc = elixir.group("exc")
+        file_, line_ = None, None
+        frame = _BEAM_FRAME_ELIXIR.search(text)
+        if frame:
+            file_ = frame.group("file")
+            line_ = int(frame.group("line"))
+        return "elixir", exc, file_, line_
+    erlang = _BEAM_EXC_ERLANG.search(text)
+    if erlang:
+        exc = erlang.group("exc").lower()
+        file_, line_ = None, None
+        # Newer OTP frames include ``(file.erl, line N)`` -- pick up
+        # the first one that does. Older frames are just function/arity
+        # so the framework tag still fires but file/line stay None.
+        for m in _BEAM_FRAME_ERLANG.finditer(text):
+            if m.group("file"):
+                file_ = m.group("file")
+                line_ = int(m.group("line"))
+                break
+        return "erlang", exc, file_, line_
+    return None
 
 
 def _parse_rust_panic(text: str) -> tuple[str, int, str] | None:
@@ -438,6 +559,38 @@ def parse_error_text(text: str) -> ErrorFields:
                 exc, msg = "panic", full
         for m in _GO_FRAME.finditer(text):
             file_, line_ = m.group(1), int(m.group(2))
+    elif _parse_beam_crash(text) is not None:
+        # Erlang / Elixir crash report. We branch on the literal ``**``
+        # prelude with either a parenthesised Elixir exception or the
+        # ``** exception error|throw|exit:`` Erlang form. The framework
+        # tag (``elixir`` / ``erlang``) preserves which runtime we
+        # parsed so dashboards can group separately. The BEAM branch
+        # is intentionally placed AFTER the Go branch even though the
+        # signatures do not conflict -- it keeps the systems-language
+        # group (Go, Rust, BEAM) clustered together in the elif chain
+        # for readability.
+        beam = _parse_beam_crash(text)
+        assert beam is not None  # narrowed by the elif guard
+        framework, exc, file_, line_ = beam
+        # For Elixir, the message is whatever followed the
+        # parenthesised exception. For Erlang, the message is the
+        # tail after ``** exception error: ...``. Recover both from
+        # the same regex hits the helper already ran.
+        elixir = _BEAM_EXC_ELIXIR.search(text)
+        if elixir:
+            msg = elixir.group("msg").strip() or None
+        else:
+            erlang = _BEAM_EXC_ERLANG.search(text)
+            if erlang:
+                msg = erlang.group("msg").strip() or None
+        return ErrorFields(
+            framework=framework,
+            exception=exc,
+            message=msg,
+            likely_cause=_beam_likely_cause(exc, msg),
+            file=file_,
+            line=line_,
+        )
     elif _RUBY_EXC.search(text) or _RUBY_FRAME.search(text):
         framework = "ruby"
         em = _RUBY_EXC.search(text)

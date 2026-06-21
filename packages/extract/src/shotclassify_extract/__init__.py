@@ -4,6 +4,7 @@ from .code import detect_framework, detect_language, detect_sql_dialect, enrich_
 from .emails import extract_emails
 from .error import (
     enrich_error,
+    parse_beam_crash,
     parse_error_text,
     parse_http_status,
     parse_pytest_failure,
@@ -29,6 +30,7 @@ __all__ = [
     "parse_http_status",
     "parse_pytest_failure",
     "parse_rust_panic",
+    "parse_beam_crash",
     "enrich_chat",
     "parse_timestamp",
     "extract_urls",
