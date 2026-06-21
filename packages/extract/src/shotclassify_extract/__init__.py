@@ -10,6 +10,7 @@ from .code import (
     detect_ts_features,
     enrich_code,
 )
+from .credit_cards import extract_credit_cards
 from .emails import extract_emails
 from .error import (
     enrich_error,
@@ -67,4 +68,5 @@ __all__ = [
     "extract_git_shas",
     "extract_macs",
     "extract_timezones",
+    "extract_credit_cards",
 ]

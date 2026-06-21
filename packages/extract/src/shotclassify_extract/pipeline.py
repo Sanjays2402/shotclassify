@@ -5,6 +5,7 @@ from shotclassify_common import Category, ExtractedFields, OCRResult
 
 from .chat import enrich_chat
 from .code import enrich_code
+from .credit_cards import extract_credit_cards
 from .emails import extract_emails
 from .error import enrich_error
 from .git_shas import extract_git_shas
@@ -158,5 +159,20 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if timezones:
         out.raw = dict(out.raw or {})
         out.raw["timezones"] = timezones
+
+    # Cross-category: stash credit-card BIN+last4 metadata found in
+    # the OCR text under raw["credit_cards"]. PANs surface on
+    # receipts (last4 with brand keyword), code snippets (test
+    # fixtures), error logs (occasional leak inside a request body),
+    # and chat captures (shared card details). The full PAN is NEVER
+    # stored -- we deliberately persist only BIN (first 6) and last4
+    # so dashboards can identify the issuing network and the
+    # customer's last-4 without exposing the secret. Pair this with
+    # the `credit_card` redact mode in shotclassify_common.redact to
+    # strip the raw PAN from the persisted OCR text.
+    cards = extract_credit_cards(text)
+    if cards:
+        out.raw = dict(out.raw or {})
+        out.raw["credit_cards"] = cards
 
     return out
