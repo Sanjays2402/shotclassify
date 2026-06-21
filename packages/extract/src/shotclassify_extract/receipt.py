@@ -610,6 +610,124 @@ def _find_register_id(text: str) -> str | None:
     return _find_keyword_id(text, _REGISTER_KEYWORDS)
 
 
+# Cashier / operator and server / waiter name extraction. The two
+# slots are extracted with the same logic but different keyword
+# catalogues because the relationships they capture are
+# semantically different on a restaurant receipt (the server takes
+# the order, the cashier rings up the bill; they are often
+# different people).
+#
+# Recognised cashier vocabularies (case-insensitive):
+#
+#   Cashier: Bob                 -> Bob
+#   Cashier #04 Bob              -> Bob       (id between keyword and name)
+#   Cashier 04 - Bob             -> Bob
+#   Operator: ALICE              -> ALICE
+#   Clerk: Charlie               -> Charlie
+#   Clerk #04 Charlie            -> Charlie
+#   Sold by: Alice               -> Alice
+#   Sold By Alice                -> Alice
+#
+# Recognised server vocabularies:
+#
+#   Server: Alice                -> Alice
+#   Your server was Bob          -> Bob
+#   Your Server: Bob             -> Bob
+#   Waiter: Charlie              -> Charlie
+#   Waitress: Diana              -> Diana
+#   Served by: Diana             -> Diana
+#   Server #04 Alice             -> Alice
+#
+# Name capture rules:
+#
+# * The keyword + optional identifier number is consumed first
+#   (``Cashier #04 -``); the captured name is the trailing token
+#   sequence on the same line.
+# * Names are bounded 1..30 chars and must contain at least one
+#   alpha char (so a stray ``Cashier 12345`` line doesn't capture
+#   ``12345`` as the name).
+# * A trailing identifier number after the name (``Cashier Bob
+#   #04``) is NOT captured into the name.
+# * First keyword in catalogue order wins (the keyword catalogues
+#   are ordered most-specific-first so ``Your server was`` beats
+#   the bare ``Server:`` matcher when both appear).
+#
+# The matcher anchors on a line-start or post-comma word boundary
+# so prose like ``the cashier was busy`` doesn't fire.
+_CASHIER_KEYWORDS: tuple[str, ...] = (
+    r"cashier\s*#?\s*\d{1,5}\s*[-:]?",
+    r"cashier",
+    r"operator\s*#?\s*\d{1,5}\s*[-:]?",
+    r"operator",
+    r"clerk\s*#?\s*\d{1,5}\s*[-:]?",
+    r"clerk",
+    r"sold\s+by",
+)
+_SERVER_KEYWORDS: tuple[str, ...] = (
+    r"your\s+server\s+was",
+    r"your\s+server",
+    r"server\s*#?\s*\d{1,5}\s*[-:]?",
+    r"server",
+    r"waiter",
+    r"waitress",
+    r"served\s+by",
+)
+# Captured name tail: 1..30 chars of letters / spaces / dots / dashes
+# / apostrophes (covers ``Mary-Jane``, ``O'Brien``, ``Jr.``). The
+# matcher is greedy up to end-of-line then trimmed by the helper.
+_NAME_TAIL = r"(?P<name>[A-Za-z][A-Za-z .'\-]{0,29})"
+
+
+def _find_keyword_name(text: str, keywords: tuple[str, ...]) -> str | None:
+    """Return the first non-empty name following any of the keywords in
+    priority order, or ``None``.
+
+    Each keyword pattern accepts an optional ``:`` / ``-`` separator,
+    optional whitespace, then the name tail (letters + space + dots +
+    dashes + apostrophes). The match is bounded to a single line so
+    a downstream line cannot be absorbed as part of the name. Names
+    must contain at least one alpha char and at least 2 chars to
+    pass; single-letter ``Cashier B`` is accepted (real receipts
+    sometimes truncate names) but a numeric-only tail is rejected.
+    """
+    if not text:
+        return None
+    for kw in keywords:
+        pat = re.compile(
+            rf"(?<![A-Za-z]){kw}\s*[:\-]?\s*{_NAME_TAIL}",
+            re.IGNORECASE,
+        )
+        m = pat.search(text)
+        if not m:
+            continue
+        name = m.group("name").strip().rstrip(".,;:-")
+        # Reject if the captured tail is too short or has no alpha.
+        if len(name) < 1 or not any(c.isalpha() for c in name):
+            continue
+        # Column-gap detection runs BEFORE whitespace normalisation:
+        # if the captured name has two consecutive spaces it means
+        # the regex absorbed the column gap into the next receipt
+        # field, so trim there. After this we collapse remaining
+        # internal runs to single spaces for clean output.
+        if "  " in name:
+            name = name.split("  ", 1)[0].strip()
+        name = re.sub(r"\s+", " ", name)
+        if not name:
+            continue
+        return name
+    return None
+
+
+def _find_cashier(text: str) -> str | None:
+    """Return the cashier / operator / clerk name, or None."""
+    return _find_keyword_name(text, _CASHIER_KEYWORDS)
+
+
+def _find_server(text: str) -> str | None:
+    """Return the server / waiter / waitress name, or None."""
+    return _find_keyword_name(text, _SERVER_KEYWORDS)
+
+
 def _guess_vendor(text: str) -> str | None:
     for raw in text.splitlines():
         line = raw.strip()
@@ -855,6 +973,8 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         loyalty_id=_find_loyalty_id(text),
         store_id=_find_store_id(text),
         register_id=_find_register_id(text),
+        cashier=_find_cashier(text),
+        server=_find_server(text),
         items=_parse_items(text),
     )
 
@@ -868,7 +988,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "vendor", "date", "subtotal", "tax", "tip", "discount", "total",
         "currency", "payment_method", "order_number", "tax_mode",
         "party_size", "refund_amount", "loyalty_id", "store_id",
-        "register_id",
+        "register_id", "cashier", "server",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))

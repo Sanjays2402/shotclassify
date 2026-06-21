@@ -129,6 +129,22 @@ class ReceiptFields(BaseModel):
     # terminal that is consistently dropping line items or
     # producing voids.
     register_id: str | None = None
+    # Cashier / operator name printed on retail receipts (``Cashier:
+    # Bob``, ``Operator: ALICE``, ``Clerk #04 - Charlie``). String
+    # because the captured value is the displayed human-readable
+    # name (or operator identifier). Dashboards group sales by
+    # cashier to surface per-person performance and identify
+    # cashier-specific anomalies (voids, refunds). ``None`` when
+    # the receipt prints no operator line.
+    cashier: str | None = None
+    # Server / waiter name printed on restaurant receipts (``Server:
+    # Alice``, ``Your server was Bob``, ``Waiter: Charlie``,
+    # ``Served by Diana``). Distinct from ``cashier`` because in a
+    # full-service restaurant the server (who takes orders) and the
+    # cashier (who runs the register) are often different people.
+    # Restaurant dashboards use this to compute per-server tip
+    # rates and table-turnover metrics.
+    server: str | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
