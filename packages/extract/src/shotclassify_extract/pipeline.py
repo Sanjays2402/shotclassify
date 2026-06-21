@@ -5,6 +5,7 @@ from shotclassify_common import Category, ExtractedFields, OCRResult
 
 from .chat import enrich_chat
 from .code import enrich_code
+from .emails import extract_emails
 from .error import enrich_error
 from .network import extract_network
 from .paths import extract_paths
@@ -56,5 +57,18 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if network:
         out.raw = dict(out.raw or {})
         out.raw["network"] = network
+
+    # Cross-category: stash email addresses found in the OCR text
+    # under raw["emails"]. Emails appear across every category --
+    # error reports cite the on-call address, receipts include the
+    # merchant's billing email, code snippets reference test
+    # fixtures, chats are mostly emails between people. Email
+    # spans never overlap URL spans (a URL has ``://`` between the
+    # scheme and authority, while an email has ``@`` between local
+    # and domain) so no masking is required.
+    emails = extract_emails(text)
+    if emails:
+        out.raw = dict(out.raw or {})
+        out.raw["emails"] = emails
 
     return out
