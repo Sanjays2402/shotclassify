@@ -222,6 +222,57 @@ _PHP_STACK_FRAME = re.compile(
 # when one of these (or the stack-trace marker above) is present.
 _PHP_TRACE_MARKER = re.compile(r"^\s*Stack\s+trace\s*:\s*$", re.MULTILINE | re.IGNORECASE)
 
+# SQL database error parsing. Each major SQL engine prints distinct
+# error preludes that let us pick the dialect:
+#
+#   PostgreSQL: ``ERROR:  syntax error at or near "x"``
+#               ``ERROR:  relation "users" does not exist``
+#               ``ERROR:  column "x" of relation "y" does not exist``
+#               ``LINE 1: SELECT bad SQL ...``
+#               (PostgreSQL psql output often includes a HINT: line
+#               and a STATEMENT: line; we capture the LINE: marker
+#               as the source location.)
+#
+#   MySQL:      ``ERROR 1064 (42000): You have an error in your SQL...``
+#               ``ERROR 1146 (42S02): Table 'db.users' doesn't exist``
+#               ``ERROR 1054 (42S22): Unknown column 'x' in 'field list'``
+#               (MySQL prints a SQLSTATE in parens after the code.)
+#
+#   SQLite:     ``Error: near "x": syntax error``
+#               ``Error: no such table: users``
+#               ``Error: no such column: x``
+#
+#   MSSQL:      ``Msg 207, Level 16, State 1, Line 5``
+#               ``Invalid column name 'x'.``
+#               (MSSQL prints the message on the line AFTER the Msg
+#               header; we capture both.)
+#
+# We try each dialect's discriminator in priority order and tag the
+# framework as ``sql`` regardless (with ``exception`` carrying the
+# dialect-and-code identifier).
+_SQL_MYSQL = re.compile(
+    r"\bERROR\s+(?P<code>\d{4})\s*\((?P<sqlstate>[A-Z0-9]{5})\)\s*:\s*"
+    r"(?P<msg>[^\n]+)",
+    re.IGNORECASE,
+)
+_SQL_POSTGRES = re.compile(
+    r"^\s*ERROR\s*:\s+(?P<msg>[^\n]+)",
+    re.MULTILINE,
+)
+_SQL_POSTGRES_LINE = re.compile(
+    r"^\s*LINE\s+(?P<line>\d+)\s*:", re.MULTILINE,
+)
+_SQL_SQLITE = re.compile(
+    r"^\s*(?:SQL\s+)?Error\s*:\s+(?P<msg>(?:near|no\s+such|too\s+many|"
+    r"foreign\s+key|incomplete|unrecognized|unknown)[^\n]+)",
+    re.MULTILINE,
+)
+_SQL_MSSQL = re.compile(
+    r"^\s*Msg\s+(?P<code>\d+)\s*,\s*Level\s+(?P<level>\d+)\s*,\s*"
+    r"State\s+(?P<state>\d+)\s*(?:,\s*Line\s+(?P<line>\d+))?",
+    re.MULTILINE | re.IGNORECASE,
+)
+
 # Pytest assertion failure. The "long" output shape pytest emits is:
 #   ____________________ test_name ____________________
 #       def test_name():
@@ -346,6 +397,124 @@ def parse_php_fatal(text: str) -> tuple[str, str, str | None, int | None] | None
     form (which sits inside the exception line itself).
     """
     return _parse_php_fatal(text)
+
+
+def parse_sql_error(text: str) -> tuple[str, str, str, int | None] | None:
+    """Return ``(dialect, exception, message, line or None)`` for a SQL
+    error, or ``None`` when no SQL-error signature is present.
+
+    ``dialect`` is one of ``postgres`` / ``mysql`` / ``sqlite`` /
+    ``mssql``. ``exception`` is the dialect-specific identifier
+    string suitable for grouping (``MySQL 1064``,
+    ``PostgreSQL ERROR``, ``SQLite Error``, ``MSSQL Msg 207``).
+    ``message`` is the human-readable description after the prelude.
+    ``line`` is the source line number when the engine prints one
+    (PostgreSQL ``LINE 1:`` marker, MSSQL ``Line N``); MySQL and
+    SQLite typically don't include a line number so ``line`` is
+    ``None`` for those.
+
+    Dialect priority (first to match wins):
+
+      1. MySQL    - the ``ERROR NNNN (SQLSTATE):`` shape is unique.
+      2. MSSQL    - the ``Msg NNNN, Level N, State N`` header is unique.
+      3. SQLite   - ``Error: near|no such|...`` with vocab match.
+      4. Postgres - ``ERROR: msg`` (the most generic, runs last).
+    """
+    return _parse_sql_error(text)
+
+
+def _parse_sql_error(text: str) -> tuple[str, str, str, int | None] | None:
+    if not text:
+        return None
+    # 1) MySQL: ``ERROR 1064 (42000): You have an error in your SQL...``
+    m = _SQL_MYSQL.search(text)
+    if m:
+        code = m.group("code")
+        sqlstate = m.group("sqlstate")
+        msg = m.group("msg").strip()
+        exc = f"MySQL {code} ({sqlstate})"
+        return "mysql", exc, msg, None
+    # 2) MSSQL: ``Msg 207, Level 16, State 1, Line 5`` + next-line
+    #    message ``Invalid column name 'x'.``
+    m = _SQL_MSSQL.search(text)
+    if m:
+        code = m.group("code")
+        line_ = int(m.group("line")) if m.group("line") else None
+        # The actual message sits on the LINE AFTER the Msg header.
+        # Pull it by walking forward from m.end() to the next newline
+        # and taking the following non-empty line.
+        after = text[m.end():]
+        msg = ""
+        for raw in after.splitlines():
+            line = raw.strip()
+            if line:
+                msg = line.rstrip(".")
+                break
+        exc = f"MSSQL Msg {code}"
+        return "mssql", exc, msg, line_
+    # 3) SQLite: ``Error: near "x": syntax error`` -- the vocabulary
+    #    discriminator inside the regex keeps us off other ``Error:``
+    #    lines.
+    m = _SQL_SQLITE.search(text)
+    if m:
+        msg = m.group("msg").strip().rstrip(".")
+        return "sqlite", "SQLite Error", msg, None
+    # 4) PostgreSQL: ``ERROR:  syntax error at or near "x"``. We
+    #    intentionally run this LAST because ``ERROR:`` is the most
+    #    generic prelude and would steal a SQLite ``Error:`` line if
+    #    case-insensitivity collided.
+    m = _SQL_POSTGRES.search(text)
+    if m:
+        msg = m.group("msg").strip().rstrip(".")
+        # Postgres prints ``LINE N:`` on a separate line below the
+        # ERROR: prelude; pick it up if present.
+        line_ = None
+        line_m = _SQL_POSTGRES_LINE.search(text)
+        if line_m:
+            line_ = int(line_m.group("line"))
+        return "postgres", "PostgreSQL ERROR", msg, line_
+    return None
+
+
+def _sql_likely_cause(dialect: str, message: str | None) -> str | None:
+    """Return an operator-friendly hint for the SQL error."""
+    msg = (message or "").lower()
+    # Cross-dialect vocabulary first.
+    if "syntax error" in msg:
+        return "SQL syntax error; check the highlighted token / quoting."
+    if "no such table" in msg or "does not exist" in msg and "relation" in msg:
+        return "Table / relation does not exist; check schema / migration state."
+    if "no such column" in msg or "unknown column" in msg or (
+        "column" in msg and "does not exist" in msg
+    ):
+        return "Column does not exist; check schema and the SELECT list."
+    if "duplicate" in msg and ("entry" in msg or "key" in msg):
+        return "Unique-constraint violation; row already exists."
+    if "foreign key" in msg:
+        return "Foreign-key constraint violation; referenced row missing."
+    if "deadlock" in msg:
+        return "Transaction deadlocked; retry with backoff."
+    if "lock wait timeout" in msg or "lock timeout" in msg:
+        return "Row-level lock contention; reduce transaction span."
+    if "permission denied" in msg or "access denied" in msg:
+        return "Database role / user lacks the required privilege."
+    if "connection refused" in msg:
+        return "Database not reachable on the given host / port."
+    if "data too long" in msg:
+        return "Value exceeds the column's declared length."
+    if "cannot be null" in msg or "null value in column" in msg:
+        return "NOT NULL column received a NULL; set a value or DEFAULT."
+    if "invalid column name" in msg:
+        return "Column does not exist; check schema and the SELECT list."
+    if dialect == "mysql":
+        return "MySQL error; inspect the message and SQLSTATE for the rule."
+    if dialect == "postgres":
+        return "PostgreSQL error; inspect the message and HINT line."
+    if dialect == "sqlite":
+        return "SQLite error; inspect the message and statement."
+    if dialect == "mssql":
+        return "MSSQL error; inspect the Msg / Level / State header."
+    return None
 
 
 def _parse_php_fatal(
@@ -879,6 +1048,22 @@ def parse_error_text(text: str) -> ErrorFields:
             line=line_,
         )
     else:
+        # Try the SQL error branch BEFORE HTTP so a postgres ``ERROR:
+        # syntax error`` line is recognised as a SQL failure (not
+        # caught by HTTP because no status code is present, but the
+        # generic fallback would tag it ``unknown`` and miss the
+        # dialect identifier).
+        sql = _parse_sql_error(text)
+        if sql is not None:
+            dialect, exc_name, sql_msg, sql_line = sql
+            return ErrorFields(
+                framework="sql",
+                exception=exc_name,
+                message=sql_msg,
+                likely_cause=_sql_likely_cause(dialect, sql_msg),
+                file=None,
+                line=sql_line,
+            )
         # Try the HTTP status branch BEFORE the generic Error/Exception
         # regex so a line like "HTTP/1.1 500 Internal Server Error" is
         # recognised as an HTTP failure, not as a plain "InternalServerError"

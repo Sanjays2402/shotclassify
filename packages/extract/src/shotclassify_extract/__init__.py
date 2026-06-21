@@ -18,6 +18,7 @@ from .error import (
     parse_php_fatal,
     parse_pytest_failure,
     parse_rust_panic,
+    parse_sql_error,
     parse_syntax_caret,
 )
 from .git_shas import extract_git_shas
@@ -47,6 +48,7 @@ __all__ = [
     "parse_php_fatal",
     "parse_pytest_failure",
     "parse_rust_panic",
+    "parse_sql_error",
     "parse_syntax_caret",
     "parse_beam_crash",
     "enrich_chat",
