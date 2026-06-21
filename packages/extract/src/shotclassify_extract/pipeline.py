@@ -10,6 +10,7 @@ from .error import enrich_error
 from .identifiers import extract_identifiers
 from .network import extract_network
 from .paths import extract_paths
+from .phones import extract_phones
 from .receipt import enrich_receipt
 from .urls import extract_urls
 
@@ -85,5 +86,18 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if identifiers:
         out.raw = dict(out.raw or {})
         out.raw["identifiers"] = identifiers
+
+    # Cross-category: stash phone numbers found in the OCR text under
+    # raw["phones"]. Phone numbers appear across categories --
+    # receipts print the merchant's contact line, chat captures show
+    # contact cards, signatures embed direct lines, error pages list
+    # the on-call number, document captures cite source citations.
+    # Output is in canonical digits-only form (with a leading ``+``
+    # for E.164 matches) so dashboards de-dupe trivially across
+    # printer formatting variation.
+    phones = extract_phones(text)
+    if phones:
+        out.raw = dict(out.raw or {})
+        out.raw["phones"] = phones
 
     return out

@@ -21,6 +21,7 @@ from .error import (
 from .identifiers import extract_identifiers
 from .network import extract_network
 from .paths import extract_paths
+from .phones import extract_phones
 from .pipeline import enrich
 from .receipt import enrich_receipt, parse_receipt_text
 from .urls import extract_urls
@@ -49,4 +50,5 @@ __all__ = [
     "extract_network",
     "extract_emails",
     "extract_identifiers",
+    "extract_phones",
 ]
