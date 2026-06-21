@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (50 features tracked)
+## Roadmap (82 features tracked, 55 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -92,6 +92,13 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 64. [x] Code: TODO / FIXME marker count into `CodeFields.todo_count` (case-sensitive ALL-CAPS markers TODO/FIXME/XXX/HACK/BUG/NOTE/OPTIMIZE; must be preceded by language-appropriate comment leader anywhere on line via reused `_comment_leaders_for` catalogue from comment-density detector; followed by non-alphanumeric/non-underscore boundary so TODOIST/BUGGY/XXXX don't false-positive; multiple markers per line count separately; pure data languages json/csv/tsv short-circuit to 0; documented trade-off: markers inside string literals NOT excluded because we don't tokenise; LLM wire-format updated).
 70. [x] Code: license-header detection into `CodeFields.license` (12 SPDX-style tags: apache-2.0/mit/gpl-3.0/gpl-2.0/lgpl-3.0/agpl-3.0/bsd-2-clause/bsd-3-clause/mpl-2.0/isc/unlicense/cc0-1.0; needle-group catalogue per license, ALL needles in a group must match (AND), ANY group passes (OR); longer/more-distinctive licenses checked FIRST so full BSD-3-Clause header tags as bsd-3-clause not MIT (BSD also contains "permission is granted" wording); first 30 header lines scanned only; per-line comment-leader prefix `//`/`/*`/`*`/`#`/`--`/`;`/`%` stripped before flattening so C-style multi-line `* Mozilla Public * License` collapses across the asterisk boundary; case-insensitive throughout; LLM wire-format updated).
 
+### Done in tick 11 (5 features)
+42. [x] Code: top-level docstring / JSDoc extraction into `CodeFields.docstring` (Python triple-quoted module + def/class docstrings with dedent; JSDoc `/** ... */` blocks above the first top-level declaration with `*` continuation stripping; Rust `///` line-doc-comment runs collapsed and `//!` inner-doc-comment runs at module top; language-aware priority -- python prefers triple-quoted, rust prefers `///`/`//!`, default JSDoc -> python -> rust; decorator-only lines between the JSDoc block and the declaration walked past so `@Component({})` works; 60-line scan window; LLM wire-format updated).
+43. [x] Code: import-set extraction into `CodeFields.imports` (Python `import X` / `import X as Y` / `import X, Y, Z` / `from X import a, b` (captures X only); JS/TS `import X from 'mod'` / `import { a } from 'mod'` / `import 'mod'` / `require('mod')`; Java/Kotlin/Scala `import com.foo.Bar;` / `import com.foo.*;` / `import static`; Go single-line `import "fmt"` + parenthesised `import ( "fmt"; "os" )` group; Rust `use std::collections::HashMap;` + braced re-export `use std::io::{Read, Write};` (captures prefix); Ruby `require 'json'` / `require_relative`; PHP `use Foo\\Bar\\Baz;` / `require_once 'X';`; runs every matcher on every snippet -- not gated by language; de-duped first-seen-in-text order; cap 50; LLM wire-format updated).
+74. [x] Code: copyright-holder extraction into `CodeFields.copyright` (list of `{holder, year}` dicts; recognised `Copyright (c) 2024 ACME` / `(C) 2020-2024 Alice` / `©` Unicode sign / `Copyright 2024 by Author` / no-(c) form / uppercase form; year shapes single / range / list / mixed; per-line comment-leader stripped before parsing; trailing `All rights reserved` / `.,;:` / stray `*/` stripped from holder; multi-holder same-line first-wins documented trade-off; dedupe on (holder.lower(), year); same 30-line window as license; LLM wire-format updated).
+52. [x] Extract: cross-category airport-code extractor into `raw["airports"]` (IATA 3-letter accepted from curated ~250-airport catalogue OR with travel-vocabulary anchor on same/previous line `flight`/`gate`/`depart`/`origin`/etc OR forming route-arrow pair `XXX-XXX`/`XXX -> XXX`/`XXX → XXX`; ICAO 4-letter accepted from curated ~150-hub catalogue OR with anchor AND valid ICAO region prefix; currency/country/prose-acronym reject list incl CSS/HTML/JSON/USD/USA; word-boundary defence so ATLAS doesn't yield ATL; pipeline writes raw["airports"] for every category).
+75. [x] Extract: cross-category social-handle extractor into `raw["social"]` (list of `{platform, handle}` dicts; 8 platforms: twitter/github/linkedin/instagram/tiktok/youtube/reddit/mastodon; URL forms always fire, @handle forms (twitter/instagram) only when same-line platform anchor present; reserved-path rejection on `/login`/`/marketplace`/`/p/`/`/r/`/`/status` etc; LinkedIn personal/company/school + country-subdomain; Reddit `u/` and `user/` canonicalise to `u/`; mastodon two-at `@user@instance.tld` distinct from email; distinct from `ChatFields.mentions` because that's platform-agnostic chat-only; pipeline writes raw["social"] for every category).
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -99,9 +106,6 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 32. [ ] Chat: emoji reaction counts on a per-message basis (the `❤️ 3 👍 2` footer).
 39. [ ] Chat: replied-to / quoted-message detection (the `> quoted text` line + replied-by attribution above the new message).
 40. [ ] Chat: voice-note / image / video attachment markers (`🎤 Voice (0:42)`, `📷 Photo`, `[Image]`, `[Voice note 0:23]`).
-42. [ ] Code: JSDoc / docstring extraction (top-level docstring captured into `CodeFields.docstring` for Python / JS / Java / Go).
-43. [ ] Code: import-set extraction (new `CodeFields.imports` list of imported modules/packages, per language).
-52. [ ] Extract: cross-category ICAO / IATA airport-code extractor into `raw["airports"]` for travel screenshots.
 53. [ ] Chart: bar-chart series-label OCR refinement (split the legend block into a clean `ChartFields.series` list).
 54. [ ] Chart: percent annotations vs raw values heuristic (new `ChartFields.value_unit`: `%` / `count` / `currency` based on axis tick text).
 55. [ ] UI mockup: layout-style guess (new `UIMockupFields.layout_kind`: `dashboard` / `landing` / `form` / `settings` / `modal`).
@@ -116,10 +120,13 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 71. [ ] Chart: pie-slice percent extraction from in-pie labels (new ChartFields.slices list of {label, percent}).
 72. [ ] PII redact: drivers-license-number redaction mode (per-state US shape catalogues, the most common 7-9 alphanumeric forms).
 73. [ ] Receipt: gift-card / promo-code redemption detection (new ReceiptFields.gift_card_applied amount + ReceiptFields.promo_code string; "Gift card -25.00" / "Promo code SAVE10 applied" shapes).
-74. [ ] Code: copyright-holder extraction (new CodeFields.copyright list of {holder, year} dicts, parsed from "Copyright (c) 2024 ACME Corp" / "(C) 2020-2024" header lines).
-75. [ ] Extract: cross-category social-handle extractor (Twitter/X @handle, GitHub user/repo, LinkedIn /in/foo) into raw["social"] -- distinct from chat mentions because the OCR may carry a code snippet that quotes a handle.
 76. [ ] Receipt: delivery-fee / service-charge extraction (new ReceiptFields.delivery_fee and ReceiptFields.service_charge -- restaurant + food-delivery dashboards split these from tip and tax).
 77. [ ] Chat: edited-message marker detection (`(edited)` / `(edited 2m)` tails appended to message bodies on iMessage/Slack/Discord -- surface a parallel `edits` list on ChatFields).
+78. [ ] Code: vendor-prefix detection for CSS (new `CodeFields.css_vendor_prefixes` list -- `-webkit-` / `-moz-` / `-ms-` / `-o-` / `-khtml-`).
+79. [ ] Code: TODO action-comment AUTHOR extraction (`TODO(alice): fix this` -> `[{"marker": "TODO", "author": "alice"}]` into new `CodeFields.todo_authors`).
+80. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce).
+81. [ ] Error: Spring Boot WhiteLabel error page parsing (`/error` endpoint HTML that surfaces inside a screenshot -- pull status, timestamp, path, message).
+82. [ ] Extract: cross-category Slack channel-ID extractor (`C012345ABCD`, `D012345ABCD`, `U012345ABCD` -- Slack public/private/DM IDs).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -293,6 +300,40 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     `jvm`. License catalogue uses needle-group AND/OR
     matching so the longer BSD-3-Clause header wins over the
     overlapping MIT phrasing.
+
+- 2026-06-21 14:43 PT (tick 11, Cake): 5 features.
+  - 12527df feat(extract/code): top-level docstring / JSDoc extraction into CodeFields.docstring
+  - b86b641 feat(extract/code): import-set extraction into CodeFields.imports
+  - 459a745 feat(extract/code): copyright-holder extraction into CodeFields.copyright
+  - dbdb5e2 feat(extract): cross-category airport-code extractor into raw["airports"]
+  - f8dceab feat(extract): cross-category social-handle extractor into raw["social"]
+  - Gate: ruff at baseline 536 (one E501 + one F841 fixup
+    on the docstring detector folded into the docstring
+    commit before push, plus four B033 duplicate-set-item
+    fixups on the IATA catalogue (RUH/TLV/CAI/ANR printed
+    twice across region groups) folded into the airports
+    commit before push) + pytest 2579 passed / 3 skipped
+    in 134.65s. 255 new tests across the 5 features
+    (49 + 60 + 44 + 49 + 53). New CodeFields shipped:
+    docstring str, imports list[str], copyright
+    list[dict[str, str]]. LLM wire format in
+    classify/client.py updated for all three. Two new
+    cross-category raw keys: raw["airports"],
+    raw["social"]. Roadmap refilled with 5 new items
+    (78..82) so backlog stays at 25+ open. Notable
+    placement decisions: docstring detector is
+    language-aware (python prefers triple-quoted, rust
+    prefers `///`/`//!`, default is JSDoc -> python ->
+    rust); import detector runs every language's matcher
+    against every snippet (not gated by language) because
+    OCR captures often mix shells + configs + code; airport
+    extractor uses curated IATA (~250 codes) + ICAO
+    (~150 codes) catalogues with travel-vocabulary anchor
+    fallback so non-catalogue codes (a regional airport) can
+    still tag when the screenshot uses `Flight`/`Gate`/etc;
+    social extractor's @handle matchers (Twitter,
+    Instagram) require a same-line platform anchor so a chat
+    `@user` mention doesn't get mis-attributed.
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
