@@ -1,5 +1,6 @@
 """Category-specific extractors that polish LLM output using OCR text."""
 from .airports import extract_airports
+from .arns import extract_arns
 from .chat import enrich_chat, parse_timestamp
 from .code import (
     detect_comment_density,
@@ -95,4 +96,5 @@ __all__ = [
     "extract_slack_ids",
     "extract_crypto",
     "extract_stripe_ids",
+    "extract_arns",
 ]

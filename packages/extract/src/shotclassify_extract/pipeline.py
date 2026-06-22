@@ -4,6 +4,7 @@ from __future__ import annotations
 from shotclassify_common import Category, ExtractedFields, OCRResult
 
 from .airports import extract_airports
+from .arns import extract_arns
 from .chat import enrich_chat
 from .code import enrich_code
 from .credit_cards import extract_credit_cards
@@ -268,5 +269,21 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if stripe_ids:
         out.raw = dict(out.raw or {})
         out.raw["stripe_ids"] = stripe_ids
+
+    # Cross-category: stash AWS resource ARNs found in the OCR text
+    # under raw["arns"]. ARNs surface in error logs (IAM
+    # "user X is not authorized" on a specific resource), code
+    # snippets (AWS SDK calls), terraform / cloudformation captures
+    # (resource declarations), document captures (security audit
+    # reports), and chat captures (paste-the-ARN-when-asking-for-help).
+    # Each entry is a {service, region, account, resource, arn}
+    # dict so downstream consumers can route on service or region
+    # without re-parsing the ARN. Accepts the three AWS partitions:
+    # ``aws`` (commercial), ``aws-cn`` (China), ``aws-us-gov``
+    # (GovCloud).
+    arns = extract_arns(text)
+    if arns:
+        out.raw = dict(out.raw or {})
+        out.raw["arns"] = arns
 
     return out
