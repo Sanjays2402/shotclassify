@@ -1145,6 +1145,133 @@ def _likely_cause(framework: str, exception: str | None, message: str | None) ->
     return None
 
 
+# NestJS framework log shapes. The official Nest logger prints lines
+# with a distinctive ``[Nest]`` PID prefix and an ``ERROR [<context>]``
+# tag where ``<context>`` is the failing component (``ExceptionsHandler``
+# for the default global filter, or ``HttpExceptionFilter`` /
+# ``RpcExceptionFilter`` / ``WsExceptionFilter`` for custom filter
+# classes; user-defined filters can also surface here).
+#
+# Example shapes:
+#   [Nest] 12345  - 12/22/2026, 10:23:45 AM   ERROR [ExceptionsHandler] User not found
+#   [Nest] 12345 - 12/22/2026, 10:23:45 AM   ERROR [HttpException] Unauthorized
+#   [Nest] 100 - 01/15/2027, 11:22:33 AM   ERROR [ValidationPipe] Validation failed
+#
+# The PID + timestamp formatting is consistent across Nest 6+ but the
+# exact width / punctuation varies between versions; we accept any
+# whitespace between the bracketed prefix and the ERROR tag.
+_NEST_PRELUDE = re.compile(
+    r"\[Nest\][^\n]*?ERROR\s+\[(?P<context>[\w]+(?:Filter|Handler|Pipe|Exception|Guard)?)\]"
+    r"\s*(?P<msg>[^\n]*)",
+    re.MULTILINE,
+)
+
+# Nest commonly throws subclasses of ``HttpException`` whose names
+# follow the ``XxxException`` convention. The exception class is
+# usually printed on a subsequent line (a JS stacktrace header like
+# ``HttpException: Unauthorized`` / ``NotFoundException: User not
+# found`` / ``BadRequestException: Validation failed``).
+_NEST_EXC = re.compile(
+    r"^(?P<exc>(?:Http|NotFound|Unauthorized|Forbidden|BadRequest|Conflict|"
+    r"Gone|UnprocessableEntity|TooManyRequests|InternalServerError|BadGateway|"
+    r"ServiceUnavailable|GatewayTimeout|PayloadTooLarge|NotImplemented|"
+    r"NotAcceptable|RequestTimeout|MethodNotAllowed|MisdirectedRequest|"
+    r"ImATeapot|PreconditionFailed|UnsupportedMediaType|Rpc|"
+    r"Ws|Validation)Exception)"
+    r"\s*:\s*(?P<msg>.*)$",
+    re.MULTILINE,
+)
+
+
+def _parse_nest_error(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    """Return (exception, message, file, line) for a NestJS log, or None.
+
+    Detection requires the ``[Nest]`` PID prefix AND an ERROR tag with
+    a recognised Nest context (``ExceptionsHandler`` / one of the
+    *Filter / *Pipe / *Guard / *Exception suffixed names). When the
+    log also includes a JS-style frame (``at Foo.bar (file.ts:N:M)``)
+    we pull the innermost frame for file + line.
+
+    Returns ``None`` when the text is not recognisably a NestJS log
+    (no ``[Nest]`` prelude or no ERROR tag), so the caller can fall
+    through to the generic Node branch.
+    """
+    if not text:
+        return None
+    prelude = _NEST_PRELUDE.search(text)
+    if prelude is None:
+        return None
+    # Prefer the typed NestJS exception class if printed (most common
+    # in real captures because Nest's filter prints the bare message
+    # on the prelude line PLUS a separate exception-class line in
+    # the stack tail).
+    exc_match = _NEST_EXC.search(text)
+    if exc_match is not None:
+        exc = exc_match.group("exc")
+        # When the exception line has a non-empty message, prefer it
+        # over the prelude message (the prelude often duplicates the
+        # exception message exactly).
+        exc_msg = exc_match.group("msg").strip() or None
+        msg = exc_msg or prelude.group("msg").strip() or None
+    else:
+        # No typed exception class -- fall back to the Nest context
+        # name (ExceptionsHandler / HttpExceptionFilter / etc) as the
+        # exception slot. This still distinguishes Nest errors from
+        # generic JS errors for dashboards.
+        exc = prelude.group("context")
+        msg = prelude.group("msg").strip() or None
+    # Innermost JS frame for file + line (when a stack tail is
+    # printed alongside the Nest prelude). The existing _JS_AT
+    # pattern handles ``at Foo.bar (file.ts:N:M)`` and TypeScript
+    # files (.ts / .tsx) come through fine because the regex
+    # captures up to the first ``:`` -- which a .ts path doesn't
+    # contain except as the line/column separator.
+    file_: str | None = None
+    line_: int | None = None
+    for m in _JS_AT.finditer(text):
+        file_, line_ = m.group(1), int(m.group(2))
+    return exc, msg or "", file_, line_
+
+
+def _nest_likely_cause(exception: str | None, message: str | None) -> str | None:
+    """Return operator-friendly hints for common NestJS errors."""
+    exc = (exception or "").lower()
+    msg = (message or "").lower()
+    if "notfoundexception" in exc or "not found" in msg:
+        return "Resource missing; check route param and DB row before throwing."
+    if "unauthorizedexception" in exc or "unauthorized" in msg:
+        return "Missing / expired auth token; check JWT issuer and guard."
+    if "forbiddenexception" in exc or "forbidden" in msg:
+        return "RBAC denied; check role guard or policy decorator."
+    if "badrequestexception" in exc or "bad request" in msg:
+        return "Request body / params failed validation; check DTO."
+    if "validationexception" in exc or "validation failed" in msg:
+        return "class-validator rejected the payload; check DTO constraints."
+    if "conflictexception" in exc or "conflict" in msg:
+        return "Resource already exists or version conflict; check unique constraint."
+    if "unprocessableentityexception" in exc or "unprocessable" in msg:
+        return "Semantic validation failed; payload is well-formed but invalid."
+    if "toomanyrequestsexception" in exc or "too many requests" in msg:
+        return "Rate-limit hit; back off and retry with jitter."
+    if "internalservererrorexception" in exc or "internal server error" in msg:
+        return "Unhandled downstream failure; check the lower-frame stack."
+    if "badgatewayexception" in exc or "bad gateway" in msg:
+        return "Upstream HTTP call failed; check timeouts and DNS."
+    if "serviceunavailableexception" in exc or "service unavailable" in msg:
+        return "Downstream is down or unhealthy; check health endpoint."
+    if "gatewaytimeoutexception" in exc or "gateway timeout" in msg:
+        return "Upstream call exceeded deadline; raise timeout or add cache."
+    if "rpcexception" in exc:
+        return "Microservice transport (gRPC / TCP / Redis) failure."
+    if "wsexception" in exc:
+        return "WebSocket gateway failure; check connection lifecycle."
+    if "httpexception" in exc:
+        return "HTTP-status exception thrown; check status code and source guard."
+    return None
+
+
 def parse_error_text(text: str) -> ErrorFields:
     if not text:
         return ErrorFields()
@@ -1198,6 +1325,25 @@ def parse_error_text(text: str) -> ErrorFields:
             disp_end = max(disp_start, col_end - trim)
             caret_tail = f" [at {display!r}, col {disp_start}..{disp_end}]"
             msg = (base_msg + caret_tail).strip()
+    elif _NEST_PRELUDE.search(text):
+        # NestJS framework log. Placed BEFORE the generic Node branch
+        # because Nest runs on Node and the ``at Foo.bar (file.ts:N:M)``
+        # frame shape is identical -- without this branch a Nest
+        # exception would tag as ``node`` and dashboards would lose
+        # the framework-specific signal (filters, pipes, guards,
+        # exception classes). The discriminator is the ``[Nest]``
+        # PID prefix combined with an ``ERROR [<context>]`` tag.
+        nest_hit = _parse_nest_error(text)
+        assert nest_hit is not None  # narrowed by the elif guard
+        exc, msg, file_, line_ = nest_hit
+        return ErrorFields(
+            framework="nestjs",
+            exception=exc,
+            message=msg,
+            likely_cause=_nest_likely_cause(exc, msg),
+            file=file_,
+            line=line_,
+        )
     elif _JS_AT.search(text) or "at Object" in text or "node:" in text:
         framework = "node"
         m = _JS_AT.search(text)
