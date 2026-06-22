@@ -19,6 +19,7 @@ from .phones import extract_phones
 from .receipt import enrich_receipt
 from .slack_ids import extract_slack_ids
 from .social import extract_social
+from .stripe_ids import extract_stripe_ids
 from .timezones import extract_timezones
 from .urls import extract_urls
 from .uuids import extract_uuids
@@ -249,5 +250,23 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if crypto:
         out.raw = dict(out.raw or {})
         out.raw["crypto"] = crypto
+
+    # Cross-category: stash Stripe object IDs (customer / charge /
+    # payment_intent / invoice / subscription / product / price /
+    # account / refund / payment_method / setup_intent / checkout_session
+    # / transfer / payout / balance_transaction / file / coupon /
+    # promotion_code / invoice_item / credit_note / tax_rate /
+    # subscription_item / source / token) found in the OCR text under
+    # raw["stripe_ids"]. Stripe IDs surface on dashboard URLs, API
+    # responses pasted into code snippets, webhook payloads in error
+    # logs, and developer chat captures. Each entry is a {kind, id}
+    # dict so downstream consumers don't have to maintain their own
+    # prefix-to-name table. Distinct from raw["slack_ids"] (Slack
+    # workspace IDs) -- Stripe IDs use a typed-prefix + underscore
+    # scheme that's unambiguous.
+    stripe_ids = extract_stripe_ids(text)
+    if stripe_ids:
+        out.raw = dict(out.raw or {})
+        out.raw["stripe_ids"] = stripe_ids
 
     return out

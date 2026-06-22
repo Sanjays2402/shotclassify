@@ -43,6 +43,7 @@ from .pipeline import enrich
 from .receipt import enrich_receipt, parse_receipt_text
 from .slack_ids import extract_slack_ids
 from .social import extract_social
+from .stripe_ids import extract_stripe_ids
 from .timezones import extract_timezones
 from .urls import extract_urls
 from .uuids import extract_uuids
@@ -93,4 +94,5 @@ __all__ = [
     "extract_social",
     "extract_slack_ids",
     "extract_crypto",
+    "extract_stripe_ids",
 ]
