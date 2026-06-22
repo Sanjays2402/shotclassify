@@ -1272,6 +1272,202 @@ def _nest_likely_cause(exception: str | None, message: str | None) -> str | None
     return None
 
 
+# AWS Lambda / boto3 client error shapes. The botocore library is
+# the standard AWS Python SDK and prints errors using a distinctive
+# message format that embeds both the AWS error code AND the API
+# operation that failed:
+#
+#   botocore.exceptions.ClientError: An error occurred (NoSuchBucket)
+#       when calling the HeadBucket operation: The specified bucket
+#       does not exist
+#
+#   botocore.errorfactory.NoSuchKey: An error occurred (NoSuchKey)
+#       when calling the GetObject operation: The specified key does
+#       not exist.
+#
+# Additional boto3 / botocore exception classes that surface in Lambda
+# logs and Python error captures:
+#
+#   * BotoCoreError                 -- generic botocore failure
+#   * EndpointConnectionError       -- network can't reach AWS endpoint
+#   * NoCredentialsError            -- missing AWS_ACCESS_KEY_ID env
+#   * PartialCredentialsError       -- only one of access/secret set
+#   * SSLError                      -- TLS handshake failure
+#   * ReadTimeoutError              -- API call exceeded read timeout
+#   * ConnectTimeoutError           -- TCP connect timed out
+#   * ConnectionError               -- generic boto3 connection error
+#   * ParamValidationError          -- SDK input validation failed
+#   * ProfileNotFound               -- ~/.aws/credentials has no profile
+#   * EventStreamError              -- Kinesis / Lambda streaming
+#   * UnknownServiceError           -- typo in client(service_name)
+#   * WaiterError                   -- waiter.wait() timeout
+#
+# The ClientError message format `An error occurred (CODE) when
+# calling the OPERATION operation:` carries the most useful
+# triage signal. We surface error_code + operation_name in the
+# message slot so dashboards can group by AWS API + error pair
+# without an LLM pass.
+_BOTO_CLIENT_ERROR = re.compile(
+    r"An error occurred\s*\((?P<code>[\w.]+)\)\s+when calling\s+"
+    r"the\s+(?P<op>[\w.]+)\s+operation"
+    r"(?:\s*:\s*(?P<detail>.*))?",
+)
+_BOTO_EXC_HEADER = re.compile(
+    r"(?:^|\n)\s*(?:botocore\.(?:exceptions|errorfactory|client)\.|boto3\.exceptions\.)"
+    r"(?P<exc>[A-Z][\w]+)"
+    r"\s*:?\s*(?P<msg>[^\n]*)",
+)
+
+
+def _parse_boto_error(
+    text: str,
+) -> tuple[str, str, str | None, str | None] | None:
+    """Return (exception, message, error_code, operation) for a boto3
+    error, or None.
+
+    Detection requires EITHER:
+    * A ``botocore.exceptions.X``/``botocore.errorfactory.X``/
+      ``boto3.exceptions.X`` exception header (the standard module
+      paths for the boto3 SDK)
+    * OR a ``botocore.errorfactory.ServiceSpecificError`` (where
+      ServiceSpecificError is a dynamically generated exception
+      class like ``NoSuchKey`` / ``BucketAlreadyExists``)
+    * OR a ``An error occurred (CODE) when calling the OPERATION
+      operation:`` pattern (the canonical ClientError message)
+
+    The error_code and operation_name are extracted from the
+    canonical message when present so dashboards can group by AWS
+    API + error pair. Returns ``None`` when the text is not
+    recognisably a boto3 error.
+    """
+    if not text:
+        return None
+    exc_match = _BOTO_EXC_HEADER.search(text)
+    client_err = _BOTO_CLIENT_ERROR.search(text)
+    # Require at least one of (exception header, client-error message)
+    # to fire. We can't gate on JUST the client-error message because
+    # a doc captured with that phrase isn't necessarily a real error
+    # trace -- the boto exception header is the stronger signal.
+    if exc_match is None and client_err is None:
+        return None
+    # When we have the boto exception header, use it as the exception
+    # name. When we don't (the ClientError message landed without the
+    # surrounding traceback), fall back to "ClientError" so dashboards
+    # still get the AWS-specific tag.
+    if exc_match is not None:
+        exc = exc_match.group("exc")
+        msg_raw = exc_match.group("msg").strip() or None
+    else:
+        exc = "ClientError"
+        msg_raw = None
+    # Prefer the canonical "An error occurred ..." message when it
+    # carries detail; otherwise use whatever message followed the
+    # exception class. We always surface the error code + operation
+    # in a structured tail so dashboards can parse it without
+    # re-running the regex.
+    error_code: str | None = None
+    operation: str | None = None
+    detail: str | None = None
+    if client_err is not None:
+        error_code = client_err.group("code")
+        operation = client_err.group("op")
+        detail = client_err.group("detail")
+        if detail is not None:
+            detail = detail.strip() or None
+    # Compose the final message. Format:
+    #   "<detail> [code=ErrorCode op=OperationName]"
+    # When detail is None, fall back to whatever followed the
+    # exception class header.
+    base = detail or msg_raw or ""
+    parts: list[str] = []
+    if base:
+        parts.append(base)
+    tags: list[str] = []
+    if error_code:
+        tags.append(f"code={error_code}")
+    if operation:
+        tags.append(f"op={operation}")
+    if tags:
+        parts.append("[" + " ".join(tags) + "]")
+    msg = " ".join(parts).strip() or None
+    return exc, msg or "", error_code, operation
+
+
+def _boto_likely_cause(
+    exception: str | None, error_code: str | None, message: str | None
+) -> str | None:
+    """Return operator-friendly hints for common boto3 / AWS errors.
+
+    Inspects BOTH the exception class name AND the AWS error code
+    captured from the canonical ClientError message -- the error
+    code carries the AWS-specific signal (NoSuchBucket vs
+    AccessDenied), while the class name carries the SDK-failure
+    mode (NoCredentialsError vs ClientError).
+    """
+    exc = (exception or "").lower()
+    code = (error_code or "").lower()
+    msg = (message or "").lower()
+    # SDK-level failures (no AWS round trip happened).
+    if "nocredentials" in exc:
+        return (
+            "AWS credentials missing; set AWS_ACCESS_KEY_ID + "
+            "AWS_SECRET_ACCESS_KEY or attach an instance profile."
+        )
+    if "partialcredentials" in exc:
+        return "Only one of access_key / secret_key is set; set both or neither."
+    if "profilenotfound" in exc:
+        return "AWS profile not in ~/.aws/credentials; check AWS_PROFILE env or profile name."
+    if "endpointconnection" in exc:
+        return "Network can't reach the AWS endpoint; check VPC routing / DNS / endpoint URL."
+    if "readtimeout" in exc:
+        return "AWS API call exceeded read timeout; raise timeout or retry with backoff."
+    if "connecttimeout" in exc:
+        return "TCP connect to AWS endpoint timed out; check VPC NAT / endpoint reachability."
+    if "ssl" in exc:
+        return "TLS handshake with AWS endpoint failed; check system CA bundle and TLS version."
+    if "paramvalidation" in exc:
+        return "boto3 SDK input validation failed; check the operation's required params."
+    if "unknownservice" in exc:
+        return "Service name passed to boto3.client() is not recognised; check the spelling."
+    if "waiter" in exc:
+        return "boto3 waiter timed out before the resource reached the target state."
+    if "eventstream" in exc:
+        return "Kinesis / Lambda streaming response stream failed mid-stream."
+    # AWS service-level error codes (a real AWS round trip happened
+    # and the service returned a typed error).
+    if "nosuchbucket" in code:
+        return "S3 bucket does not exist; check the bucket name and region."
+    if "nosuchkey" in code:
+        return "S3 object key does not exist; check the key path."
+    if "bucketalreadyexists" in code or "bucketalreadyownedbyyou" in code:
+        return "S3 bucket name is already taken (globally unique namespace)."
+    if "accessdenied" in code or "access denied" in msg:
+        return "IAM policy denies this action; check the principal's role permissions."
+    if "unauthorizedoperation" in code:
+        return "EC2 / IAM denied the action; check resource-level policies."
+    if "invalidaccesskeyid" in code:
+        return "AWS access key id is invalid or deactivated; rotate or check the key."
+    if "signaturedoesnotmatch" in code:
+        return "Signature mismatch; check the secret key and system clock skew."
+    if "throttling" in code or "throttling" in exc or "ratelimit" in code:
+        return "AWS API rate limit hit; add exponential backoff or request a quota increase."
+    if "limitexceeded" in code or "quotaexceeded" in code:
+        return "AWS service quota exceeded; request a quota increase or reduce usage."
+    if "resourcenotfound" in code:
+        return "Referenced AWS resource doesn't exist; check the ARN / id."
+    if "validationexception" in code:
+        return "AWS service rejected the request shape; check API parameter constraints."
+    if "tokenexpired" in code or "expiredtoken" in code:
+        return "STS session token expired; refresh credentials."
+    if "dependencyfailure" in code:
+        return "Downstream AWS dependency failed; retry or check the dependent service health."
+    if "internalfailure" in code or "internalerror" in code or "servicefailure" in code:
+        return "AWS service-side internal error; retry with exponential backoff."
+    if "serviceunavailable" in code:
+        return "AWS service is temporarily unavailable; retry with backoff."
+    return None
+
+
 def parse_error_text(text: str) -> ErrorFields:
     if not text:
         return ErrorFields()
@@ -1298,6 +1494,34 @@ def parse_error_text(text: str) -> ErrorFields:
         )
     if _PY_TRACE.search(text):
         framework = "python"
+        # boto3 / botocore detection runs FIRST within the Python
+        # branch: when the Python traceback also carries a boto-
+        # specific exception class (``botocore.exceptions.ClientError``,
+        # ``botocore.errorfactory.NoSuchKey``, etc.) OR the canonical
+        # ``An error occurred (CODE) when calling the OPERATION
+        # operation:`` message, we return a framework='boto3' result
+        # with the AWS error code + operation pulled out of the
+        # message. Without this override the trace would tag as
+        # generic ``python`` and dashboards would lose the AWS-specific
+        # signal.
+        boto = _parse_boto_error(text)
+        if boto is not None:
+            boto_exc, boto_msg, error_code, operation = boto
+            # File / line from the innermost Python frame (the boto
+            # exception itself is raised from inside botocore but the
+            # caller's frame is more useful for triage).
+            boto_file: str | None = None
+            boto_line: int | None = None
+            for m in _PY_FRAME.finditer(text):
+                boto_file, boto_line = m.group(1), int(m.group(2))
+            return ErrorFields(
+                framework="boto3",
+                exception=boto_exc,
+                message=boto_msg,
+                likely_cause=_boto_likely_cause(boto_exc, error_code, boto_msg),
+                file=boto_file,
+                line=boto_line,
+            )
         for m in _PY_FRAME.finditer(text):
             file_, line_ = m.group(1), int(m.group(2))
         em = _PY_EXC.search(text)
