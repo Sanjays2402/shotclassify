@@ -238,6 +238,252 @@ _MAX_REACTIONS_PER_MSG = 20
 _MAX_REACTION_ENTRIES = 30
 
 
+# Replied-to / quoted-message detection. Modern chat platforms
+# render a reply by stacking the quoted parent message above the
+# new message. Three common shapes:
+#
+#   * Slack / IRC / email-style: ``> quoted text`` (line-leading
+#     ``>`` prefix on the parent body). Multiple consecutive ``>``
+#     lines collapse into one quote block. The shape may also carry
+#     an attribution header (``> Bob: hi``) where the sender of
+#     the parent is preserved.
+#   * iMessage / WhatsApp / Telegram: a small inline preview block
+#     above the new message body, with the parent's speaker name as
+#     a header and the parent body indented below. We detect the
+#     ``Replying to <name>: <body>`` / ``In reply to <name>:`` /
+#     ``Quoting <name>:`` / ``Reply to <name>:`` shapes.
+#   * Discord: ``> @<user> <body>`` inline form (a reply-mention
+#     printed inside a single bare quote line).
+#
+# Output is a list of ``{"sender", "quoted_sender", "quoted_text",
+# "reply_text"}`` dicts. ``sender`` is the speaker of the REPLY,
+# ``quoted_sender`` is the speaker of the PARENT (None when no
+# attribution was printed), ``quoted_text`` is the parent body
+# with the quote marker stripped, ``reply_text`` is the new
+# message body that follows the quote block (empty string when
+# the reply hasn't started yet on the same OCR line).
+
+# Line-leading ``>`` quote marker. We accept one or more leading
+# spaces before the ``>`` so Discord's slightly-indented form
+# works. The ``>`` MUST be followed by whitespace OR end-of-line
+# so a ``->`` arrow or ``=>`` lambda body doesn't false-positive.
+# Markdown's autolink ``<https://...>`` is unaffected because the
+# ``<`` is the opener, not ``>``.
+_QUOTE_LINE_RE = re.compile(r"^[ \t]{0,4}>[ \t]*(?P<body>.*)$")
+
+# ``Replying to <name>: <body>`` / ``In reply to <name>:`` /
+# ``Quoting <name>:`` / ``Reply to <name>:`` preamble form used
+# by iMessage / WhatsApp / Telegram / Discord. Name is up to 32
+# chars of letters / digits / spaces / dots / underscores /
+# hyphens / single-quotes; body may be empty (the reply hasn't
+# started yet on the same OCR line) or a stripped trailing body.
+_REPLYING_TO_RE = re.compile(
+    r"^(?P<verb>Replying to|In reply to|Quoting|Reply to)\s+"
+    r"(?P<quoted_sender>[A-Za-z][A-Za-z0-9 ._\-']{0,31}?)\s*:\s*"
+    r"(?P<body>.*)$",
+    re.IGNORECASE,
+)
+
+# Slack-style ``> Sender: text`` attribution-inside-quote shape.
+# Recognised when the body inside a ``>`` quote line opens with a
+# capitalised name + ``:`` + body. Distinct from a bare ``> hi``
+# quote line.
+_QUOTE_ATTR_RE = re.compile(
+    r"^(?P<quoted_sender>[A-Z][A-Za-z0-9 _\-]{1,31}):\s+(?P<body>.+)$"
+)
+
+# Discord reply-mention shape: ``> @user body``. The ``@user``
+# token sits inside the ``>`` line. We pull the mention as the
+# quoted_sender (without the ``@``) so downstream consumers can
+# join against ChatFields.mentions.
+_DISCORD_REPLY_RE = re.compile(
+    r"^@(?P<quoted_sender>[A-Za-z_][A-Za-z0-9_.\-]{0,49})\s+(?P<body>.+)$"
+)
+
+
+_MAX_QUOTES = 20
+
+
+def _extract_quotes(text: str) -> list[dict[str, str]]:
+    """Return reply / quote blocks found in ``text``.
+
+    Each entry is a ``{"sender", "quoted_sender", "quoted_text",
+    "reply_text"}`` dict. Order preserves first-seen-in-OCR-text
+    order. Capped at 20 entries.
+
+    Three shapes are recognised:
+      * Line-leading ``>`` quote runs (Slack / IRC / email /
+        Discord). Consecutive ``>`` lines collapse into one
+        ``quoted_text`` body joined by newlines.
+      * ``Replying to <name>:`` preambles (iMessage / WhatsApp /
+        Telegram / Discord). The body after the ``:`` (when
+        present) is the parent body; the FOLLOWING non-empty
+        line is the reply body.
+      * ``> Sender: text`` attribution-inside-quote shapes
+        (Slack quoted-with-attribution).
+    """
+    if not text:
+        return []
+    out: list[dict[str, str]] = []
+    sender_re = re.compile(r"^(?P<sender>[A-Z][A-Za-z0-9 _\-]{1,24}):\s+\S")
+    lines = text.splitlines()
+    current_sender: str | None = None
+    i = 0
+    while i < len(lines) and len(out) < _MAX_QUOTES:
+        line = lines[i]
+        # Replying to <name>: <body> preamble form -- check FIRST so
+        # the sender_re below doesn't mistake "Replying to Alice" as
+        # a transcript speaker named "Replying to Alice".
+        rm = _REPLYING_TO_RE.match(line.strip())
+        if rm:
+            quoted_sender = rm.group("quoted_sender").strip() or None
+            quoted_body = rm.group("body").strip()
+            # Walk forward to find the reply body (the next
+            # non-empty, non-quote-marker line that isn't another
+            # preamble). Skip blank lines.
+            reply_body = ""
+            j = i + 1
+            while j < len(lines):
+                nxt = lines[j].strip()
+                if not nxt:
+                    j += 1
+                    continue
+                if _QUOTE_LINE_RE.match(lines[j]):
+                    # Reply body hasn't started -- skip past any
+                    # additional quoted lines that follow the
+                    # preamble.
+                    j += 1
+                    continue
+                if _REPLYING_TO_RE.match(nxt):
+                    # Another reply chain immediately follows; the
+                    # current reply has no body.
+                    break
+                # Strip a leading Sender: prefix from the reply
+                # body so the reply_text doesn't double up the
+                # speaker name (we already track sender separately).
+                sm2 = sender_re.match(lines[j])
+                if sm2:
+                    reply_body = lines[j][sm2.end() - 1:].strip()
+                else:
+                    reply_body = nxt
+                break
+            entry = {
+                "quoted_text": quoted_body,
+                "reply_text": reply_body,
+            }
+            if current_sender:
+                entry["sender"] = current_sender
+            if quoted_sender:
+                entry["quoted_sender"] = quoted_sender
+            out.append(entry)
+            i += 1
+            continue
+        # Track the current speaker so a `>` block landing inside
+        # a transcript gets attributed to the right reply author.
+        sm = sender_re.match(line)
+        if sm:
+            current_sender = sm.group("sender").strip()
+            # The same line may carry a body that's just text; we
+            # still advance past it normally below.
+        # Line-leading `>` quote run (Slack / IRC / email / Discord).
+        qm = _QUOTE_LINE_RE.match(line)
+        if qm:
+            body_first = qm.group("body").strip()
+            # Check for `> @user body` Discord reply-mention form.
+            dm = _DISCORD_REPLY_RE.match(body_first)
+            if dm:
+                quoted_sender = dm.group("quoted_sender").strip()
+                quoted_body = dm.group("body").strip()
+                bodies = [quoted_body] if quoted_body else []
+            else:
+                # Check for `> Sender: text` attribution form.
+                am = _QUOTE_ATTR_RE.match(body_first)
+                if am:
+                    quoted_sender = am.group("quoted_sender").strip()
+                    bodies = [am.group("body").strip()]
+                else:
+                    quoted_sender = None
+                    bodies = [body_first] if body_first else []
+            # Collapse consecutive `>` lines into one quote block.
+            j = i + 1
+            while j < len(lines):
+                nm = _QUOTE_LINE_RE.match(lines[j])
+                if not nm:
+                    break
+                nb = nm.group("body").strip()
+                if nb:
+                    bodies.append(nb)
+                else:
+                    # A blank `>` line terminates the quote block
+                    # (Slack convention: an empty quoted line marks
+                    # the end of the quoted preamble).
+                    j += 1
+                    break
+                j += 1
+            quoted_text = "\n".join(bodies).strip()
+            # Find the reply body on the next non-empty non-quote
+            # non-preamble line. Strip a leading Sender: prefix.
+            # A subsequent ``>`` line is treated as a NEW quote
+            # block (not skipped), because consecutive `>` runs
+            # separated by a blank line are distinct quotes.
+            reply_body = ""
+            k = j
+            while k < len(lines):
+                nxt = lines[k].strip()
+                if not nxt:
+                    k += 1
+                    continue
+                if _QUOTE_LINE_RE.match(lines[k]):
+                    # Another `>` block starts here -- no reply
+                    # body for the current quote.
+                    break
+                if _REPLYING_TO_RE.match(nxt):
+                    break
+                sm2 = sender_re.match(lines[k])
+                if sm2:
+                    reply_body = lines[k][sm2.end() - 1:].strip()
+                else:
+                    reply_body = nxt
+                break
+            # Skip bare prompt-character lines that produced no
+            # quoted body (just a stray `>`). We require at least
+            # one non-empty quoted body to count as a quote block.
+            if not quoted_text:
+                i = j
+                continue
+            entry = {
+                "quoted_text": quoted_text,
+                "reply_text": reply_body,
+            }
+            if current_sender:
+                entry["sender"] = current_sender
+            if quoted_sender:
+                entry["quoted_sender"] = quoted_sender
+            out.append(entry)
+            i = j
+            continue
+        i += 1
+    return out
+
+
+def _strip_quote_lines(text: str) -> str:
+    """Return ``text`` with line-leading ``>`` quote markers stripped.
+
+    Used by message-parsing helpers that want the body without the
+    quote prefix (so the speaker's actual reply lands in
+    ChatFields.messages rather than the quoted parent).
+    """
+    out_lines: list[str] = []
+    for ln in text.splitlines():
+        m = _QUOTE_LINE_RE.match(ln)
+        if m:
+            # Drop the quote marker line entirely; the reply body
+            # (the next non-quote line) will land in the output.
+            continue
+        out_lines.append(ln)
+    return "\n".join(out_lines)
+
+
 def _is_reaction_line(line: str) -> bool:
     """Return True when ``line`` looks like a reaction footer.
 
@@ -685,6 +931,33 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         seen_reactions.add(rkey)
         reactions.append(r)
 
+    # Replied-to / quoted-message blocks merged with any caller-
+    # supplied quotes. De-dupes on the (sender, quoted_sender,
+    # quoted_text, reply_text) quadruple so an LLM-supplied quote
+    # plus the OCR-parsed identical quote collapses to one entry.
+    # Caller order preserved first.
+    quotes: list[dict[str, str]] = list(existing.quotes) if existing else []
+    seen_quotes: set[tuple[str, str, str, str]] = set()
+    for q in quotes:
+        qk = (
+            q.get("sender", "") or "",
+            q.get("quoted_sender", "") or "",
+            q.get("quoted_text", "") or "",
+            q.get("reply_text", "") or "",
+        )
+        seen_quotes.add(qk)
+    for q in _extract_quotes(text):
+        qk = (
+            q.get("sender", "") or "",
+            q.get("quoted_sender", "") or "",
+            q.get("quoted_text", "") or "",
+            q.get("reply_text", "") or "",
+        )
+        if qk in seen_quotes:
+            continue
+        seen_quotes.add(qk)
+        quotes.append(q)
+
     return ChatFields(
         platform=platform,
         participants=participants,
@@ -694,4 +967,5 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         statuses=statuses,
         edits=edits,
         reactions=reactions,
+        quotes=quotes,
     )

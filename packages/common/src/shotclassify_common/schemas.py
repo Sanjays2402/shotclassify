@@ -692,6 +692,38 @@ class ChatFields(BaseModel):
     # seen-in-OCR order. Capped at 30 entries (per-message), with
     # at most 20 reactions per message.
     reactions: list[dict] = Field(default_factory=list)
+    # Replied-to / quoted-message blocks detected in the screenshot.
+    # Most chat platforms render a reply by showing the quoted parent
+    # message body just above the new message. Three common shapes:
+    #
+    #   * Slack / IRC / email-style: ``> quoted text`` (line-leading
+    #     ``>`` prefix on the parent body).
+    #   * iMessage / WhatsApp / Telegram: a small inline preview
+    #     block above the new message body, with the parent's
+    #     speaker name as a header and the parent body indented or
+    #     italicised below. We detect the ``Replying to <name>: <body>``
+    #     / ``In reply to <name>:`` / ``Quoting <name>:`` shapes.
+    #   * Discord: the ``@<user> > quoted text`` inline form.
+    #
+    # Each entry is a ``{"sender": str | None, "quoted_sender": str | None,
+    # "quoted_text": str, "reply_text": str}`` dict. ``sender`` is the
+    # speaker of the REPLY (the message that's quoting), or ``None``
+    # when the surrounding transcript context doesn't supply one.
+    # ``quoted_sender`` is the speaker of the PARENT message being
+    # quoted (extracted from ``Replying to <name>:`` headers or from
+    # the ``> Sender: text`` Slack-style quoted-with-attribution
+    # shape), or ``None`` for bare ``>`` quote blocks where the
+    # platform doesn't surface a name. ``quoted_text`` is the parent
+    # body with the quote marker / preamble stripped. ``reply_text``
+    # is the new message body that follows the quote block (empty
+    # string when the reply hasn't started yet on the same OCR line).
+    #
+    # Ordering preserves first-seen-in-OCR order. Capped at 20
+    # entries because a single screenshot rarely shows more than a
+    # handful of reply chains. Dashboards use this to thread message
+    # replies without an LLM round trip and to surface "X is
+    # replying to Y" annotations on chat-screenshot cards.
+    quotes: list[dict[str, str]] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):
