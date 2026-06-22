@@ -24,6 +24,7 @@ from .code import (
     extract_imports,
     extract_regex_literals,
     extract_todo_authors,
+    extract_todo_tickets,
 )
 from .credit_cards import extract_credit_cards
 from .crypto import extract_crypto
@@ -111,6 +112,7 @@ __all__ = [
     "extract_copyrights",
     "extract_feature_flags",
     "extract_todo_authors",
+    "extract_todo_tickets",
     "extract_airports",
     "extract_amounts",
     "extract_social",

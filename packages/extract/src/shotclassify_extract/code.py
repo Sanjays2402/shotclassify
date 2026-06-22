@@ -863,6 +863,153 @@ def extract_todo_authors(
     return out
 
 
+# TODO ticket-link matcher. Recognises three ticket-reference shapes
+# that commonly appear alongside a TODO / FIXME / XXX / HACK / BUG /
+# NOTE / OPTIMIZE marker in code comments:
+#
+# * JIRA-style ``PROJECT-NUMBER``: ``JIRA-1234`` / ``ABC-99`` /
+#   ``ENG-455`` / ``PROJ-100`` / ``GH-789``. Project tag is 2..10
+#   ALL-CAPS letters; number is 1..6 digits. The hyphen separator
+#   is required.
+# * GitHub-style hash-prefixed number: ``#1234`` / ``#42``. The
+#   number is 1..6 digits.
+# * Hash-prefixed slug ``#identifier-NUMBER`` (some trackers use
+#   this shape): ``#issue-42`` / ``#bug-99``. The leading identifier
+#   is 2..20 ALL-LOWERCASE letters; trailing number is 1..6 digits.
+#
+# All three forms must sit on the SAME LINE as a recognised marker
+# and inside the comment body (preceded by the language's comment
+# leader, mirroring detect_todo_count + extract_todo_authors).
+# Multiple ticket refs per line each count as a separate entry --
+# a TODO that cites two issues yields two entries.
+#
+# Patterns are ordered most-specific-first so the JIRA matcher
+# claims its spans before the GitHub-slug matcher (which could
+# otherwise mis-tag ``JIRA-1234`` as a slug). The matcher tracks
+# claimed spans within a line.
+_TODO_TICKET_JIRA_RE = re.compile(
+    r"\b(?P<ticket>[A-Z]{2,10}-\d{1,6})\b"
+)
+_TODO_TICKET_HASH_SLUG_RE = re.compile(
+    r"#(?P<slug>[a-z]{2,20}-\d{1,6})\b"
+)
+_TODO_TICKET_HASH_NUM_RE = re.compile(
+    r"#(?P<num>\d{1,6})\b"
+)
+
+# Maximum number of ticket-tagged TODOs returned. Defensive cap.
+_MAX_TODO_TICKETS = 50
+
+
+def extract_todo_tickets(
+    code: str, language: str | None = None
+) -> list[dict[str, str]]:
+    """Return the ticket-tagged TODO / FIXME / XXX / HACK / BUG /
+    NOTE / OPTIMIZE markers found in ``code``.
+
+    Output is a list of ``{"marker", "ticket"}`` dicts preserving
+    first-seen order. Dedupe is intentionally NOT performed because
+    the same ticket may legitimately appear on multiple TODOs
+    (different code paths blocked by the same issue).
+
+    The matcher recognises three ticket shapes:
+
+    * JIRA-style ``PROJECT-NUMBER``: ``JIRA-1234`` / ``ABC-99``.
+    * GitHub-style hash-number: ``#1234`` / ``#42``.
+    * Hash-slug ``#identifier-NUMBER``: ``#issue-42`` / ``#bug-99``.
+
+    Each marker must satisfy ALL of:
+
+    1. ALL-CAPS spelling (case-sensitive). A prose mention
+       ``the bug we fixed`` is not a marker.
+    2. Preceded somewhere on the same line by a comment leader
+       for ``language`` (or ``#`` for unknown languages). Block-
+       comment openers (``/*``, ``\"\"\"``, ``'''``) count when
+       they sit earlier on the same line.
+    3. Followed somewhere on the same line by at least one ticket
+       reference (JIRA / hash-num / hash-slug).
+
+    Within a single line, the three ticket matchers run in
+    priority order (JIRA -> hash-slug -> hash-num) with spans
+    claimed by the earlier matcher excluded from later passes.
+    This prevents ``JIRA-1234`` from being mis-tagged as a slug
+    or having its trailing digits picked up as a hash-num.
+
+    Pure data languages (json / csv / tsv) return an empty list
+    unconditionally because they have no comment syntax to host
+    action markers.
+    """
+    if not code or not code.strip():
+        return []
+    leaders = _comment_leaders_for(language)
+    if not leaders:
+        return []
+    out: list[dict[str, str]] = []
+    marker_re = re.compile(
+        r"\b(?P<marker>" + "|".join(re.escape(m) for m in _TODO_MARKERS) + r")(?![A-Z0-9_])"
+    )
+    for raw in code.splitlines():
+        # Find the FIRST comment opener on the line.
+        first_leader_pos: int | None = None
+        for leader in leaders:
+            pos = raw.find(leader)
+            if pos == -1:
+                continue
+            if first_leader_pos is None or pos < first_leader_pos:
+                first_leader_pos = pos
+        if first_leader_pos is None:
+            continue
+        comment_body = raw[first_leader_pos:]
+        # Find the LAST marker on the line so any ticket reference
+        # after the marker (but on the same line) attributes to that
+        # marker. Most real-world lines have one marker; multi-marker
+        # cases use the last-marker rule for attribution determinism.
+        marker_match: re.Match[str] | None = None
+        for mm in marker_re.finditer(comment_body):
+            marker_match = mm
+        if marker_match is None:
+            continue
+        marker = marker_match.group("marker")
+        # Search for tickets in the WHOLE comment body (not just
+        # after the marker) because some codebases put the ticket
+        # BEFORE the marker (``// #1234 TODO: fix this``).
+        claimed: list[tuple[int, int]] = []
+        # Pass 1: JIRA-style.
+        for m in _TODO_TICKET_JIRA_RE.finditer(comment_body):
+            ticket = m.group("ticket")
+            out.append({"marker": marker, "ticket": ticket})
+            claimed.append((m.start(), m.end()))
+            if len(out) >= _MAX_TODO_TICKETS:
+                return out
+        # Pass 2: hash-slug (skip if overlaps a JIRA match).
+        for m in _TODO_TICKET_HASH_SLUG_RE.finditer(comment_body):
+            if _spans_overlap(m.start(), m.end(), claimed):
+                continue
+            ticket = "#" + m.group("slug")
+            out.append({"marker": marker, "ticket": ticket})
+            claimed.append((m.start(), m.end()))
+            if len(out) >= _MAX_TODO_TICKETS:
+                return out
+        # Pass 3: hash-number (skip if overlaps anything earlier).
+        for m in _TODO_TICKET_HASH_NUM_RE.finditer(comment_body):
+            if _spans_overlap(m.start(), m.end(), claimed):
+                continue
+            ticket = "#" + m.group("num")
+            out.append({"marker": marker, "ticket": ticket})
+            claimed.append((m.start(), m.end()))
+            if len(out) >= _MAX_TODO_TICKETS:
+                return out
+    return out
+
+
+def _spans_overlap(start: int, end: int, claimed: list[tuple[int, int]]) -> bool:
+    """Return True when (start, end) overlaps any (c_start, c_end) in claimed."""
+    for c_start, c_end in claimed:
+        if start < c_end and end > c_start:
+            return True
+    return False
+
+
 # License-header detection. We scan the first ~30 lines of the snippet
 # for the distinctive opening phrase of each common open-source
 # license. Each license catalogues:
@@ -2870,6 +3017,18 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if not todo_authors:
         todo_authors = extract_todo_authors(code, language)
+    # Ticket-tagged TODO extraction. Caller-supplied list wins
+    # (preserved verbatim); otherwise scan the snippet for ticket
+    # references (JIRA-style PROJECT-NUMBER, GitHub #1234,
+    # hash-slug #issue-42) attached to TODO / FIXME / etc markers.
+    # Returns an empty list when no ticket references are present.
+    todo_tickets = (
+        list(existing.todo_tickets)
+        if existing and existing.todo_tickets
+        else []
+    )
+    if not todo_tickets:
+        todo_tickets = extract_todo_tickets(code, language)
     # License-header detection. Caller-supplied value wins; otherwise
     # scan the snippet's header for a recognised open-source license.
     # The detector returns None when no header matches so a TODO-free
@@ -2967,6 +3126,7 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         numbered=numbered,
         todo_count=todo_count,
         todo_authors=todo_authors,
+        todo_tickets=todo_tickets,
         license=license_tag,
         docstring=docstring,
         imports=imports,

@@ -148,6 +148,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             numbered=bool(c.get("numbered") or False),
             todo_count=int(c.get("todo_count") or 0),
             todo_authors=c.get("todo_authors") or [],
+            todo_tickets=c.get("todo_tickets") or [],
             license=c.get("license"),
             docstring=c.get("docstring"),
             imports=c.get("imports") or [],

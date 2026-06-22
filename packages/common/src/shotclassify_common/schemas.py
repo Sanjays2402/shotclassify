@@ -465,6 +465,48 @@ class CodeFields(BaseModel):
     # author may legitimately own multiple TODOs in one snippet
     # and we want to count all of them.
     todo_authors: list[dict[str, str]] = Field(default_factory=list)
+    # TODO / FIXME tracker tickets referenced from code comments. Many
+    # codebases include a JIRA / GitHub-issue / Linear / Asana ticket
+    # ref alongside a TODO so the comment links back to the work
+    # item:
+    #
+    #   # TODO(JIRA-1234): wire up retry logic
+    #   // FIXME: ABC-99 - off-by-one on binary search
+    #   /* HACK: see #issue-42 */
+    #   // TODO PROJ-100 deprecate this once Foo is replaced
+    #   # NOTE: GH-789 covers the rewrite
+    #   // BUG ENG-455: race condition under load
+    #
+    # Each entry is a ``{"marker": str, "ticket": str}`` dict
+    # capturing the marker (TODO / FIXME / XXX / HACK / BUG / NOTE /
+    # OPTIMIZE) and the canonical ticket identifier:
+    #
+    # * JIRA-style ``PROJECT-NUMBER`` (case-insensitive project tag,
+    #   2..10 ALL-CAPS letters, hyphen, 1..6 digits): ``JIRA-1234``,
+    #   ``ABC-99``, ``PROJ-100``, ``ENG-455``, ``GH-789``.
+    # * GitHub-style hash-prefixed ``#NUMBER`` (issue / PR reference;
+    #   1..6 digits): ``#1234``, ``#42``.
+    # * Hash-prefixed slug ``#identifier-NUMBER`` (some bug-trackers
+    #   use this shape): ``#issue-42``, ``#bug-99``.
+    #
+    # The matcher requires the ticket to sit on the SAME LINE as the
+    # marker and inside the comment body (preceded by the language's
+    # comment leader, mirroring the ``todo_count`` / ``todo_authors``
+    # rules). Multiple tickets per marker count separately so a TODO
+    # that cites two issues yields two entries. Capped at 50.
+    #
+    # Distinct from ``todo_authors`` because that slot captures
+    # ``MARKER(author)`` (a human handle); this slot captures the
+    # ticket / issue reference (a work-item identifier). The two
+    # CAN coexist on the same marker: ``TODO(alice): #1234`` would
+    # populate both slots.
+    #
+    # Dashboards use this list to:
+    # * Surface "this snippet references 3 open JIRA tickets"
+    # * Detect dead-ticket references (a TODO mentioning #42 when
+    #   the issue is closed)
+    # * Group TODOs by tracker for engineering reviews
+    todo_tickets: list[dict[str, str]] = Field(default_factory=list)
     # Detected open-source license header at the top of the snippet,
     # as a short SPDX-style tag: ``mit`` / ``apache-2.0`` / ``gpl-3.0`` /
     # ``gpl-2.0`` / ``lgpl-3.0`` / ``bsd-2-clause`` / ``bsd-3-clause`` /
