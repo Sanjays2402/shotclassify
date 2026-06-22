@@ -9,6 +9,7 @@ from .chat import enrich_chat
 from .code import enrich_code
 from .credit_cards import extract_credit_cards
 from .crypto import extract_crypto
+from .discord_ids import extract_discord_ids
 from .emails import extract_emails
 from .error import enrich_error
 from .git_shas import extract_git_shas
@@ -285,5 +286,24 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if arns:
         out.raw = dict(out.raw or {})
         out.raw["arns"] = arns
+
+    # Cross-category: stash Discord snowflake IDs (user / channel /
+    # role / guild / message / webhook / raw) found in the OCR text
+    # under raw["discord_ids"]. Discord IDs surface in code snippets
+    # (discord.py / discord.js SDKs), error logs from those clients,
+    # chat captures of Discord conversations (the
+    # ``<@123456789012345678>`` mention syntax), and document
+    # captures of Discord API responses. Each entry is a {kind, id}
+    # dict.
+    #
+    # The bare snowflake matcher REQUIRES a Discord-context anchor
+    # because a 17..19 digit decimal blob is too common (UNIX
+    # nanosecond timestamps, sequence numbers, opaque IDs from
+    # other systems) to land safely without an anchor. Webhook
+    # tokens are NEVER emitted (security guarantee).
+    discord_ids = extract_discord_ids(text)
+    if discord_ids:
+        out.raw = dict(out.raw or {})
+        out.raw["discord_ids"] = discord_ids
 
     return out

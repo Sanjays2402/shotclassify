@@ -20,6 +20,7 @@ from .code import (
 )
 from .credit_cards import extract_credit_cards
 from .crypto import extract_crypto
+from .discord_ids import extract_discord_ids
 from .emails import extract_emails
 from .error import (
     enrich_error,
@@ -97,4 +98,5 @@ __all__ = [
     "extract_crypto",
     "extract_stripe_ids",
     "extract_arns",
+    "extract_discord_ids",
 ]
