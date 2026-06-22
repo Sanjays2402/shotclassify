@@ -208,6 +208,26 @@ class ReceiptFields(BaseModel):
     # exact amount). Dashboards use the (tendered, change) pair to
     # spot till-discrepancy anomalies.
     change: float | None = None
+    # Cash-rounding adjustment printed on receipts in countries where
+    # small denomination coins are out of circulation (Australia,
+    # Canada, Denmark, Finland, Hungary, Ireland, Netherlands, New
+    # Zealand, Norway, Sweden, Switzerland, etc.). The printer
+    # typically adds a single line like:
+    #
+    #   Rounding             -0.02
+    #   Cash Rounding         0.03
+    #   Rounding Adjustment  -0.04
+    #   Cash Discrepancy      0.01
+    #
+    # to round the cash-payable total to the nearest 5 cents (NZD,
+    # AUD, CAD) or the nearest 10 cents / NOK (NZD legacy, NOK, SEK).
+    # The amount is stored SIGNED so dashboards know whether the
+    # customer benefited from rounding (negative) or paid a tiny
+    # premium (positive). ``None`` for normal receipts that do not
+    # apply cash-rounding. Distinct from ``discount`` (a marketing
+    # reduction the merchant chose) and ``change`` (the bills /
+    # coins handed back); rounding is a regulatory adjustment.
+    rounding: float | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 

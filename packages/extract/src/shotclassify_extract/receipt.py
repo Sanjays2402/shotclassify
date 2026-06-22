@@ -245,6 +245,90 @@ def _find_change(text: str) -> float | None:
     return None
 
 
+# Cash-rounding keywords printed on receipts in countries where small
+# denomination coins are out of circulation. Ordered MOST-SPECIFIC
+# first so multi-word forms win over short aliases. The bare
+# ``rounding`` alias is the catch-all because that's the shortest
+# unambiguous wording -- it does NOT misfire on prose because
+# receipt OCR rarely contains full prose AND the regex requires a
+# digit-amount immediately after the keyword.
+_ROUNDING_KEYWORDS = (
+    "rounding adjustment",
+    "cash rounding",
+    "cash discrepancy",
+    "rounding",
+    "round down",
+    "round up",
+)
+
+
+def _find_signed_amount_after(text: str, keyword: str) -> float | None:
+    """Return the SIGNED amount on the same line as ``keyword``.
+
+    Mirrors ``_find_amount_after`` but captures an optional leading
+    ``-`` (and an optional leading ``+`` for symmetry) on the
+    amount. Cash-rounding adjustments are typically NEGATIVE on the
+    receipt (the customer paid 0.02 less than the printed total) so
+    a sign-aware capture is required -- the unsigned helper would
+    return the absolute value and lose the sign.
+
+    Returns the LAST occurrence on the same principle as
+    ``_find_amount_after`` (a keyword that appears more than once
+    is read last-wins).
+    """
+    pattern = re.compile(
+        # Separator class is `:` ONLY (not `-`) because a leading
+        # ``-`` immediately after the keyword belongs to the SIGN,
+        # not the separator. ``_find_amount_after``'s own ``[:\-]?``
+        # would consume the minus and leave the amount unsigned --
+        # we cannot reuse it here.
+        #
+        # Sign can appear EITHER before the currency symbol
+        # (``-$0.02``) OR after it (``$-0.02``). We capture both
+        # placements but emit a single ``sign`` group that fires
+        # whichever side carried it.
+        rf"(?:(?<=\n)|(?<=^)|(?<=[^a-zA-Z])){re.escape(keyword)}\s*:?\s*"
+        r"(?P<sign1>[+\-])?\s*[$€£¥]?\s*(?P<sign2>[+\-])?\s*"
+        r"(?P<amt>\d{1,5}(?:[.,]\d{2}))",
+        re.IGNORECASE,
+    )
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return None
+    last = matches[-1]
+    amt = float(last.group("amt").replace(",", "."))
+    sign = last.group("sign1") or last.group("sign2")
+    if sign == "-":
+        amt = -amt
+    return amt
+
+
+def _find_rounding(text: str) -> float | None:
+    """Return the cash-rounding adjustment, or None.
+
+    Recognises "Rounding -0.02", "Cash Rounding 0.03", "Rounding
+    Adjustment -0.04", "Cash Discrepancy 0.01", "Round Down 0.02",
+    "Round Up 0.03" (case-insensitive). The sign is preserved (a
+    leading ``-`` on the amount is captured) so dashboards know
+    whether the customer benefited (negative) or paid a tiny
+    premium (positive).
+
+    LAST-occurrence semantics for consistency with the other
+    ``_find_amount_after`` callers. ``None`` when no rounding line
+    is printed (the common case in countries that still use 1c / 2c
+    coins).
+
+    Distinct from ``discount`` (a marketing reduction the merchant
+    chose) and ``change`` (the bills / coins handed back); rounding
+    is a regulatory adjustment for small-coin scarcity.
+    """
+    for keyword in _ROUNDING_KEYWORDS:
+        value = _find_signed_amount_after(text, keyword)
+        if value is not None:
+            return value
+    return None
+
+
 # SKU / barcode / UPC / EAN / Item-Code / PLU printed alongside the
 # line item. Recognised wording (case-insensitive; ordered
 # most-specific-first so a "Item Code" beats a bare "Item #"):
@@ -1360,6 +1444,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         delivery_fee=_find_delivery_fee(text),
         tendered=_find_tendered(text),
         change=_find_change(text),
+        rounding=_find_rounding(text),
         items=_parse_items(text),
     )
 
@@ -1375,6 +1460,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "party_size", "refund_amount", "loyalty_id", "store_id",
         "register_id", "cashier", "server", "signature",
         "service_charge", "delivery_fee", "tendered", "change",
+        "rounding",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
