@@ -4,7 +4,8 @@ This module is the single source of truth for what counts as PII inside
 shotclassify. The :func:`redact_text` helper takes a string and a set of
 mode names (``email``, ``phone``, ``ssn``, ``credit_card``, ``ip``,
 ``iban``, ``jwt``, ``aws_access_key``, ``github_token``,
-``slack_token``, ``address``, ``passport``) and returns a copy with
+``slack_token``, ``address``, ``passport``, ``drivers_license``,
+``bank_account``) and returns a copy with
 each match replaced by a typed placeholder such as ``[REDACTED:email]``
 or ``[REDACTED:aws_access_key]``. The :func:`redact_fields` helper
 walks an arbitrary JSON-shaped value (dict / list / str) and applies
@@ -262,6 +263,56 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.IGNORECASE,
         ),
     ),
+    (
+        # US bank routing + account numbers. Banks print these as a
+        # paired block at the bottom of checks and on every ACH /
+        # wire transfer setup screen. Both halves are surface-area
+        # for credential leakage and deserve their own redact mode
+        # so a tenant can opt in independently of the SSN /
+        # credit-card / IBAN modes.
+        #
+        # We accept three label forms:
+        #
+        #   Routing: 123456789      Account: 987654321
+        #   ABA: 123456789          A/C: 987654321
+        #   ABA Routing #: 123456789  Account No: 987654321
+        #
+        # Plus the line-paired form found at the bottom of paper
+        # checks (the MICR encoding line that prints routing,
+        # account, and check number in fixed positions):
+        #
+        #   :123456789: 987654321 1234
+        #
+        # The routing matcher REQUIRES the word ``routing`` /
+        # ``ABA`` / ``RTN`` immediately before the candidate.
+        # The account matcher REQUIRES ``account`` / ``acct`` /
+        # ``a/c`` / ``acc no`` immediately before the candidate.
+        # Bare 9-digit and bare 8-12 digit runs without the label
+        # are LEFT UNCHANGED to avoid false-positiving on every
+        # phone number / receipt order number / passport.
+        #
+        # Routing numbers are EXACTLY 9 digits per ABA spec.
+        # Account numbers vary widely (4-17 digits per US banking
+        # convention -- 4-digit savings account suffix at one
+        # extreme, 17-digit Chase business account at the other);
+        # we accept 6-17 digits inclusive to balance recall vs
+        # false-positive risk.
+        #
+        # When the label appears with a colon / hash / period /
+        # space separator we tolerate up to 5 separator chars
+        # between the label and the number so ``Account No. 12345``
+        # works as well as ``Account#12345``.
+        "bank_account",
+        re.compile(
+            r"\b(?:routing\s*(?:no\.?|number|#)?|aba(?:\s*routing)?"
+            r"(?:\s*(?:no\.?|number|#))?|rtn"
+            r"|account\s*(?:no\.?|number|#)?|acct\.?\s*(?:no\.?|#)?"
+            r"|a/c(?:\s*(?:no\.?|number|#))?|acc(?:\.|t)?"
+            r"\s*(?:no\.?|number|#)?)\s*[:#.\s]{0,5}"
+            r"(?P<num>\d{6,17})\b",
+            re.IGNORECASE,
+        ),
+    ),
 )
 
 
@@ -346,6 +397,21 @@ def redact_text(text: str, modes: Iterable[str] | None) -> str:
                     + m.string[end:whole_end]
                 )
             out = pattern.sub(_sub_drivers_license, out)
+        elif mode == "bank_account":
+            # Mirrors the passport / drivers_license modes: replace
+            # only the captured ``num`` group so the reader still
+            # sees the ``Routing: `` / ``Account No: `` label and
+            # knows the field WAS bank credential data without the
+            # number leaking.
+            def _sub_bank_account(m: re.Match[str]) -> str:
+                start, end = m.span("num")
+                whole_start, whole_end = m.span()
+                return (
+                    m.string[whole_start:start]
+                    + _placeholder("bank_account")
+                    + m.string[end:whole_end]
+                )
+            out = pattern.sub(_sub_bank_account, out)
         else:
             out = pattern.sub(_placeholder(mode), out)
     return out

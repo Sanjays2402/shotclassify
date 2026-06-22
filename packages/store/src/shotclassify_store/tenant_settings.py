@@ -310,6 +310,18 @@ PII_REDACT_MODES: tuple[str, ...] = (
     # ``DL: `` label so a reader knows the field WAS a license
     # without the number leaking.
     "drivers_license",
+    # Bank-account / routing-number mode added in autoship tick 17.
+    # Captures the label + 6-17 digit account / 9-digit routing
+    # number pairs printed at the bottom of checks and on ACH /
+    # wire transfer setup screens. Requires the word ``Routing`` /
+    # ``ABA`` / ``RTN`` / ``Account`` / ``Acct`` / ``A/C`` (case-
+    # insensitive) immediately before the candidate so a bare 9-
+    # digit run does NOT misfire (avoids overlap with phone, SSN,
+    # passport, order numbers). The redaction strips ONLY the
+    # number, leaving the ``Routing: `` / ``Account: `` label so
+    # a reader knows the field WAS bank credential data without
+    # the number leaking.
+    "bank_account",
 )
 
 
