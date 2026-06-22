@@ -4,6 +4,7 @@ from .arns import extract_arns
 from .chat import enrich_chat, parse_timestamp
 from .code import (
     detect_comment_density,
+    detect_css_vendor_prefixes,
     detect_docstring,
     detect_fence_language,
     detect_framework,
@@ -70,6 +71,7 @@ __all__ = [
     "detect_todo_count",
     "detect_ts_features",
     "detect_comment_density",
+    "detect_css_vendor_prefixes",
     "enrich_code",
     "enrich_error",
     "parse_error_text",

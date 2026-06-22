@@ -494,6 +494,30 @@ class CodeFields(BaseModel):
     # Capped at 50 entries. Empty list when no flag-client calls
     # are present.
     feature_flags: list[dict[str, str]] = Field(default_factory=list)
+    # CSS vendor-prefix tags found in the snippet. Each entry is one
+    # of the canonical CSS vendor prefixes:
+    #
+    #   ``-webkit-``  -- Chrome / Safari / Edge
+    #   ``-moz-``     -- Firefox
+    #   ``-ms-``      -- Internet Explorer / legacy Edge
+    #   ``-o-``       -- Opera (Presto)
+    #   ``-khtml-``   -- Konqueror (legacy)
+    #
+    # The detector scans CSS-family snippets (language ``css`` /
+    # ``scss`` / ``sass`` / ``less`` / ``stylus``) for property
+    # declarations and CSS function calls that use a vendor prefix.
+    # Tags are de-duped first-seen-order so a snippet with five
+    # ``-webkit-`` rules surfaces ``-webkit-`` once.
+    #
+    # Dashboards use this list to surface "this CSS still ships
+    # legacy vendor prefixes" annotations on code-review screenshots
+    # and to flag stylesheets that can be modernised by removing
+    # obsolete prefixes (most webkit prefixes have been unprefixed
+    # since 2016+; ms / o prefixes are essentially dead).
+    #
+    # Empty list when the snippet is non-CSS or has no recognised
+    # vendor-prefix usage.
+    css_vendor_prefixes: list[str] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):

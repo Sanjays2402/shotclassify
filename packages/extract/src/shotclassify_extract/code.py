@@ -1963,6 +1963,106 @@ def extract_feature_flags(code: str) -> list[dict[str, str]]:
     return out
 
 
+# CSS vendor-prefix detection. CSS-family snippets (css / scss /
+# sass / less / stylus) sometimes still ship vendor-prefixed
+# properties for legacy browser support. We surface the unique set
+# of prefixes used so dashboards can flag stylesheets that can be
+# modernised:
+#
+#   ``-webkit-``  -- Chrome / Safari / Edge (still common for
+#                    text-fill / appearance / scrollbar shadow)
+#   ``-moz-``     -- Firefox (almost-extinct now; some -moz-osx-
+#                    rules linger on macOS-specific code paths)
+#   ``-ms-``      -- Internet Explorer / legacy Edge (essentially
+#                    dead in modern stacks)
+#   ``-o-``       -- Opera Presto (dead since 2013)
+#   ``-khtml-``   -- Konqueror (dead since 2010)
+#
+# Detection rule: scan the CSS body for any token matching
+# ``-(webkit|moz|ms|o|khtml)-`` followed by an identifier-start
+# char (letter or hyphen). Both property names (``-webkit-transform``)
+# and CSS function calls (``-webkit-linear-gradient(...)``) qualify.
+# The detector is language-gated so non-CSS snippets that happen to
+# contain a ``-webkit-`` substring in a comment / string don't
+# false-positive.
+#
+# Output is the list of unique prefixes found, in first-seen-in-text
+# order, each with its trailing hyphen preserved (``-webkit-``, NOT
+# ``webkit``) so dashboards can render the canonical CSS-property
+# form verbatim.
+_CSS_VENDOR_PREFIX_RE = re.compile(r"-(?P<vendor>webkit|moz|ms|o|khtml)-[A-Za-z]")
+
+# Languages where the prefix detector runs. CSS preprocessors share
+# the property-declaration syntax so vendor prefixes appear in all of
+# them. ``css`` is the obvious one; ``scss`` / ``sass`` / ``less`` /
+# ``stylus`` all carry the same vendor-prefix vocabulary.
+_CSS_LANGUAGES = frozenset({"css", "scss", "sass", "less", "stylus"})
+
+
+def detect_css_vendor_prefixes(
+    code: str, language: str | None = None
+) -> list[str]:
+    """Return the unique set of CSS vendor prefixes used in ``code``.
+
+    Each entry includes the leading and trailing hyphen so the output
+    is directly usable as a property-prefix in CSS rendering
+    (``-webkit-``, ``-moz-``, ``-ms-``, ``-o-``, ``-khtml-``).
+
+    Language-gated with a content fallback: we run the matcher when
+    ``language`` is in :data:`_CSS_LANGUAGES` OR when the snippet
+    contains BOTH a vendor-prefix candidate AND a property-declaration
+    marker (``:`` followed by a value-like token and a ``;`` /
+    closing brace within 200 chars). This double-check lets us still
+    surface prefixes when the language detector mis-tagged a CSS
+    snippet (pygments occasionally returns ``gas`` / ``text`` for
+    short CSS bodies) while keeping a JS comment that mentions
+    ``-webkit-`` from false-positiving.
+
+    First-seen-in-text order preserved. The maximum theoretical
+    output length is 5 (the 5 vendor prefixes), so no cap is enforced.
+    """
+    if not code or not code.strip():
+        return []
+    lang_ok = False
+    if language is not None:
+        lang = language.lower().strip()
+        if lang in _CSS_LANGUAGES:
+            lang_ok = True
+    if not lang_ok:
+        # Content fallback: require a vendor-prefix candidate AND a CSS-
+        # like property declaration nearby. The check is intentionally
+        # local (look at +/-200 chars around each candidate) so a
+        # comment-only mention of ``-webkit-`` in a JS file does NOT
+        # qualify.
+        for m in _CSS_VENDOR_PREFIX_RE.finditer(code):
+            start = max(0, m.start() - 200)
+            end = min(len(code), m.end() + 200)
+            window = code[start:end]
+            # CSS property declaration shape: ``property: value;`` --
+            # need a colon followed by characters then a semicolon
+            # somewhere in the window.
+            if _CSS_DECL_RE.search(window):
+                lang_ok = True
+                break
+    if not lang_ok:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _CSS_VENDOR_PREFIX_RE.finditer(code):
+        prefix = f"-{m.group('vendor')}-"
+        if prefix in seen:
+            continue
+        seen.add(prefix)
+        out.append(prefix)
+    return out
+
+
+# CSS-declaration shape used by the content fallback. ``: value;`` with
+# the value containing a real char (not a comment continuation /
+# attribute selector).
+_CSS_DECL_RE = re.compile(r":\s*[^;{}\n]{1,200};")
+
+
 # Markdown code-fence language detection. Markdown wraps code in
 # triple-backtick fences with an optional language tag immediately
 # after the opening fence:
@@ -2337,6 +2437,18 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if not feature_flags:
         feature_flags = extract_feature_flags(code)
+    # CSS vendor-prefix tags. Caller-supplied list wins (preserved
+    # verbatim); otherwise scan the snippet for ``-webkit-`` /
+    # ``-moz-`` / ``-ms-`` / ``-o-`` / ``-khtml-`` prefixes. The
+    # detector is language-gated to CSS-family snippets so a JS
+    # comment that mentions ``-webkit-`` doesn't false-positive.
+    css_vendor_prefixes = (
+        list(existing.css_vendor_prefixes)
+        if existing and existing.css_vendor_prefixes
+        else []
+    )
+    if not css_vendor_prefixes:
+        css_vendor_prefixes = detect_css_vendor_prefixes(code, language)
     return CodeFields(
         language=language,
         code=code,
@@ -2355,4 +2467,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         copyright=copyrights,
         fence_language=fence_language,
         feature_flags=feature_flags,
+        css_vendor_prefixes=css_vendor_prefixes,
     )
