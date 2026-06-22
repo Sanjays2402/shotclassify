@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (87 features tracked, 70 complete)
+## Roadmap (97 features tracked, 75 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -122,34 +122,42 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 86. [x] PII redact: passport-number mode (`passport` mode added; matcher REQUIRES the word `passport` (case-insensitive) immediately before candidate so bare 9-digit runs on receipts don't misfire; recognised label forms: Passport: / Passport No: / Passport No. / Passport Number: / Passport # / Passport ID: with 0-5 separator chars; accepted candidate shapes US/UK 9-digit + Australia 1-letter+7-digit + Germany 1-letter+8-digit + Canada 2-letter+6-digit + Canada 2-letter+7-digit + Germany legacy 1-letter+8-alphanum + mixed 6-9 alphanumerics; redaction strips ONLY the captured `num` group leaving the `Passport: ` label visible to reader so they know field WAS a passport without number leaking; custom `_sub_passport` substitution handler mirrors the credit_card mode's Luhn-gated pattern; 11+ digit runs that fail trailing word-boundary are LEFT UNCHANGED rather than partially redacted as safety property; added to PII_REDACT_MODES allow-list).
 
 
+### Done in tick 15 (5 features)
+59. [x] Extract: cross-category currency-amount extractor into `raw["amounts"]` (list of `{currency, amount}` dicts; ISO 4217 codes USD/EUR/GBP/JPY/CAD/AUD/CHF/CNY/INR/MXN/BRL/ZAR/SGD/HKD/NZD/SEK/NOK/DKK/KRW/RUB/TRY/PLN/CZK/HUF/THB/IDR/ILS/PHP/MYR/TWD/VND/AED/SAR/QAR/EGP/NGN/RON/ARS/CLP/COP/PEN/UYU/BGN/HRK/ISK + RMB alias->CNY; 4 shapes: symbol-prefix `$12.99`/`€10,50`/`A$5.50`/`HK$10`/`NZ$8`/`US$50`/`S$10`/`R$25`/`₹500`/`₽1,200`/`₩50,000`/`₪80`/`₺25`/`₫10000`/`₱100`/`฿350`/`₴25`/`₸150`/`₵80`; symbol-suffix `12.99$`/`10,50€`/`99£`; ISO-prefix `USD 12.99`; ISO-suffix `12.99 USD`; decimal normalisation handles US `1,234.56` AND EU `1.234,56` AND French `1 234,56` via rightmost-separator-is-decimal heuristic with group-size disambiguation; sign captured but stored positive because refund/change/rounding receipt fields carry signed semantics; ISO codes validated against curated 40-code set so stray three-letter prose words don't false-positive; dedupe on (currency, amount) pair; cap 100).
+95. [x] Extract: cross-category postal-code extractor into `raw["postal_codes"]` (list of `{country, code}` dicts; 10 countries with ISO 3166-1 alpha-2 country tags; self-anchored shapes UK postcode `SW1A 1AA` (canonicalised to outward+space+inward), Canadian `K1A 0B1` (first-letter-not-D/F/I/O/Q/U), Japanese `100-0001`, Brazilian CEP `01310-100`, Dutch `1011 AB`; anchored shapes require same-line country/state/city anchor: US ZIP 5 or 5+4 needs 2-letter state from curated 56-set (50 states + DC + 5 territories), German PLZ 5-digit + Deutschland/Germany/PLZ label / 25 major cities, French CP 5-digit + France/CP/16 cities (00xxx rejected because dept 0 doesn't exist), Australian 4-digit + state NSW/VIC/QLD/WA/SA/TAS/ACT/NT or Australia anchor, Indian PIN 6-digit + India/IN/PIN/Pincode/16 major cities; anchored shapes need the anchor because bare digit-runs of those lengths false-positive too easily; dedupe on (country, code) pair; cap 50).
+97. [x] Code: regex literal extraction into `CodeFields.regexes` (list of `{flavor, pattern, flags}` dicts; 8 flavors: js (slash-delimited /pattern/flags with division-vs-regex disambiguation via left-context lookbehind for line-start / opener / operator / control keyword + flag set gimsuyd), python (re.compile/match/search/fullmatch/findall/finditer/sub/subn/split with raw-string OR plain string), ruby (%r{}/%r()/%r[]/%r<> paired-delimiter literals + %r/.../%r!...!  / %r@...@ same-delimiter; per-pair patterns so inner character class never prematurely terminates), perl (qr/.../ + qr{}/qr()/qr[]/qr<> with imsxoadlu flag set), go (regexp.MustCompile / regexp.Compile with backtick raw-string OR double-quoted), java (Pattern.compile), rust (Regex::new with r"..." OR r#"..."# OR plain string), c# (new Regex / Regex.Match / Regex.IsMatch / Regex.Matches / Regex.Replace / Regex.Split with @"..." verbatim OR plain string); runs every flavor against every snippet not gated by detected language because OCR captures often mix configs+scripts+code; dedupe on (flavor, pattern, flags) tuple; first-seen order; cap 50; LLM wire-format updated).
+77. [x] Chat: edited-message marker detection into `ChatFields.edits` (list of `{sender, text, tail}` dicts; recognised markers (case-insensitive): parenthesised `(edited)` generic/WhatsApp, `(edited 2m)`/`(edited 5h)` Discord, `(edited just now)`/`(edited 12 minutes ago)` Slack, `(edited 2024-01-01)` some clients, `(modified)`/`(updated)` bot variants, bracketed `[edited]` Telegram bots, inline trailing `edited at 12:34` Slack web, `edited 2m ago` inline elapsed form; substring defence on unedited/credited/discredited via space-preceded lookbehind on inline form; end-of-line anchor enforced so mid-line `(edited)` doesn't fire; tail normalisation lowercased + whitespace-collapsed; sender extracted from leading `Sender: text` shape when present; dedupe on (sender, text, tail) triple; cap 30; LLM wire-format updated).
+32. [x] Chat: per-message emoji reaction counts into `ChatFields.reactions` (list of `{sender, reactions: [{emoji, count}, ...]}` dicts; Slack shortcode form `:eyes: 3` with shortcode regex `[a-z0-9_+-]{1,40}` (+/- preserved for :+1:/:-1:), Discord inline Unicode emoji + count with emoji range U+1F300..U+1FAFF (faces/gestures/hands/objects) + U+2600..U+27BF BMP miscellaneous symbols + U+FE0F variation selector, iMessage reaction-by lines `❤️ by Alice` (speaker = REACTOR not author), WhatsApp `❤️ 3`; per-line _is_reaction_line heuristic: at least one emoji+count match AND matched chars >= 30% of non-whitespace content so regular prose containing trailing emoji+number doesn't fire; sender attribution to nearest preceding `Sender:` line; iMessage reaction-by overrides current_sender with reactor name; dedupe on (sender, tuple-of-(emoji, count)) key; per-message reactions cap 20; total entries cap 30; LLM wire-format updated).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
 16. [ ] Chat: emoji density + reaction-line extraction (the `:eyes: 3` summary footer).
-32. [ ] Chat: emoji reaction counts on a per-message basis (the `❤️ 3 👍 2` footer).
 39. [ ] Chat: replied-to / quoted-message detection (the `> quoted text` line + replied-by attribution above the new message).
 40. [ ] Chat: voice-note / image / video attachment markers (`🎤 Voice (0:42)`, `📷 Photo`, `[Image]`, `[Voice note 0:23]`).
 53. [ ] Chart: bar-chart series-label OCR refinement (split the legend block into a clean `ChartFields.series` list).
 54. [ ] Chart: percent annotations vs raw values heuristic (new `ChartFields.value_unit`: `%` / `count` / `currency` based on axis tick text).
 55. [ ] UI mockup: layout-style guess (new `UIMockupFields.layout_kind`: `dashboard` / `landing` / `form` / `settings` / `modal`).
 56. [ ] PII redact: phone-number redaction mode (`phone` mode; normalises to `<PHONE>` stub form). (Note: a tight `phone` regex already exists in redact.py with `[REDACTED:phone]` placeholder; this would refine to the `<PHONE>` stub form.)
-59. [ ] Extract: cross-category currency-amount extractor into `raw["amounts"]` (cross-category so a code snippet or chat message that quotes a price is surfaced; symbol + ISO code aware).
 65. [ ] Chat: link preview block detection (the inline OG-card with title + description that platforms inline for shared URLs).
 66. [ ] Error: AWS Lambda / boto3 client error extraction (BotoCoreError, ClientError with operation_name + error_code).
 69. [ ] Receipt: tip-jar / suggested-tip table detection (the "10% 12.34 / 15% 18.51 / 20% 24.68" footer table).
 71. [ ] Chart: pie-slice percent extraction from in-pie labels (new ChartFields.slices list of {label, percent}).
 72. [ ] PII redact: drivers-license-number redaction mode (per-state US shape catalogues, the most common 7-9 alphanumeric forms).
 73. [ ] Receipt: gift-card / promo-code redemption detection (new ReceiptFields.gift_card_applied amount + ReceiptFields.promo_code string; "Gift card -25.00" / "Promo code SAVE10 applied" shapes).
-77. [ ] Chat: edited-message marker detection (`(edited)` / `(edited 2m)` tails appended to message bodies on iMessage/Slack/Discord -- surface a parallel `edits` list on ChatFields).
 80. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce).
 81. [ ] Error: Spring Boot WhiteLabel error page parsing (`/error` endpoint HTML that surfaces inside a screenshot -- pull status, timestamp, path, message).
 90. [ ] Receipt: barcode/QR encoding detection in OCR text (vendors print the encoded payload below the barcode -- track which lines look like the encoded payload vs the human-readable text).
 91. [ ] Error: Datadog / Sentry error-fingerprint extraction (the `[abc123]` short-hash that Sentry prints + the dd.trace_id / dd.span_id pair Datadog injects).
 93. [ ] Chat: typing-indicator detection (the bouncing-dots animation OCR may render as `...` or `Alice is typing...`).
 94. [ ] Receipt: tax-jurisdiction breakdown (when a receipt prints multiple tax lines `State Tax 1.50 / County Tax 0.50 / City Tax 0.25` surface as ReceiptFields.tax_lines list of {jurisdiction, amount}).
-95. [ ] Extract: cross-category postal-code extractor into `raw["postal_codes"]` (US 5-digit + 5+4 ZIP, UK postcode SW1A 1AA, Canadian K1A 0B1, German 4-5 digit, French 5 digit etc).
 96. [ ] Error: NestJS exception filter parsing (`ExceptionsHandler` / `HttpException` shape; framework=nestjs).
-97. [ ] Code: regex literal extraction (snippet's regex patterns surfaced; useful for code-review to spot obviously-wrong patterns; new `CodeFields.regexes` list).
+98. [ ] Receipt: line-item modifier / customisation detection (the indented `+ Add bacon` / `- No onions` / `Extra cheese` sublines beneath an item).
+99. [ ] Code: secret/key-literal sniffing into `CodeFields.suspected_secrets` (literal strings that look like API keys / DB credentials / OAuth secrets even when not detected by the typed redact modes).
+100. [ ] Extract: cross-category emoji-density tally into `raw["emoji_density"]` (a single float fraction of chars that are emoji -- a quick "this capture is meme-heavy" signal).
+101. [ ] Error: GraphQL execution error extraction (the `errors` array shape `[{"message", "path", "locations"}]` GraphQL clients print).
+102. [ ] Chart: data-table fallback extraction from a chart screenshot's accompanying legend table (the small `x / y` paired columns that often sit beside the chart).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -507,6 +515,75 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     runs fail the trailing word-boundary and are
     LEFT UNCHANGED as a safety property (better to
     skip than partially redact).
+
+- 2026-06-22 03:53 PT (tick 15, Cake): 5 features.
+  - f451683 feat(extract): cross-category currency-amount extractor into raw["amounts"]
+  - 04ecfde feat(extract): cross-category postal-code extractor into raw["postal_codes"]
+  - 2476f8a feat(extract/code): regex-literal extraction into CodeFields.regexes
+  - bb9a7c6 feat(extract/chat): edited-message marker detection into ChatFields.edits
+  - 4f71f06 feat(extract/chat): per-message emoji reaction counts into ChatFields.reactions
+  - Gate: ruff at baseline 536 (five I001 fixups on the
+    new test files -- ruff wants no blank line between
+    the module docstring and the first `from __future__`
+    import on the next module-level paragraph; all
+    five folded via --fixup + --autosquash into the
+    respective feature commits before push) + pytest
+    3402 passed / 3 skipped in 140.03s. 202 new tests
+    across the 5 features (50 + 49 + 47 + 26 + 30).
+    New CodeFields shipped: regexes. New ChatFields
+    shipped: edits, reactions. Two new cross-category
+    raw keys: raw["amounts"], raw["postal_codes"].
+    LLM wire format in classify/client.py updated for
+    regexes, edits, reactions. Roadmap refilled with
+    5 new items (98..102 -- receipt line-item
+    modifiers, code secret/key-literal sniffing,
+    cross-category emoji-density tally, GraphQL
+    execution errors, chart data-table fallback) so
+    backlog stays at 23 open. Disk-space note: hit
+    "No space left on device" on the initial __init__.py
+    write -- /var/folders had 116MiB free after the
+    leftover pytest-of-sanjay tmpdirs from previous
+    runs filled it; freed 620MiB by removing
+    pytest-of-sanjay/ + go-build cache + node-compile-
+    cache before continuing. Notable design decisions:
+    amounts extractor's decimal normalisation uses the
+    rightmost-separator-is-decimal heuristic with
+    group-size disambiguation -- both US (1,234.56) and
+    EU (1.234,56) conventions land correctly, plus
+    French space-separated (1 234,56); the curated
+    40-code ISO 4217 set prevents stray three-letter
+    prose words (RED / BIG) from registering. Postal-
+    codes extractor splits shapes into self-anchored
+    (UK / CA / JP / BR / NL) where the format alone is
+    unique enough, and anchored (US / DE / FR / AU /
+    IN) where a same-line state / country / city anchor
+    is required because bare digit-runs of those
+    lengths would false-positive; Canadian first-letter
+    restriction enforced (no D/F/I/O/Q/U) per Canada
+    Post spec; French departement-0 rejected because
+    no real CP starts 00xxx. Code regex-literal
+    extractor runs every flavor against every snippet
+    (not gated by detected language) because OCR
+    captures often mix shells+configs+code and a hard
+    language gate would lose hits -- the flavor tag
+    in the output preserves which syntax was matched;
+    JS division-vs-regex disambiguation via
+    left-context lookbehind requiring line-start /
+    opener / operator / control keyword; Ruby /
+    Perl per-delimiter-pair regexes so inner character
+    class never prematurely terminates the match
+    (%r{[a-z]+} captures [a-z]+ correctly). Chat
+    edited-marker detection uses end-of-line $ anchor
+    so a mid-line `(edited)` doesn't fire; substring
+    defence on `unedited`/`credited` via space-preceded
+    lookbehind on inline form. Chat reactions detector
+    uses per-line _is_reaction_line heuristic
+    requiring matched emoji+count chars >= 30% of
+    non-whitespace content so regular prose containing
+    a trailing emoji+number doesn't fire as a footer;
+    iMessage reaction-by `❤️ by Alice` lines override
+    the current_sender with the REACTOR's name (the
+    semantics differ from a normal reaction footer).
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
