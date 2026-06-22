@@ -613,6 +613,25 @@ class ChatFields(BaseModel):
     # entries (a single screenshot rarely shows more than a handful
     # of edits).
     edits: list[dict[str, str]] = Field(default_factory=list)
+    # Per-message emoji reaction counts. Each entry is a
+    # ``{"sender": str | None, "reactions": list[dict]}`` dict
+    # capturing the reaction footer printed below a message body on
+    # Slack / Discord / iMessage / WhatsApp / Teams. Each reaction
+    # in the inner ``reactions`` list is a
+    # ``{"emoji": str, "count": int}`` dict.
+    #
+    # Recognised footer shapes:
+    #   * Slack: ``:eyes: 3  :+1: 2  :tada: 1``
+    #   * Discord: ``👀 3   👍 2   🎉 1`` (inline emoji + count pairs)
+    #   * iMessage: ``❤️ by Alice`` / ``👍 by Bob`` (reaction-by lines)
+    #   * Generic: ``💯 5`` standalone line
+    #
+    # ``sender`` records the speaker the reactions belong to (the
+    # nearest preceding ``Sender:`` line), or ``None`` when the
+    # reactions sit outside a transcript. Ordering preserves first-
+    # seen-in-OCR order. Capped at 30 entries (per-message), with
+    # at most 20 reactions per message.
+    reactions: list[dict] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):

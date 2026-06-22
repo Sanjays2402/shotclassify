@@ -184,6 +184,174 @@ def _extract_edits(text: str) -> list[dict[str, str]]:
     return out
 
 
+# Per-message emoji reaction footer detection. Modern chat platforms
+# show small reaction counters below a message body. The exact
+# format varies:
+#
+#   * Slack (web/desktop):       ``:eyes: 3   :+1: 2   :tada: 1``
+#     (text-form emoji shortcodes followed by a count)
+#   * Discord:                    ``👀 3   👍 2   🎉 1``
+#     (inline Unicode emoji + count pairs separated by 2+ spaces)
+#   * iMessage:                   ``❤️ by Alice`` / ``👍 by Bob``
+#     (reaction-by lines from a single user)
+#   * WhatsApp:                   ``❤️ 3``
+#   * Generic standalone:         ``💯 5``
+#
+# We surface the matches via :func:`_extract_reactions`. The output
+# is a list of ``{"sender", "reactions": [{emoji, count}, ...]}``
+# dicts; ``sender`` is the most recent ``Sender:`` speaker preceding
+# the reaction line in OCR order (``None`` when no transcript
+# speaker is set).
+
+# Slack-style ``:eyes: 3`` shortcode + count.
+_SLACK_REACTION_RE = re.compile(
+    r"(?P<emoji>:(?:[a-z0-9_+\-]{1,40}):)\s+(?P<count>\d{1,4})\b"
+)
+
+# Inline Unicode emoji + count. The emoji is matched as any single
+# character outside the BMP plus a small list of BMP emoji code
+# points we care about (👍 ❤ 🎉 etc.). We use a permissive Unicode
+# range so all common emoji families fire; the digit count must
+# follow within a single non-newline space.
+_REACTION_EMOJI_RE = re.compile(
+    r"(?P<emoji>"
+    # Surrogate-pair emoji (non-BMP). Most reaction-worthy emojis sit
+    # in U+1F300..U+1FAFF (heart variations, gestures, faces, hands).
+    r"[\U0001F300-\U0001FAFF]"
+    # BMP emoji + variation selector (heart ❤️ = U+2764 + U+FE0F).
+    r"|[\u2600-\u27BF](?:\uFE0F)?"
+    r")"
+    r"\s+(?P<count>\d{1,4})\b"
+)
+
+# iMessage "❤️ by Alice" / "👍 by Bob" reaction-by line.
+_REACTION_BY_RE = re.compile(
+    r"(?P<emoji>"
+    r"[\U0001F300-\U0001FAFF]"
+    r"|[\u2600-\u27BF](?:\uFE0F)?"
+    r")"
+    r"\s+by\s+(?P<who>[A-Z][\w\- ]{1,24})\b"
+)
+
+
+_MAX_REACTIONS_PER_MSG = 20
+_MAX_REACTION_ENTRIES = 30
+
+
+def _is_reaction_line(line: str) -> bool:
+    """Return True when ``line`` looks like a reaction footer.
+
+    A reaction footer is a line where the bulk of the content is
+    emoji + count pairs (Slack shortcodes, Discord inline) -- not a
+    regular message body that happens to contain an emoji.
+
+    Heuristic: the line yields at least one (emoji, count) match AND
+    the matches collectively account for the majority of the line's
+    non-whitespace content (>50%).
+    """
+    if not line.strip():
+        return False
+    matches = list(_SLACK_REACTION_RE.finditer(line)) + list(_REACTION_EMOJI_RE.finditer(line))
+    if not matches:
+        return False
+    matched_chars = sum(m.end() - m.start() for m in matches)
+    total_nonspace = sum(1 for ch in line if not ch.isspace())
+    if total_nonspace == 0:
+        return False
+    return matched_chars / max(total_nonspace, 1) >= 0.3
+
+
+def _extract_reactions(text: str) -> list[dict]:
+    """Return per-message reaction footers found in ``text``.
+
+    Each entry is a ``{"sender", "reactions": [{emoji, count}, ...]}``
+    dict; ``sender`` is the most-recent ``Sender:`` speaker
+    preceding the reaction line in OCR order (or ``None`` when no
+    transcript speaker is set).
+
+    De-dupes on the (sender, emoji) pair within a message group --
+    a Slack post that lists ``:eyes: 3 :eyes: 3`` (rare but possible)
+    collapses to one entry. Preserves first-seen-in-OCR order.
+    Capped at 30 entries with at most 20 reactions per message.
+    """
+    if not text:
+        return []
+    sender_re = re.compile(r"^(?P<sender>[A-Z][A-Za-z0-9 _\-]{1,24}):\s+\S")
+    out: list[dict] = []
+    current_sender: str | None = None
+    for line in text.splitlines():
+        sm = sender_re.match(line)
+        if sm:
+            current_sender = sm.group("sender").strip()
+            # The body may still contain reactions if a single line
+            # combines sender + body + reactions; for simplicity we
+            # do NOT scan the body here -- only standalone reaction
+            # lines count as a reaction footer.
+            continue
+        # iMessage-style "❤️ by Alice" reaction-by line is treated
+        # as a one-reaction entry attributed to Alice (the reactor),
+        # not the current_sender.
+        by_matches = list(_REACTION_BY_RE.finditer(line))
+        if by_matches:
+            reactions: list[dict] = []
+            seen_emoji: set[str] = set()
+            who_for_entry: str | None = None
+            for bm in by_matches:
+                emoji = bm.group("emoji")
+                if emoji in seen_emoji:
+                    continue
+                seen_emoji.add(emoji)
+                if who_for_entry is None:
+                    who_for_entry = bm.group("who").strip()
+                reactions.append({"emoji": emoji, "count": 1})
+                if len(reactions) >= _MAX_REACTIONS_PER_MSG:
+                    break
+            entry: dict = {"reactions": reactions}
+            entry["sender"] = who_for_entry
+            out.append(entry)
+            if len(out) >= _MAX_REACTION_ENTRIES:
+                break
+            continue
+        # Regular emoji + count reaction footer.
+        if not _is_reaction_line(line):
+            continue
+        reactions = []
+        seen_emoji = set()
+        # Slack-style shortcodes first.
+        for sm2 in _SLACK_REACTION_RE.finditer(line):
+            emoji = sm2.group("emoji")
+            if emoji in seen_emoji:
+                continue
+            seen_emoji.add(emoji)
+            try:
+                count = int(sm2.group("count"))
+            except (TypeError, ValueError):
+                continue
+            reactions.append({"emoji": emoji, "count": count})
+            if len(reactions) >= _MAX_REACTIONS_PER_MSG:
+                break
+        for em in _REACTION_EMOJI_RE.finditer(line):
+            emoji = em.group("emoji")
+            if emoji in seen_emoji:
+                continue
+            seen_emoji.add(emoji)
+            try:
+                count = int(em.group("count"))
+            except (TypeError, ValueError):
+                continue
+            reactions.append({"emoji": emoji, "count": count})
+            if len(reactions) >= _MAX_REACTIONS_PER_MSG:
+                break
+        if not reactions:
+            continue
+        entry = {"reactions": reactions}
+        entry["sender"] = current_sender
+        out.append(entry)
+        if len(out) >= _MAX_REACTION_ENTRIES:
+            break
+    return out
+
+
 def _extract_statuses(text: str) -> list[dict[str, str]]:
     """Return unique status markers found in ``text``.
 
@@ -494,6 +662,29 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         seen_edits.add(key2)
         edits.append(e)
 
+    # Per-message emoji reaction footers merged with any caller-
+    # supplied reactions. De-dupes on the (sender, tuple-of-(emoji,
+    # count)) key so an LLM-supplied reaction footer plus the OCR-
+    # parsed identical footer collapses to one entry. Caller order
+    # preserved first.
+    reactions: list[dict] = list(existing.reactions) if existing else []
+    seen_reactions: set[tuple[str, tuple]] = set()
+    for r in reactions:
+        rkey = (
+            r.get("sender", "") or "",
+            tuple((x.get("emoji", ""), x.get("count", 0)) for x in r.get("reactions", [])),
+        )
+        seen_reactions.add(rkey)
+    for r in _extract_reactions(text):
+        rkey = (
+            r.get("sender", "") or "",
+            tuple((x.get("emoji", ""), x.get("count", 0)) for x in r.get("reactions", [])),
+        )
+        if rkey in seen_reactions:
+            continue
+        seen_reactions.add(rkey)
+        reactions.append(r)
+
     return ChatFields(
         platform=platform,
         participants=participants,
@@ -502,4 +693,5 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         mentions=mentions,
         statuses=statuses,
         edits=edits,
+        reactions=reactions,
     )
