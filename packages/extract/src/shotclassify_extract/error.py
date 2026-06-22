@@ -575,6 +575,36 @@ def parse_spring_whitelabel(
     return _parse_spring_whitelabel(text)
 
 
+def parse_graphql_error(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    """Return ``(exception, message, path or None, line or None)`` for
+    a GraphQL error response, or ``None`` when no GraphQL error
+    signature is present.
+
+    The exception slot prefers ``extensions.code`` from the first
+    error entry when present (standard GraphQL classification:
+    GRAPHQL_VALIDATION_FAILED / BAD_USER_INPUT / UNAUTHENTICATED /
+    FORBIDDEN / etc); falls back to a generic ``GraphQLError`` tag
+    when no code is included.
+
+    The message slot is the first error's ``message`` field with
+    JSON string escapes unescaped (``\\\"`` -> ``\"``, ``\\n`` ->
+    newline, ``\\u00XX`` -> Unicode). The path slot is the
+    dotted/indexed GraphQL path (``users.0.name``) when present --
+    GraphQL's equivalent of "where in the response did the error
+    happen". The line slot is the source-document line number from
+    ``locations[0].line`` when present.
+
+    Detection requires an ``"errors": [`` array literal AND at least
+    one ``"message": "..."`` field AND one discriminator
+    (``"locations"`` / ``"path"`` / ``"extensions"`` / GraphQL
+    vocabulary) so a generic JSON error response doesn't
+    false-positive.
+    """
+    return _parse_graphql_error(text)
+
+
 def _parse_sql_error(text: str) -> tuple[str, str, str, int | None] | None:
     if not text:
         return None
@@ -1461,6 +1491,336 @@ def _spring_whitelabel_likely_cause(status: int | None, exc: str | None, message
     return None
 
 
+# GraphQL execution error parsing. The GraphQL spec defines a strict
+# error shape that every server library (graphql-js, Apollo, Hasura,
+# Strawberry, graphene, Yoga, Mercurius) emits when execution fails:
+#
+#   {
+#     "errors": [
+#       {
+#         "message": "Cannot query field 'foo' on type 'Query'.",
+#         "locations": [{"line": 3, "column": 5}],
+#         "path": ["users", 0, "name"],
+#         "extensions": {"code": "GRAPHQL_VALIDATION_FAILED"}
+#       }
+#     ],
+#     "data": null
+#   }
+#
+# The shape is unambiguous: an "errors" key holding an array of error
+# objects each carrying "message" + optional "locations" + optional
+# "path" + optional "extensions.code". Compared with the regular HTTP
+# 200 OK status that GraphQL servers conventionally return (errors
+# live in the JSON body, not the HTTP status), this is the ONLY
+# reliable cross-vendor signal that a GraphQL request failed.
+#
+# Detection requires AT LEAST:
+# 1. An ``"errors"`` JSON key (with optional whitespace),
+# 2. AT LEAST one ``"message"`` field somewhere after it,
+# 3. The discriminator vocabulary -- one of the GraphQL-specific
+#    keys (``locations``, ``path``, ``extensions``) OR a GraphQL
+#    vocabulary word (``GraphQL``, ``query``, ``mutation``,
+#    ``subscription``) on the same OCR capture so plain JSON with
+#    an ``errors`` array (a generic API response) isn't false-
+#    positiving.
+#
+# The error code (extensions.code) carries the most useful triage
+# signal because GraphQL servers standardise on a small vocabulary:
+#
+#   GRAPHQL_PARSE_FAILED      - syntax error in the request document
+#   GRAPHQL_VALIDATION_FAILED - field doesn't exist, type mismatch
+#   BAD_USER_INPUT            - argument validation failed
+#   UNAUTHENTICATED           - missing / invalid auth token
+#   FORBIDDEN                 - authenticated but no permission
+#   PERSISTED_QUERY_NOT_FOUND - APQ cache miss
+#   INTERNAL_SERVER_ERROR     - unhandled resolver exception
+#
+# Apollo / Hasura / Yoga all use this vocabulary; non-conformant
+# servers may emit custom codes which we surface verbatim.
+_GRAPHQL_ERRORS_KEY = re.compile(r'"errors"\s*:\s*\[', re.IGNORECASE)
+_GRAPHQL_MESSAGE_FIELD = re.compile(
+    r'"message"\s*:\s*"(?P<msg>(?:[^"\\]|\\.)*)"',
+    re.IGNORECASE,
+)
+_GRAPHQL_CODE_FIELD = re.compile(
+    r'"code"\s*:\s*"(?P<code>[A-Z][A-Z0-9_]{0,79})"',
+    re.IGNORECASE,
+)
+_GRAPHQL_LOCATIONS_FIELD = re.compile(
+    r'"locations"\s*:\s*\[\s*\{\s*"line"\s*:\s*(?P<line>\d+)\s*,\s*"column"\s*:\s*(?P<col>\d+)',
+    re.IGNORECASE,
+)
+_GRAPHQL_PATH_FIELD = re.compile(
+    r'"path"\s*:\s*\[\s*(?P<path>(?:"[^"]*"|\d+)(?:\s*,\s*(?:"[^"]*"|\d+))*)\s*\]',
+    re.IGNORECASE,
+)
+# Discriminator vocabulary -- any of these strongly suggests GraphQL
+# rather than a generic JSON error response. The presence of even
+# one is enough to commit because real GraphQL responses always
+# carry at least one (the spec mandates that errors must be a list
+# and locations/path are conventionally included for actionable
+# diagnostics).
+_GRAPHQL_DISCRIMINATORS = (
+    '"locations"',
+    '"path"',
+    '"extensions"',
+    "graphql",
+    "Apollo",
+    "apollo",
+    "mutation",
+    "subscription",
+    " query ",
+    " query{",
+    " query ",
+)
+
+
+def _parse_graphql_error(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    """Return (exception, message, path, line) for a GraphQL error
+    response, or None.
+
+    Detection requires:
+    * An ``"errors": [`` array literal in the text
+    * At least one ``"message": "..."`` field inside
+    * One discriminator (``"locations"`` / ``"path"`` /
+      ``"extensions"`` / GraphQL vocabulary) so a generic JSON
+      error response doesn't false-positive
+
+    The exception slot prefers ``extensions.code`` when present
+    (the standard GraphQL classification: GRAPHQL_VALIDATION_FAILED,
+    BAD_USER_INPUT, UNAUTHENTICATED, FORBIDDEN, etc); falls back to
+    a generic ``GraphQLError`` tag when no code is included.
+
+    The message slot is the FIRST error's ``message`` field. When
+    multiple errors are present we surface the first because GraphQL
+    typically returns them in document order and the first failure
+    is usually the root cause.
+
+    The file slot is the dotted/indexed GraphQL path (``users.0.name``)
+    when present -- this is GraphQL's equivalent of "where in the
+    response did the error happen". The line slot is the source-
+    document line number from ``locations[0].line`` when present.
+
+    Returns None when the text is not recognisably a GraphQL error
+    response.
+    """
+    if not text:
+        return None
+    if _GRAPHQL_ERRORS_KEY.search(text) is None:
+        return None
+    msg_match = _GRAPHQL_MESSAGE_FIELD.search(text)
+    if msg_match is None:
+        return None
+    # Discriminator check -- one of the GraphQL-specific keys or
+    # vocabulary words must be present somewhere in the capture.
+    text_lower = text.lower()
+    if not any(d.lower() in text_lower for d in _GRAPHQL_DISCRIMINATORS):
+        return None
+    # Unescape JSON string escapes in the message body.
+    raw_msg = msg_match.group("msg")
+    msg = _json_string_unescape(raw_msg)
+    # Pull the extensions.code from the FIRST error entry. We need to
+    # restrict the code search to the same error object as the
+    # message -- otherwise an error array with [error1, error2] could
+    # cross-stitch message of error1 with code of error2. We use a
+    # simple bracket-depth tracker to find the closing brace of the
+    # first error object.
+    first_error_block = _isolate_first_graphql_error(text, msg_match.start())
+    code: str | None = None
+    if first_error_block is not None:
+        code_match = _GRAPHQL_CODE_FIELD.search(first_error_block)
+        if code_match is not None:
+            code = code_match.group("code")
+    # Locations: line + column from the FIRST error's locations[0].
+    line_no: int | None = None
+    if first_error_block is not None:
+        loc_match = _GRAPHQL_LOCATIONS_FIELD.search(first_error_block)
+        if loc_match is not None:
+            try:
+                line_no = int(loc_match.group("line"))
+            except ValueError:
+                line_no = None
+    # Path: GraphQL ``path`` is an array of string + int segments.
+    # We render it as a dotted string for the file slot, matching
+    # how GraphQL clients display it (``users.0.name``).
+    path_str: str | None = None
+    if first_error_block is not None:
+        path_match = _GRAPHQL_PATH_FIELD.search(first_error_block)
+        if path_match is not None:
+            raw_path = path_match.group("path")
+            # Parse the comma-separated segments: each is either a
+            # quoted string or a bare integer.
+            segments: list[str] = []
+            for seg_match in re.finditer(r'"([^"]*)"|(\d+)', raw_path):
+                if seg_match.group(1) is not None:
+                    segments.append(seg_match.group(1))
+                elif seg_match.group(2) is not None:
+                    segments.append(seg_match.group(2))
+            if segments:
+                path_str = ".".join(segments)
+    # Exception slot: prefer the extensions.code tag; fall back to a
+    # generic GraphQLError when no code was emitted.
+    if code:
+        exc = code
+    else:
+        exc = "GraphQLError"
+    return exc, msg, path_str, line_no
+
+
+def _isolate_first_graphql_error(text: str, message_pos: int) -> str | None:
+    """Return the JSON object containing the message at ``message_pos``,
+    or None when bracket-matching fails.
+
+    Walks backwards from ``message_pos`` to find the opening ``{`` of
+    the error object, then forwards counting bracket depth to find
+    the matching ``}``. The slice between is the JSON object body
+    that ``_GRAPHQL_CODE_FIELD`` / ``_GRAPHQL_LOCATIONS_FIELD`` /
+    ``_GRAPHQL_PATH_FIELD`` can safely search without picking up
+    fields from a sibling error.
+    """
+    if message_pos < 0 or message_pos >= len(text):
+        return None
+    # Walk backwards from the message position to find the most
+    # recent unmatched '{' that opens the containing object. We
+    # track depth so a nested object (like extensions: {code: "X"})
+    # before the message gets properly balanced.
+    depth = 0
+    start = -1
+    for i in range(message_pos - 1, -1, -1):
+        ch = text[i]
+        if ch == "}":
+            depth += 1
+        elif ch == "{":
+            if depth == 0:
+                start = i
+                break
+            depth -= 1
+    if start == -1:
+        return None
+    # Now walk forward from start finding the matching closing brace.
+    depth = 0
+    end = -1
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escaped:
+            escaped = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end == -1:
+        return None
+    return text[start:end + 1]
+
+
+def _json_string_unescape(s: str) -> str:
+    """Unescape JSON string escapes (``\\\"`` / ``\\\\`` / ``\\n`` /
+    ``\\t`` / ``\\u00XX``). Conservative -- malformed sequences are
+    left as-is rather than raising.
+    """
+    if "\\" not in s:
+        return s
+    out: list[str] = []
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch != "\\" or i + 1 >= len(s):
+            out.append(ch)
+            i += 1
+            continue
+        nxt = s[i + 1]
+        if nxt == '"':
+            out.append('"')
+            i += 2
+        elif nxt == "\\":
+            out.append("\\")
+            i += 2
+        elif nxt == "/":
+            out.append("/")
+            i += 2
+        elif nxt == "n":
+            out.append("\n")
+            i += 2
+        elif nxt == "t":
+            out.append("\t")
+            i += 2
+        elif nxt == "r":
+            out.append("\r")
+            i += 2
+        elif nxt == "b":
+            out.append("\b")
+            i += 2
+        elif nxt == "f":
+            out.append("\f")
+            i += 2
+        elif nxt == "u" and i + 5 < len(s):
+            hex_part = s[i + 2:i + 6]
+            try:
+                out.append(chr(int(hex_part, 16)))
+                i += 6
+            except ValueError:
+                out.append(ch)
+                i += 1
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def _graphql_likely_cause(code: str | None, message: str | None) -> str | None:
+    """Return operator-friendly hints for common GraphQL error codes."""
+    code_l = (code or "").lower()
+    msg_l = (message or "").lower()
+    if "graphql_parse_failed" in code_l or "syntax error" in msg_l:
+        return "Request document has a GraphQL syntax error; validate the query string."
+    if "graphql_validation_failed" in code_l:
+        return "Schema validation failed; check field names, argument types, fragment shape."
+    if "cannot query field" in msg_l:
+        return "Field doesn't exist on the parent type; check schema and field name."
+    if "bad_user_input" in code_l:
+        return "Argument validation failed; check the input scalar / type constraints."
+    if "unauthenticated" in code_l or "not authenticated" in msg_l:
+        return "Missing or invalid auth token; check Authorization header."
+    if "forbidden" in code_l or "not authorized" in msg_l or "permission" in msg_l:
+        return "Authenticated but lacking permission; check role / directive guard."
+    if "persisted_query_not_found" in code_l:
+        return "Automatic Persisted Queries cache miss; resend with full document."
+    if "persisted_query_not_supported" in code_l:
+        return "Server doesn't support APQ; configure client to send full document."
+    if "internal_server_error" in code_l or "internal error" in msg_l:
+        return "Unhandled resolver exception; inspect server logs at the resolver path."
+    if "rate_limit" in code_l or "too many requests" in msg_l:
+        return "Rate limit hit; back off and retry with jitter."
+    if "timeout" in code_l or "timed out" in msg_l:
+        return "Resolver exceeded the deadline; raise timeout or add field-level caching."
+    if "downstream service" in msg_l:
+        return "Resolver upstream call failed; check downstream service health."
+    if "n+1" in msg_l or "data loader" in msg_l:
+        return "N+1 query pattern detected; batch with DataLoader / batched resolver."
+    if "complexity" in code_l or "query complexity" in msg_l:
+        return "Query exceeds complexity budget; reduce depth / breadth or paginate."
+    if "depth" in code_l or "query depth" in msg_l:
+        return "Query exceeds depth limit; flatten recursive selection."
+    return None
+
+
 def _parse_nest_error(
     text: str,
 ) -> tuple[str, str, str | None, int | None] | None:
@@ -1769,6 +2129,34 @@ def parse_error_text(text: str) -> ErrorFields:
             likely_cause="Assertion failed; check the expression on the `>` line.",
             file=file_,
             line=line_,
+        )
+    # GraphQL execution error check runs BEFORE the python / node /
+    # framework branches because a GraphQL response is JSON that can
+    # contain a JS-style stack-trace inside extensions.exception.
+    # stacktrace (Apollo Server includes the resolver stack tail).
+    # Without this early check the Node branch's _JS_AT regex would
+    # steal the response and tag it framework='node', losing the
+    # GraphQL-specific signal (the error code, the resolver path,
+    # the source-document location). Detection requires an
+    # ``"errors": [`` array literal + at least one ``"message"``
+    # field + one discriminator (locations / path / extensions /
+    # GraphQL vocabulary) so a generic JSON error response (a REST
+    # API failure that happens to nest an ``errors`` array) doesn't
+    # false-positive.
+    gql = _parse_graphql_error(text)
+    if gql is not None:
+        gql_exc, gql_msg, gql_path, gql_line = gql
+        # Extract just the code part for the likely-cause lookup
+        # (the exception slot may be ``GraphQLError`` when no code
+        # was emitted; pass it through and the helper handles None).
+        code_for_cause = gql_exc if gql_exc != "GraphQLError" else None
+        return ErrorFields(
+            framework="graphql",
+            exception=gql_exc,
+            message=gql_msg,
+            likely_cause=_graphql_likely_cause(code_for_cause, gql_msg),
+            file=gql_path,
+            line=gql_line,
         )
     if _PY_TRACE.search(text):
         framework = "python"
