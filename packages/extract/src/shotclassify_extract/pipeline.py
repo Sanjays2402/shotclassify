@@ -13,6 +13,7 @@ from .crypto import extract_crypto
 from .discord_ids import extract_discord_ids
 from .emails import extract_emails
 from .error import enrich_error
+from .error_fingerprints import extract_error_fingerprints
 from .git_shas import extract_git_shas
 from .identifiers import extract_identifiers
 from .jwts import extract_jwts
@@ -370,5 +371,25 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if postal_codes:
         out.raw = dict(out.raw or {})
         out.raw["postal_codes"] = postal_codes
+
+    # Cross-category: stash error-monitoring vendor fingerprints
+    # (Sentry event IDs, Datadog trace_id / span_id pairs, Rollbar
+    # / New Relic / Bugsnag / Honeybadger / Airbrake event IDs)
+    # found in the OCR text under raw["error_fingerprints"].
+    # Fingerprints surface across categories: chat captures of
+    # on-call threads, document captures of runbooks, code-snippet
+    # captures of error logs, error-stacktrace captures with the
+    # vendor's footer attached.
+    #
+    # Each entry is a {vendor, kind, id} dict. Hex IDs are
+    # lowercased for stable dedupe; alphanumeric IDs preserve case.
+    # Distinct from raw["uuids"] (which catches every UUID
+    # regardless of vendor context) because error fingerprints
+    # carry the vendor tag so dashboards can route them to the
+    # correct deep-link template.
+    fingerprints = extract_error_fingerprints(text)
+    if fingerprints:
+        out.raw = dict(out.raw or {})
+        out.raw["error_fingerprints"] = fingerprints
 
     return out
