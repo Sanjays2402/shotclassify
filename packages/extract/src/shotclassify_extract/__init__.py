@@ -18,6 +18,7 @@ from .code import (
     extract_imports,
 )
 from .credit_cards import extract_credit_cards
+from .crypto import extract_crypto
 from .emails import extract_emails
 from .error import (
     enrich_error,
@@ -91,4 +92,5 @@ __all__ = [
     "extract_airports",
     "extract_social",
     "extract_slack_ids",
+    "extract_crypto",
 ]

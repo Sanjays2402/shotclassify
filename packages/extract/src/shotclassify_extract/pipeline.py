@@ -7,6 +7,7 @@ from .airports import extract_airports
 from .chat import enrich_chat
 from .code import enrich_code
 from .credit_cards import extract_credit_cards
+from .crypto import extract_crypto
 from .emails import extract_emails
 from .error import enrich_error
 from .git_shas import extract_git_shas
@@ -229,5 +230,24 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if slack_ids:
         out.raw = dict(out.raw or {})
         out.raw["slack_ids"] = slack_ids
+
+    # Cross-category: stash crypto addresses (Bitcoin / Ethereum /
+    # Solana) found in the OCR text under raw["crypto"]. Crypto
+    # addresses surface in code snippets that paste contract or
+    # wallet addresses, chat captures with donation links, error
+    # logs from on-chain RPC clients ("Invalid address 0xabc..."),
+    # and document captures of whitepapers / exchange landing
+    # pages. Bitcoin Base58Check addresses (P2PKH / P2SH) and
+    # Bech32 / Bech32m addresses (SegWit / Taproot) are validated
+    # against their respective checksums to keep random 34-char
+    # alphanumeric runs out. Ethereum is shape-only because EIP-55
+    # validation requires keccak256 (not stdlib). Solana is
+    # shape-only AND requires a Solana-context anchor on the same
+    # or previous line because the Base58 alphabet overlaps with
+    # random base58-shaped IDs that are not addresses.
+    crypto = extract_crypto(text)
+    if crypto:
+        out.raw = dict(out.raw or {})
+        out.raw["crypto"] = crypto
 
     return out
