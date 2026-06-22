@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (107 features tracked, 85 complete)
+## Roadmap (112 features tracked, 90 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -146,6 +146,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 107. [x] PII redact: bank-account / routing-number redaction mode (new `bank_account` mode; matcher REQUIRES the word Routing/ABA/RTN (9-digit candidates) OR Account/Acct/A/C/Acc (6-17 digit candidates) immediately before number so bare 9-digit runs don't misfire on phone/order/SSN/passport; recognised labels: Routing: / Routing No: / Routing No. / Routing Number: / Routing # / ABA: / ABA Routing #: / RTN, Account: / Account No: / Account Number: / Account # / Acct: / Acct No. / A/C: / A/C No: / Acc; up to 5 separator chars between label and number; length boundaries: 6-min/17-max digits accepted, 5-digit too-short rejected, 18+ digit too-long leaves UNCHANGED via trailing word-boundary failure as safety property because partial 17-of-18 redaction would leak trailing digit; custom _sub_bank_account substitution mirrors passport/drivers_license pattern preserving label while redacting only captured num group; added to PII_REDACT_MODES allow-list).
 
 
+### Done in tick 18 (5 features)
+81. [x] Error: Spring Boot WhiteLabel error page parsing (new framework='spring_boot_whitelabel'; _SPRING_WHITELABEL_PRELUDE matches literal "Whitelabel Error Page" heading + _SPRING_WHITELABEL_TYPE matches "(type=<reason>, status=NNN)" summary line - both required for commit so prose mentions don't false-positive; placed BEFORE JVM branch because the page often includes a JVM-style stacktrace dump that would otherwise be stolen; exception slot prefers a Java-style FQCN (com.example.app.NotFoundException) when stacktrace included, falls back to "Type: <reason>" tag using HTTP reason phrase; message slot prefers printed exception message, falls back to composed "HTTP <status> on <path>" when Spring printed "No message available"; file slot is the failing request path (/users/42) from "no explicit mapping for /xxx" line; line slot is the integer HTTP status code; path regex restricted to conservative RFC 3986 char set so trailing punctuation in ", so you are seeing" wording doesn't bleed in; message-search iterates by LINE boundaries (not summary regex end-offset which sits mid-line) so trailing ")." doesn't become the message; HTML closing tags </body></html> skipped; 20-cause _spring_whitelabel_likely_cause catalogue covering class-level hits (Validation/AccessDenied/DataIntegrityViolation/HttpMessageNotReadable/ResponseStatusException) AND status-level fallbacks 400/401/403/404/409/415/422/429/500/502/503/504).
+69. [x] Receipt: suggested-tip table detection (new `ReceiptFields.suggested_tips` list of `{percent, amount}` dicts; recognises three orientations: vertical table "Suggested Tips:\n15% = 1.80\n18% = 2.16\n20% = 2.40", horizontal row "15% $1.80    18% $2.16    20% $2.40", inline label "Tip suggestions: 15% 1.80 | 18% 2.16 | 20% 2.40"; both pct-then-amt AND amt-then-pct matchers per line, with pass-1 (pct-then-amt) claiming spans first and pass-2 (amt-then-pct) running ONLY over unclaimed regions to prevent phantom cross-pair captures on horizontal table rows; bounds: percent 5..50, amount 0.01..9999.99, fractional percents (12.5%) accepted, comma-decimal European receipts (1,80) normalised; requires AT LEAST 2 distinct (percent, amount) pairs because a lone pair is the customer's actual tip not a suggestion table; sorted by percent ASC; cap 6 entries; dedupe on (percent, amount); LLM wire-format updated).
+103. [x] Receipt: loyalty / rewards points-earned line (new `ReceiptFields.points_earned` int; 27-keyword catalogue most-specific-first covering Stars/Miles/Avios/Bonus/Reward Points multi-word forms PLUS bare aliases Points/Stars/Miles; balance-vs-earn distinction enforced via 11-token disqualifier vocabulary balance/total points/current/remaining/available/lifetime/redeemable/accumulated/ytd/year-to-date - any disqualifier on the SAME line as a points keyword rejects the candidate so "Total Points: 1245" never populates earn; bounds 1..1,000,000, decimals rejected (points always whole), thousands-grouped 1,234 normalised correctly, trailing negative-lookahead on [.,]?digit blocks 10-digit partial matches; 0 rejected as "card not scanned"; negatives rejected because field semantic is positive earn; LAST-occurrence per keyword, first-keyword-wins across priority; LLM wire-format updated; real-world test coverage for Starbucks Stars / Tesco Clubcard / Air France FF Miles / Hilton Honors / BA Avios).
+101. [x] Error: GraphQL execution error extraction (new framework='graphql'; _GRAPHQL_ERRORS_KEY matches `"errors": [`, _GRAPHQL_MESSAGE_FIELD captures `"message": "..."` with JSON string escapes (\" / \n / \t / \uXXXX), _GRAPHQL_CODE_FIELD captures extensions.code as uppercase code (1+ char), _GRAPHQL_LOCATIONS_FIELD captures locations[0].line+column, _GRAPHQL_PATH_FIELD parses array of string/int segments; detection requires errors array + at least one message field + one discriminator from `"locations"`/`"path"`/`"extensions"`/graphql/apollo/mutation/subscription/query vocabulary so generic REST errors don't false-positive; placed BEFORE python/node/framework branches because GraphQL JSON can contain JS-style stack traces in extensions.exception.stacktrace that Node branch would otherwise steal; first-error-isolation via bracket-depth tracker with quoted-string awareness so multi-error arrays correctly attribute code+locations+path to FIRST entry; exception prefers extensions.code (GRAPHQL_VALIDATION_FAILED/BAD_USER_INPUT/UNAUTHENTICATED/FORBIDDEN/PERSISTED_QUERY_NOT_FOUND/INTERNAL_SERVER_ERROR) or "GraphQLError" fallback; message JSON-unescaped; file slot is dotted GraphQL path (users.0.name); line slot is locations[0].line; 15-cause _graphql_likely_cause catalogue for both code-based and message-based hints).
+111. [x] Code: TODO ticket-link extraction into `CodeFields.todo_tickets` (list of `{marker, ticket}` dicts; three ticket-reference shapes in priority order: JIRA-style PROJECT-NUMBER (2-10 ALL-CAPS letters + hyphen + 1-6 digits), hash-slug `#identifier-NUMBER` (2-20 lowercase letters + hyphen + 1-6 digits), GitHub hash-number `#NUMBER` (1-6 digits with trailing word-boundary); per-line span-claim discipline so JIRA-1234 isn't mis-tagged as slug or its trailing digits as hash-num; marker discipline mirrors detect_todo_count + extract_todo_authors -- ALL-CAPS spelling required, must be inside a comment body, trailing-alphanum defence rejects TODOIST/XXXX/BUGGY; ticket can sit BEFORE or AFTER the marker on same line; last-marker-wins attribution on multi-marker lines; pure data languages (json/csv/tsv) return [] unconditionally; cap 50; dedupe intentionally NOT done; LLM wire-format updated; can coexist with todo_authors so TODO(alice): #1234 populates both slots).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -155,25 +163,26 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 55. [ ] UI mockup: layout-style guess (new `UIMockupFields.layout_kind`: `dashboard` / `landing` / `form` / `settings` / `modal`).
 56. [ ] PII redact: phone-number redaction mode (`phone` mode; normalises to `<PHONE>` stub form). (Note: a tight `phone` regex already exists in redact.py with `[REDACTED:phone]` placeholder; this would refine to the `<PHONE>` stub form.)
 65. [ ] Chat: link preview block detection (the inline OG-card with title + description that platforms inline for shared URLs).
-69. [ ] Receipt: tip-jar / suggested-tip table detection (the "10% 12.34 / 15% 18.51 / 20% 24.68" footer table).
 71. [ ] Chart: pie-slice percent extraction from in-pie labels (new ChartFields.slices list of {label, percent}).
 80. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce).
-81. [ ] Error: Spring Boot WhiteLabel error page parsing (`/error` endpoint HTML that surfaces inside a screenshot -- pull status, timestamp, path, message).
 90. [ ] Receipt: barcode/QR encoding detection in OCR text (vendors print the encoded payload below the barcode -- track which lines look like the encoded payload vs the human-readable text).
 93. [ ] Chat: typing-indicator detection (the bouncing-dots animation OCR may render as `...` or `Alice is typing...`).
 98. [ ] Receipt: line-item modifier / customisation detection (the indented `+ Add bacon` / `- No onions` / `Extra cheese` sublines beneath an item).
 99. [ ] Code: secret/key-literal sniffing into `CodeFields.suspected_secrets` (literal strings that look like API keys / DB credentials / OAuth secrets even when not detected by the typed redact modes).
 100. [ ] Extract: cross-category emoji-density tally into `raw["emoji_density"]` (a single float fraction of chars that are emoji -- a quick "this capture is meme-heavy" signal).
-101. [ ] Error: GraphQL execution error extraction (the `errors` array shape `[{"message", "path", "locations"}]` GraphQL clients print).
 102. [ ] Chart: data-table fallback extraction from a chart screenshot's accompanying legend table (the small `x / y` paired columns that often sit beside the chart).
-103. [ ] Receipt: itemised loyalty-points-earned line (`Points Earned: 25` / `Stars Awarded: 3` / `Miles: 100`).
 104. [ ] Chat: voice-call / video-call duration markers (`Audio call · 1m 23s` / `Missed video call`).
 106. [ ] Error: Apollo Client / Apollo Server GraphQL error parsing (the `ApolloError: ...` shape with `extensions.code`).
 108. [ ] Code: license-header attribution chain detection (multi-license dual-licensed files that print BOTH `Licensed under MIT or Apache 2.0` shapes; expand `license` slot into a list when 2+ licenses signal).
 109. [ ] Receipt: refund-reason extraction (the freeform reason text printed alongside a refund line: `Refund - damaged goods` / `Refund: customer changed mind`).
 110. [ ] Chat: pin / star / favorite marker detection (the small `📌 Pinned` / `⭐ Starred` / `Pinned by Alice` indicators on Slack / iMessage / WhatsApp).
-111. [ ] Code: TODO / FIXME ticket-link extraction (when a TODO carries a `JIRA-1234` / `#issue` ticket reference, surface it into `CodeFields.todo_tickets`).
 112. [ ] Error: Sentry breadcrumb trail extraction (the `Breadcrumbs` block above the stacktrace listing user actions and HTTP calls).
+113. [ ] Receipt: tip-jar QR/web URL extraction (Square / Stripe-Terminal print `Tip QR: tip.example.com/abc` line; pair with `raw["urls"]` extractor).
+114. [ ] Chart: axis-tick numeric range inference (parse the min..max tick labels into `ChartFields.axes` numeric range for sparkline-like analysis).
+115. [ ] Extract: cross-category currency-pair extractor into `raw["fx_pairs"]` (forex / crypto pair format `USD/EUR` / `BTC-USDT` / `EUR/JPY @ 158.40` typically appearing in trading screenshots).
+116. [ ] Code: dependency-version-pin extraction into `CodeFields.dep_pins` (parse `package@1.2.3` / `package==1.2.3` / `package^1.2.0` ranges from snippets that show package.json / requirements.txt / Cargo.toml content).
+117. [ ] Chat: read-receipt avatar-row detection (the row of small reactor avatars iMessage / Telegram shows below a popular message).
+
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -793,6 +802,95 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
       substitution preserves the `Routing: ` /
       `Account: ` label same as
       passport/drivers_license modes.
+
+- 2026-06-22 14:28 PT (tick 18, Cake): 5 features.
+  - a764ba6 feat(extract/error): Spring Boot WhiteLabel error page parsing (framework='spring_boot_whitelabel')
+  - d40ff34 feat(extract/receipt): suggested-tip table detection into ReceiptFields.suggested_tips
+  - 927d5cf feat(extract/receipt): loyalty points-earned line into ReceiptFields.points_earned
+  - 8a41b00 feat(extract/error): GraphQL execution error extraction (framework='graphql')
+  - 9c2824a feat(extract/code): TODO ticket-link extraction into CodeFields.todo_tickets
+  - Gate: ruff at baseline 536 (six fixups folded via
+    --fixup + --autosquash before push -- three E501 line-
+    too-long fixups in test_error_graphql.py (the three
+    pathologically-long JSON test fixtures wrapped to fit
+    110 cols), two E501 + one I001 fixups in
+    test_error_spring_whitelabel.py (and-chained assertion
+    split across lines, /search?q=... line wrapped at the
+    comma, private-import-after-uppercase-constant ordering
+    in the from-import block, plus a stray blank line
+    between the import block and the first section divider
+    removed by ruff --fix)) + pytest 4228 passed / 3
+    skipped in 125.27s. 303 new tests across the 5 features
+    (52 + 41 + 78 + 69 + 63). New ReceiptFields shipped:
+    suggested_tips (list of {percent, amount} dicts),
+    points_earned (int). New CodeFields shipped:
+    todo_tickets (list of {marker, ticket} dicts). Two new
+    error frameworks: 'spring_boot_whitelabel' (placed
+    BEFORE JVM branch because the page often includes a
+    JVM-style stacktrace dump that would otherwise be
+    stolen) and 'graphql' (placed BEFORE python/node/
+    framework branches at the TOP of parse_error_text
+    because GraphQL JSON can contain JS-style stack traces
+    in extensions.exception.stacktrace that Node branch
+    would otherwise steal). LLM wire format in
+    classify/client.py updated for suggested_tips /
+    points_earned / todo_tickets. Roadmap refilled with 5
+    new items (113..117 -- tip-jar QR/URL, chart axis-tick
+    range, currency-pair extractor, code dep-version-pin,
+    chat read-receipt avatar-row) so backlog stays at 22
+    open. Notable design decisions:
+    * Spring WhiteLabel: detection requires BOTH the
+      literal "Whitelabel Error Page" heading AND the
+      "(type=..., status=NNN)" summary line so prose
+      mentions in runbooks / templates don't false-
+      positive. The path regex restricted to a
+      conservative RFC 3986 path-char set so trailing
+      punctuation in Spring's ", so you are seeing"
+      wording doesn't bleed into the captured path.
+      Message-search iterates by LINE boundaries (not by
+      the summary regex's end offset, which sits mid-line
+      and would leave the line's trailing ").\n" as the
+      first tail token). HTML closing tags </body></html>
+      skipped explicitly because page captures sometimes
+      include the surrounding HTML chrome.
+    * Suggested tips: both pct-then-amt AND amt-then-pct
+      matchers per line, with pass-1 (pct-then-amt)
+      claiming spans first and pass-2 (amt-then-pct)
+      running ONLY over unclaimed regions. This prevents
+      phantom cross-pair captures on horizontal table
+      rows like "15% 1.80   18% 2.16" where a naive
+      amt-then-pct pass would stitch "1.80 18%" as a
+      bogus pair. Requires AT LEAST 2 distinct pairs
+      because a lone pair is the customer's actual tip
+      (already captured by _find_tip).
+    * Points earned: balance-vs-earn distinction is the
+      critical safety property. Lines that print account
+      balance (Total Points / Points Balance / Current /
+      Remaining / Available / Lifetime / Redeemable /
+      Accumulated / YTD) are SKIPPED so the earn slot
+      only ever carries the per-receipt issue. Trailing
+      negative-lookahead on [.,]?digit blocks 10-digit
+      partial matches like 10000000 -> 1000000 by
+      requiring no following digit.
+    * GraphQL: first-error-isolation via bracket-depth
+      tracker with quoted-string awareness so multi-error
+      arrays correctly attribute code+locations+path to
+      the FIRST entry's object. Without isolation a
+      [error1, error2] array could cross-stitch message
+      of error1 with code of error2. Detection requires
+      "errors" array + "message" field + one discriminator
+      (locations/path/extensions/graphql/apollo/mutation/
+      subscription/query) so a generic REST API response
+      that nests an errors array doesn't false-positive.
+    * TODO tickets: per-line span-claim discipline so
+      JIRA-1234 isn't mis-tagged as a slug or its
+      trailing digits as hash-num. Three matchers in
+      priority order: JIRA-style (PROJECT-NUMBER) first,
+      then hash-slug (#identifier-NUMBER), then hash-num
+      (#NUMBER). Last-marker-wins attribution on multi-
+      marker lines for deterministic behaviour.
+      Coexists with todo_authors so TODO(alice): #1234
+      populates both slots without overlap.
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
