@@ -14,6 +14,7 @@ from .emails import extract_emails
 from .error import enrich_error
 from .git_shas import extract_git_shas
 from .identifiers import extract_identifiers
+from .jwts import extract_jwts
 from .macs import extract_macs
 from .network import extract_network
 from .paths import extract_paths
@@ -305,5 +306,23 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if discord_ids:
         out.raw = dict(out.raw or {})
         out.raw["discord_ids"] = discord_ids
+
+    # Cross-category: stash JSON Web Tokens (JWTs) found in the OCR
+    # text under raw["jwts"]. JWTs surface across categories --
+    # .env editors, terminal pastes of Bearer tokens, error logs
+    # citing failing Authorization headers, chat captures of API
+    # debugging, browser DevTools captures of cookies/localStorage.
+    #
+    # Each entry is a dict summarising the JWT's JOSE header and the
+    # standard registered claims from the payload. The FULL TOKEN is
+    # NEVER stored -- the signature segment is discarded entirely
+    # and the header/payload are stored as their decoded fields.
+    # Pair this with the `jwt` redact mode in
+    # shotclassify_common.redact (which strips the raw token from
+    # persisted OCR text) for defence-in-depth.
+    jwts = extract_jwts(text)
+    if jwts:
+        out.raw = dict(out.raw or {})
+        out.raw["jwts"] = jwts
 
     return out

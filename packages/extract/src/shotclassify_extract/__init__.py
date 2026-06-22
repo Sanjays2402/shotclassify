@@ -38,6 +38,7 @@ from .error import (
 )
 from .git_shas import extract_git_shas
 from .identifiers import extract_identifiers
+from .jwts import extract_jwts
 from .macs import extract_macs
 from .network import extract_network
 from .paths import extract_paths
@@ -101,4 +102,5 @@ __all__ = [
     "extract_stripe_ids",
     "extract_arns",
     "extract_discord_ids",
+    "extract_jwts",
 ]
