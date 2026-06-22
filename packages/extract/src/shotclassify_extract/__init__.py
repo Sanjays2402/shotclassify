@@ -17,6 +17,7 @@ from .code import (
     detect_ts_features,
     enrich_code,
     extract_copyrights,
+    extract_feature_flags,
     extract_imports,
     extract_todo_authors,
 )
@@ -96,6 +97,7 @@ __all__ = [
     "extract_credit_cards",
     "extract_imports",
     "extract_copyrights",
+    "extract_feature_flags",
     "extract_todo_authors",
     "extract_airports",
     "extract_social",

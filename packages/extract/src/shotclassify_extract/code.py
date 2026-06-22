@@ -1739,6 +1739,230 @@ def extract_copyrights(code: str) -> list[dict[str, str]]:
     return out
 
 
+# Feature-flag SDK call detection. Modern feature-flag clients expose
+# a small set of canonical call shapes per vendor. We recognise the
+# top-of-mind vendors -- LaunchDarkly, Statsig, Unleash, Optimizely,
+# Split.io, PostHog, Flagsmith, ConfigCat -- and capture the flag key
+# argument.
+#
+# Recognised SDK shapes (regex priority is vendor-specific so a
+# given call site can only match one vendor):
+#
+#   LaunchDarkly:
+#     ldClient.variation("flag-key", user, false)
+#     client.variation("flag-key", ...)
+#     boolVariation("flag-key", ...)
+#     stringVariation("flag-key", ...)
+#     jsonVariation("flag-key", ...)
+#     numberVariation("flag-key", ...)
+#     ld.variation_detail("flag-key", ...)            (Python SDK)
+#
+#   Statsig:
+#     Statsig.checkGate("flag-key")
+#     statsig.check_gate("flag-key")                   (Python SDK)
+#     getExperiment("exp-name")
+#     statsig.getExperiment("exp-name")
+#     getConfig("config-name")
+#     statsig.getConfig("config-name")
+#
+#   Unleash:
+#     unleash.isEnabled("flag-key")
+#     client.isEnabled("flag-key")                     (Node / Java)
+#     is_enabled("flag-key")                           (Python)
+#
+#   Optimizely:
+#     optimizely.isFeatureEnabled("flag-key", userId)
+#     optimizelyClient.activate("exp-key", userId)
+#     is_feature_enabled("flag-key", userId)           (Python)
+#     get_feature_variable_string("flag-key", ...)
+#
+#   Split.io:
+#     client.getTreatment("flag-key", userId)
+#     splitClient.getTreatment("flag-key", ...)
+#     get_treatment("flag-key", userId)                (Python)
+#
+#   PostHog:
+#     posthog.isFeatureEnabled("flag-key", userId)
+#     posthog.is_feature_enabled("flag-key", userId)
+#     posthog.getFeatureFlag("flag-key", userId)
+#     getFeatureFlag("flag-key")
+#
+#   Flagsmith:
+#     flagsmith.hasFeature("flag-key")
+#     flagsmith.has_feature("flag-key")                (Python)
+#     flags.is_feature_enabled("flag-key")
+#
+#   ConfigCat:
+#     configcat.getValue("flag-key", false)
+#     configcat.get_value("flag-key", false)           (Python)
+#     configCatClient.getValue("flag-key", false)
+#
+# Flag keys captured: 1..128 chars from the set ``[A-Za-z0-9._-]`` so
+# we accept the dashed (``feature-new-checkout``), dotted
+# (``new.checkout.feature``), and snake_case (``feature_new_checkout``)
+# conventions all three SDKs encourage. Spaces and special chars in
+# flag keys are rejected because every vendor's documentation
+# discourages them.
+#
+# Each pattern uses a named capture group ``key`` so the calling
+# code can pull the flag key by name. The shape is documented per-
+# vendor in the regex comments so the catalogue stays maintainable.
+_FLAG_KEY = r"[A-Za-z][A-Za-z0-9._-]{0,127}"
+_QUOTED_FLAG_KEY = rf"['\"](?P<key>{_FLAG_KEY})['\"]"
+
+# Each entry is (vendor_tag, regex). Vendor tag is the lowercase
+# short name. Regex must include a (?P<key>...) named group.
+_FEATURE_FLAG_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # LaunchDarkly: ``.variation(...)`` family. The ``\b\w*variation\b``
+    # form catches ``variation`` / ``boolVariation`` / ``stringVariation``
+    # / ``variation_detail`` etc. Same for the ``\w*Variation``
+    # casing.
+    (
+        "launchdarkly",
+        re.compile(
+            r"\b(?:ld[A-Za-z]*Client|ldClient|ld|client)?"
+            r"\.?(?:bool|string|number|json|int)?[Vv]ariation"
+            r"(?:_detail|Detail)?"
+            r"\s*\(\s*" + _QUOTED_FLAG_KEY,
+        ),
+    ),
+    # Statsig: ``checkGate`` (camelCase JS/Java) /
+    # ``check_gate`` (snake Python). Also ``getExperiment`` /
+    # ``get_experiment``, ``getConfig`` / ``get_config``.
+    (
+        "statsig",
+        re.compile(
+            r"\b(?:[Ss]tatsig\.)?"
+            r"(?:checkGate|check_gate|getExperiment|get_experiment"
+            r"|getConfig|get_config|getLayer|get_layer)"
+            r"\s*\(\s*" + _QUOTED_FLAG_KEY,
+        ),
+    ),
+    # Unleash: ``isEnabled`` (JS/Java) / ``is_enabled`` (Python).
+    # The prefix is one of ``unleash`` / ``client`` / ``Unleash`` /
+    # bare (Python convenience).
+    (
+        "unleash",
+        re.compile(
+            r"\b(?:unleash|Unleash|client|toggleClient)"
+            r"\.(?:isEnabled|is_enabled|isToggleEnabled)"
+            r"\s*\(\s*" + _QUOTED_FLAG_KEY,
+        ),
+    ),
+    # Optimizely: ``isFeatureEnabled`` / ``is_feature_enabled``,
+    # ``activate`` / ``getVariation`` / ``getFeatureVariableString``
+    # / ``get_feature_variable_string``.
+    (
+        "optimizely",
+        re.compile(
+            r"\b(?:optimizely|optimizelyClient|Optimizely)"
+            r"\.(?:isFeatureEnabled|is_feature_enabled|activate"
+            r"|getVariation|get_variation"
+            r"|getFeatureVariable[A-Za-z]*|get_feature_variable_[a-z]+)"
+            r"\s*\(\s*" + _QUOTED_FLAG_KEY,
+        ),
+    ),
+    # Split.io: ``getTreatment`` / ``get_treatment`` / ``getTreatments``
+    # / ``get_treatments``. Prefix is one of ``client`` /
+    # ``splitClient`` / ``split`` / ``factory``.
+    (
+        "split",
+        re.compile(
+            r"\b(?:client|splitClient|split|factoryClient|SplitClient)"
+            r"\.(?:getTreatment|get_treatment|getTreatments|get_treatments"
+            r"|getTreatmentWithConfig|get_treatment_with_config)"
+            r"\s*\(\s*" + _QUOTED_FLAG_KEY,
+        ),
+    ),
+    # PostHog: ``isFeatureEnabled`` / ``is_feature_enabled`` /
+    # ``getFeatureFlag`` / ``get_feature_flag``.
+    (
+        "posthog",
+        re.compile(
+            r"\b(?:posthog|PostHog)"
+            r"\.(?:isFeatureEnabled|is_feature_enabled"
+            r"|getFeatureFlag|get_feature_flag|getFeatureFlagPayload"
+            r"|get_feature_flag_payload)"
+            r"\s*\(\s*" + _QUOTED_FLAG_KEY,
+        ),
+    ),
+    # Flagsmith: ``hasFeature`` / ``has_feature`` /
+    # ``is_feature_enabled`` (the latter conflicts with PostHog name
+    # but the prefix differs).
+    (
+        "flagsmith",
+        re.compile(
+            r"\b(?:flagsmith|flags|Flagsmith)"
+            r"\.(?:hasFeature|has_feature|is_feature_enabled|isFeatureEnabled"
+            r"|getValue|get_value|getFeatureValue|get_feature_value)"
+            r"\s*\(\s*" + _QUOTED_FLAG_KEY,
+        ),
+    ),
+    # ConfigCat: ``getValue`` / ``get_value`` / ``getValueAsync``.
+    (
+        "configcat",
+        re.compile(
+            r"\b(?:configcat|configCatClient|ConfigCat|configCat)"
+            r"\.(?:getValue|get_value|getValueAsync|getValueDetails"
+            r"|get_value_details)"
+            r"\s*\(\s*" + _QUOTED_FLAG_KEY,
+        ),
+    ),
+)
+
+# Max entries returned. Real snippets reference at most a handful of
+# flags; the cap is defensive.
+_MAX_FEATURE_FLAGS = 50
+
+
+def extract_feature_flags(code: str) -> list[dict[str, str]]:
+    """Return the feature-flag SDK call sites found in ``code``.
+
+    Output is a list of ``{"vendor", "key"}`` dicts. The ``vendor``
+    tag is the lowercase short name of the recognised feature-flag
+    vendor (``launchdarkly`` / ``statsig`` / ``unleash`` /
+    ``optimizely`` / ``split`` / ``posthog`` / ``flagsmith`` /
+    ``configcat``). The ``key`` is the flag key passed as the first
+    string argument to the call.
+
+    Each pattern is vendor-specific so a given call site only matches
+    one vendor. The matchers run in catalogue order; a snippet that
+    contains multiple vendors' calls yields multiple entries (one per
+    distinct ``(vendor, key)`` pair).
+
+    De-duplicates on the ``(vendor, key)`` pair, preserving first-seen-
+    in-text order. Capped at :data:`_MAX_FEATURE_FLAGS` entries.
+
+    Flag keys are matched as ``[A-Za-z][A-Za-z0-9._-]{0,127}`` so the
+    common dashed / dotted / snake_case conventions all parse, but a
+    space-containing key (which every vendor's documentation
+    discourages) is rejected.
+
+    Returns an empty list when no recognised SDK call site is present.
+    """
+    if not code or not code.strip():
+        return []
+    candidates: list[tuple[int, str, str]] = []
+    for vendor, pattern in _FEATURE_FLAG_PATTERNS:
+        for m in pattern.finditer(code):
+            key = m.group("key")
+            if key:
+                candidates.append((m.start(), vendor, key))
+    # Sort by source-text offset so the order matches reading order.
+    candidates.sort(key=lambda x: x[0])
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for _off, vendor, key in candidates:
+        dedupe_key = (vendor, key)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        out.append({"vendor": vendor, "key": key})
+        if len(out) >= _MAX_FEATURE_FLAGS:
+            break
+    return out
+
+
 # Markdown code-fence language detection. Markdown wraps code in
 # triple-backtick fences with an optional language tag immediately
 # after the opening fence:
@@ -2100,6 +2324,19 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     copyrights = list(existing.copyright) if existing and existing.copyright else []
     if not copyrights:
         copyrights = extract_copyrights(code)
+    # Feature-flag SDK call sites. Caller-supplied list wins
+    # (preserved verbatim); otherwise scan the snippet for
+    # LaunchDarkly / Statsig / Unleash / Optimizely / Split.io /
+    # PostHog / Flagsmith / ConfigCat client-call shapes and surface
+    # each ``{vendor, key}`` pair. Returns an empty list when no
+    # SDK call sites are present.
+    feature_flags = (
+        list(existing.feature_flags)
+        if existing and existing.feature_flags
+        else []
+    )
+    if not feature_flags:
+        feature_flags = extract_feature_flags(code)
     return CodeFields(
         language=language,
         code=code,
@@ -2117,4 +2354,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         imports=imports,
         copyright=copyrights,
         fence_language=fence_language,
+        feature_flags=feature_flags,
     )

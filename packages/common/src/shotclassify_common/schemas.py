@@ -456,6 +456,44 @@ class CodeFields(BaseModel):
     # markers at all (a bare code snippet without surrounding
     # markdown).
     fence_language: str | None = None
+    # Feature-flag client SDK call sites detected in the snippet.
+    # Each entry is a ``{"vendor": str, "key": str}`` dict capturing
+    # the feature-flag vendor (``launchdarkly`` / ``statsig`` /
+    # ``unleash`` / ``optimizely`` / ``split`` / ``posthog`` /
+    # ``flagsmith`` / ``configcat``) and the flag key referenced
+    # in the call.
+    #
+    # Recognised SDK shapes:
+    #
+    #   * LaunchDarkly: ``ldClient.variation("flag-key", user, false)`` /
+    #     ``client.variation("flag-key", ...)`` / ``boolVariation`` /
+    #     ``stringVariation`` / ``jsonVariation``
+    #   * Statsig: ``Statsig.checkGate("flag-key")`` /
+    #     ``statsig.checkGate("flag-key")`` /
+    #     ``getExperiment("exp-name")`` / ``getConfig("config-name")``
+    #   * Unleash: ``unleash.isEnabled("flag-key")`` /
+    #     ``client.isEnabled("flag-key")``
+    #   * Optimizely: ``optimizely.isFeatureEnabled("flag-key", userId)`` /
+    #     ``optimizelyClient.activate("exp-key", userId)``
+    #   * Split.io: ``client.getTreatment("flag-key", userId)`` /
+    #     ``splitClient.getTreatment("flag-key")``
+    #   * PostHog: ``posthog.isFeatureEnabled("flag-key")`` /
+    #     ``getFeatureFlag("flag-key")``
+    #   * Flagsmith: ``flagsmith.hasFeature("flag-key")`` /
+    #     ``flags.is_feature_enabled("flag-key")``
+    #   * ConfigCat: ``configcat.getValue("flag-key", false)``
+    #
+    # Dashboards use this list to surface "this code references
+    # 3 LaunchDarkly flags" annotations on code-review screenshots
+    # and to spot when a deprecated flag is still being checked.
+    # Distinct from ``imports`` because the SDK's import is the
+    # library dependency (e.g. ``launchdarkly-node-sdk``) while
+    # this slot is the per-call flag-key reference.
+    #
+    # De-duped on ``(vendor, key)`` pair; first-seen order preserved.
+    # Capped at 50 entries. Empty list when no flag-client calls
+    # are present.
+    feature_flags: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):
