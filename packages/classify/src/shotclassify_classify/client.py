@@ -147,6 +147,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             docstring=c.get("docstring"),
             imports=c.get("imports") or [],
             copyright=c.get("copyright") or [],
+            fence_language=c.get("fence_language"),
         )
     if e := fields_in.get("error"):
         fields.error = ErrorFields(**{k: e.get(k) for k in ErrorFields.model_fields})

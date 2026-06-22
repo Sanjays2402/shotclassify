@@ -430,6 +430,32 @@ class CodeFields(BaseModel):
     # (holder, year) pair. Empty list when no copyright lines are
     # present.
     copyright: list[dict[str, str]] = Field(default_factory=list)
+    # Markdown fence language tag when the snippet was captured
+    # alongside a fenced code block. Markdown wraps code in triple-
+    # backtick fences with an optional language tag immediately
+    # after the opening backticks:
+    #
+    #   ```python
+    #   def foo(): ...
+    #   ```
+    #
+    # Dashboards use this tag as a high-confidence language signal
+    # (the author explicitly declared it) which is more reliable
+    # than the heuristic ``detect_language`` pass for OCR captures
+    # of docs, blog posts, GitHub README sections, and chat
+    # captures of code snippets shared with a fenced block.
+    #
+    # Stored as the normalised lowercase tag (``python`` /
+    # ``javascript`` / ``ts`` / ``go`` / ``rust`` etc.) verbatim
+    # from what the author wrote; we don't try to canonicalise
+    # ``js`` -> ``javascript`` because the original tag carries
+    # author intent.
+    #
+    # ``None`` when no fence is present, when the fence has no
+    # language tag, or when the snippet doesn't include the fence
+    # markers at all (a bare code snippet without surrounding
+    # markdown).
+    fence_language: str | None = None
 
 
 class ErrorFields(BaseModel):

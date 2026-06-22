@@ -1739,6 +1739,99 @@ def extract_copyrights(code: str) -> list[dict[str, str]]:
     return out
 
 
+# Markdown code-fence language detection. Markdown wraps code in
+# triple-backtick fences with an optional language tag immediately
+# after the opening fence:
+#
+#   ```python
+#   def foo(): ...
+#   ```
+#
+#   ~~~rust
+#   fn main() {}
+#   ~~~
+#
+#   ```js title="example.js"
+#   const x = 1;
+#   ```
+#
+# We surface the tag as a high-confidence language signal because the
+# author explicitly declared it -- more reliable than the heuristic
+# ``detect_language`` pass for OCR captures of docs, blog posts,
+# GitHub README sections, and chat captures of code snippets shared
+# with a fenced block.
+#
+# Recognised opening fence shapes (CommonMark + GFM compatible):
+#
+# * ``` ```LANG `` -- canonical CommonMark form
+# * ``` ```LANG title="..." `` -- GFM with title/info string after the tag
+# * ``` ```LANG hl_lines=... `` -- mkdocs / pandoc info-string form
+# * ``~~~LANG`` -- tilde-fence alternative (CommonMark)
+# * 4+ backticks / tildes (CommonMark allows ANY 3+ run -- a 4-fence
+#   wraps content that itself contains a 3-fence)
+#
+# Detection rules:
+#
+# 1. Scan every line for a fence opener. The fence MUST sit at the
+#    start of the line (optionally indented up to 3 spaces per the
+#    CommonMark spec; 4 spaces would make it an indented code block,
+#    not a fence).
+# 2. The language tag is the FIRST whitespace-bounded token after the
+#    backtick / tilde run. We capture only ``[A-Za-z][\w+#.-]*`` so a
+#    info-string title (e.g. ``title="example.py"``) doesn't bleed in.
+# 3. The fence must be CLOSED somewhere later in the snippet with a
+#    matching backtick / tilde fence of equal-or-greater length. A
+#    snippet that opens a fence but never closes it is treated as
+#    incomplete and the tag is still surfaced (since the author's
+#    intent was clear).
+# 4. When the snippet contains MULTIPLE fences with different tags,
+#    we return the FIRST tag (the first author-declared language wins).
+#
+# Tag normalisation:
+#
+# * Lowercased before returning (``Python`` -> ``python``,
+#   ``JavaScript`` -> ``javascript``).
+# * We do NOT canonicalise short forms (``js`` stays ``js``,
+#   ``py`` stays ``py``) because the original tag carries the
+#   author's choice of vocabulary.
+# * Whitespace-only / empty tags return None (a bare ``` ``` `` fence
+#   has no language declaration).
+_MARKDOWN_FENCE_RE = re.compile(
+    r"^[ ]{0,3}(?P<fence>`{3,}|~{3,})[ \t]*"
+    r"(?P<lang>[A-Za-z][\w+#.-]*)?",
+    re.MULTILINE,
+)
+
+
+def detect_fence_language(code: str) -> str | None:
+    """Return the language tag of the first markdown code fence in ``code``.
+
+    Recognised fence shapes (CommonMark + GFM):
+
+    * ``` ```LANG `` -- canonical
+    * ``` ```LANG title="..." `` -- GFM info-string
+    * ``~~~LANG`` -- tilde-fence alternative
+    * 4+ backticks / tildes (CommonMark allows any 3+ run)
+
+    The tag is lowercased before returning. ``None`` when no fence
+    is present, when the fence has no language tag, or when the
+    snippet contains only bare fences.
+
+    When multiple fences with different tags appear, the FIRST tag
+    wins (it reflects the author's primary language choice).
+    """
+    if not code or not code.strip():
+        return None
+    for m in _MARKDOWN_FENCE_RE.finditer(code):
+        lang = m.group("lang")
+        if not lang:
+            # Bare fence (no language tag) -- keep scanning for a
+            # later fence that DOES declare a language.
+            continue
+        return lang.lower()
+    return None
+
+
 # Line-number prefix patterns. Each candidate captures (1) the number
 # itself and (2) the separator + trailing space(s), so we can strip
 # the matched prefix from the line. Tried in order most-specific-first
@@ -1880,6 +1973,16 @@ def detect_numbered(code: str) -> tuple[bool, str]:
 
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     code = (existing.code if existing and existing.code else ocr.text or "").strip()
+    # Markdown fence-language detection. Runs FIRST on the original
+    # pre-strip body so fence markers (``` / ~~~) survive any
+    # downstream line-number stripping. Caller-supplied value wins;
+    # otherwise scan the snippet for a markdown code-fence opener
+    # and surface the lowercased language tag.
+    fence_language = (
+        existing.fence_language if existing and existing.fence_language else None
+    )
+    if fence_language is None:
+        fence_language = detect_fence_language(code)
     # Line-number prefix detection. Runs FIRST because every downstream
     # detector (language, dialect, ts_features, minified, interpreter,
     # comment density) wants to see the de-numbered code. Caller-
@@ -2013,4 +2116,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         docstring=docstring,
         imports=imports,
         copyright=copyrights,
+        fence_language=fence_language,
     )

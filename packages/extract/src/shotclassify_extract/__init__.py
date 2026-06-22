@@ -5,6 +5,7 @@ from .chat import enrich_chat, parse_timestamp
 from .code import (
     detect_comment_density,
     detect_docstring,
+    detect_fence_language,
     detect_framework,
     detect_interpreter,
     detect_language,
@@ -57,6 +58,7 @@ __all__ = [
     "enrich_receipt",
     "parse_receipt_text",
     "detect_docstring",
+    "detect_fence_language",
     "detect_framework",
     "detect_interpreter",
     "detect_language",
