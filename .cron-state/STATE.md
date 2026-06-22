@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (82 features tracked, 60 complete)
+## Roadmap (87 features tracked, 65 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -106,6 +106,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 82. [x] Extract: cross-category Slack ID extractor into `raw["slack_ids"]` (list of `{kind, id}` dicts; 10 prefixes mapped to long-form kind tags: C->channel, D->dm, G->private_channel, U->user, W->enterprise_user, B->bot, T->team, E->enterprise, F->file, S->usergroup; 9..11 char total length; tail must contain at least ONE digit so all-letter prose words "CHEAPCODE"/"DESPAIRED" don't misfire; word-boundary isolation on BOTH ends so "C012345ABCD" inside "AC012345ABCDEF" hex blob doesn't misfire; lowercase/mixed-case rejected because Slack IDs are always uppercase in real payloads; Slack mention syntax <@U..>/<#C..|name>/<!subteam^S..> handled naturally because angle brackets/pipes/exclamation marks are non-word boundary chars; distinct from raw["social"] which is cross-platform typed handles, and ChatFields.mentions which is platform-agnostic chat-only; pipeline writes raw["slack_ids"] for every category).
 68. [x] Extract: cross-category crypto-address extractor into `raw["crypto"]` (list of `{chain, address}` dicts; bitcoin tag covers BOTH Base58Check P2PKH "1..."/P2SH "3..." with 4-byte SHA256(SHA256(payload))[:4] checksum validation AND Bech32/Bech32m SegWit "bc1q..."/Taproot "bc1p..." with BCH polymod validation against the right constant per witness version (1 for v0, 0x2bc830a3 for v1+ per BIP-350); ethereum tag is 0x+40 hex shape-only because EIP-55 needs keccak256 outside stdlib, all-zero null address rejected, output lowercased for dedup; solana tag is 32..44 Base58 shape-only AND requires a Solana-context anchor (sol/solana/spl/phantom/mint/pubkey/wallet/token) on same or previous line because Base58 alphabet overlaps with random base58-shaped IDs; pure-Python implementation -- no new heavy deps; BTC base58check runs first so 34-char address satisfying Solana shape gets tagged as bitcoin not double-tagged; pipeline writes raw["crypto"] for every category).
 
+### Done in tick 13 (5 features)
+84. [x] Extract: cross-category Stripe ID extractor into `raw["stripe_ids"]` (list of `{kind, id}` dicts; 24 typed prefixes mapped to long-form kind tags: cus->customer, ch->charge, pi->payment_intent, inv->invoice, sub->subscription, prod->product, price->price, acct->account, re->refund, pm->payment_method, seti->setup_intent, cs->checkout_session, tr->transfer, po->payout, txn->balance_transaction, file->file, coupon->coupon, promo->promotion_code, ii->invoice_item, cn->credit_note, txr->tax_rate, si->subscription_item, src->source, tok->token; lowercase prefix + underscore + optional test_ infix + 14..40 alphanumeric chars; prefixes tried longest-first so seti_ wins over si_ and promo_ wins over pm_; word-boundary on both ends; test-mode IDs (cus_test_xyz) recognised explicitly; distinct from raw["slack_ids"] which is letter-prefixed alphanumeric).
+85. [x] Extract: cross-category AWS resource ARN extractor into `raw["arns"]` (list of `{service, region, account, resource, arn}` dicts; standard 6-segment colon-separated form arn:partition:service:region:account:resource; three partitions accepted: aws/aws-cn/aws-us-gov; region recognises us-east-1 / eu-west-2 / ap-southeast-2 + cn-north-1 + us-gov-west-1 forms or empty; account recognises 12-digit ID OR literal "aws" for AWS-managed IAM policies (arn:aws:iam::aws:policy/...) OR empty for S3 bucket ARNs; resource captured greedily across additional colons and slashes so arn:aws:lambda:us-east-1:123:function:foo:1 preserves version-qualification, CloudWatch log-group multi-colon forms work, DynamoDB table/T/index/I works; trailing punctuation (./,)/]}'") stripped; case-insensitive throughout; pipeline writes raw["arns"] for every category).
+83. [x] Extract: cross-category Discord snowflake ID extractor into `raw["discord_ids"]` (list of `{kind, id}` dicts; recognises typed mention forms <@id>/<@!id>/<#id>/<@&id>, jump URLs discord.com/channels/G/C/M with legacy discordapp.com domain, webhook URLs with explicit token-drop security guarantee, bare 17..19 digit snowflakes with Discord-context anchor on same or previous line (anchor catalogue: discord/snowflake/guild/guild_id/channel_id/user_id/role_id/webhook_id/message_id/author_id/server_id/discord.py/discord.js); bare snowflake matcher REQUIRES anchor because 17..19 decimal digit blobs are too common (UNIX nanosecond timestamps, sequence numbers); pass ordering typed-mentions -> URLs -> anchored-bare with first-seen kind winning on dedupe; distinct from raw["slack_ids"] (letter-prefixed alphanumeric) and raw["stripe_ids"] (typed-prefix + underscore)).
+79. [x] Code: author-tagged TODO extraction into `CodeFields.todo_authors` (list of `{marker, author}` dicts; mirrors detect_todo_count's 7 ALL-CAPS markers TODO/FIXME/XXX/HACK/BUG/NOTE/OPTIMIZE; recognises canonical `MARKER(author):` and `MARKER(author)` forms across six comment-leader families (// # /* ; -- default-hash); author handle 1..64 chars supports plain/with-@/with-digits/with-hyphen/with-underscore/with-period/with-email/full-name shapes; trailing ,;:- and leading whitespace stripped; empty-paren rejected; substring rejection (TODOIST not a marker); dedupe intentionally NOT done because the same author may own multiple TODOs and the count should be accurate; pure data formats json/csv/tsv short-circuit to []; cap at 50; LLM wire-format updated).
+87. [x] Receipt: cash-rounding adjustment into `ReceiptFields.rounding` (signed float; regulatory adjustment for small-coin scarcity in AU/CA/NZ/NO/SE/CH/HU/IE/NL etc.; recognised wording most-specific-first: "Rounding Adjustment"/"Cash Rounding"/"Cash Discrepancy"/"Rounding"/"Round Down"/"Round Up"; new _find_signed_amount_after helper captures sign correctly because existing _find_amount_after's [:\\-]? separator class would eat the minus; sign captured both before AND after currency symbol (-$0.02 OR $-0.02); comma-decimal style (-0,02) supported; explicit 0.00 intentionally registers because printing the line at all is a useful signal; distinct from discount (marketing) and change (physical bills/coins) and refund (reversed transaction); LLM wire-format updated).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -126,14 +134,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 73. [ ] Receipt: gift-card / promo-code redemption detection (new ReceiptFields.gift_card_applied amount + ReceiptFields.promo_code string; "Gift card -25.00" / "Promo code SAVE10 applied" shapes).
 77. [ ] Chat: edited-message marker detection (`(edited)` / `(edited 2m)` tails appended to message bodies on iMessage/Slack/Discord -- surface a parallel `edits` list on ChatFields).
 78. [ ] Code: vendor-prefix detection for CSS (new `CodeFields.css_vendor_prefixes` list -- `-webkit-` / `-moz-` / `-ms-` / `-o-` / `-khtml-`).
-79. [ ] Code: TODO action-comment AUTHOR extraction (`TODO(alice): fix this` -> `[{"marker": "TODO", "author": "alice"}]` into new `CodeFields.todo_authors`).
 80. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce).
 81. [ ] Error: Spring Boot WhiteLabel error page parsing (`/error` endpoint HTML that surfaces inside a screenshot -- pull status, timestamp, path, message).
-83. [ ] Extract: cross-category Discord ID extractor (`<@123456789012345678>` / `<#123456789012345678>` / `<@&123456789012345678>` -- Discord snowflake IDs are 17-19 decimal digits, distinct from Slack IDs).
-84. [ ] Extract: cross-category Stripe ID extractor (`cus_...`, `ch_...`, `pi_...`, `inv_...`, `sub_...`, `prod_...`, `price_...`, `acct_...` -- Stripe prefixes a typed ID family per object).
-85. [ ] Extract: cross-category AWS resource ARN extractor (`arn:aws:s3:::bucket/key`, `arn:aws:iam::ACCT:user/USER`, `arn:aws:lambda:REG:ACCT:function:FN` -- 6+ ARN families).
 86. [ ] PII redact: passport-number redaction mode (US 9-digit, UK 9-digit, EU letter+digit shapes -- new `passport` mode).
-87. [ ] Receipt: rounding / total-rounded-down detection (some EU countries print "Rounding -0.02" / "Cash rounding -0.03" to round to the nearest 5 cents when 1c/2c coins are out of circulation; new `ReceiptFields.rounding` field).
+88. [ ] Extract: cross-category JWT extractor into `raw["jwts"]` (three-base64url-segment shape with header-payload-signature; decode header to surface alg/typ without verifying signature; payload claim summary kept short to avoid persisting full token contents).
+89. [ ] Code: Markdown code-fence language inference (when a snippet ships inside ```` ```python `` blocks the language tag is reliable signal; surface as `CodeFields.fence_language`).
+90. [ ] Receipt: barcode/QR encoding detection in OCR text (vendors print the encoded payload below the barcode -- track which lines look like the encoded payload vs the human-readable text).
+91. [ ] Error: Datadog / Sentry error-fingerprint extraction (the `[abc123]` short-hash that Sentry prints + the dd.trace_id / dd.span_id pair Datadog injects).
+92. [ ] Code: feature-flag client-call detection (LaunchDarkly / Statsig / Unleash SDK call sites with the flag key -- new `CodeFields.feature_flags`).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -383,6 +391,55 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     bitcoin not double-tagged; Solana requires same/prev
     line anchor because base58 alphabet overlaps with
     random IDs.
+
+- 2026-06-21 20:56 PT (tick 13, Cake): 5 features.
+  - e96daf8 feat(extract): cross-category Stripe ID extractor into raw["stripe_ids"]
+  - 59f2fbb feat(extract): cross-category AWS resource ARN extractor into raw["arns"]
+  - 047109a feat(extract): cross-category Discord snowflake ID extractor into raw["discord_ids"]
+  - 3afa78c feat(extract/code): author-tagged TODO extraction into CodeFields.todo_authors
+  - 6b483c8 feat(extract/receipt): cash-rounding adjustment into ReceiptFields.rounding
+  - Gate: ruff at baseline 536 (one N802 fixup on the
+    `test_same_author_multiple_todos_NOT_deduped` test
+    name -- ruff wants lowercase test names, folded via
+    --fixup + --autosquash into the todo_authors commit
+    before push) + pytest 2988 passed / 3 skipped in
+    140.71s. 206 new tests across the 5 features (50 +
+    41 + 32 + 49 + 34). New ReceiptFields shipped:
+    rounding (signed). New CodeFields shipped:
+    todo_authors. Three new cross-category raw keys:
+    raw["stripe_ids"], raw["arns"], raw["discord_ids"].
+    LLM wire format in classify/client.py updated for
+    rounding and todo_authors. Roadmap refilled with 5
+    new items (88..92 -- JWT extractor, Markdown fence
+    language, barcode/QR encoding, Datadog/Sentry
+    fingerprint, feature-flag SDK calls) so backlog
+    stays at 24 open. Disk-space note: pytest ran out
+    of /var/folders space on first attempt (228GiB
+    full at 100%); freed 854MiB by removing old
+    pytest-of-sanjay/ tmpdirs before the re-run.
+    Notable design decisions: Stripe prefix table is
+    tried longest-first so seti_ wins over si_ and
+    promo_ wins over pm_ (defence in depth; the
+    underscore boundary in the regex already prevents
+    short-prefix theft but the alternation order is
+    belt-and-braces); ARN account segment accepts
+    literal "aws" so AWS-managed IAM policies
+    (arn:aws:iam::aws:policy/...) parse cleanly with
+    the resource segment starting at "policy/..."
+    instead of "aws:policy/..."; Discord webhook URL
+    matcher CAPTURES the ID and DROPS the token
+    permanently as a tested security guarantee;
+    Discord bare-snowflake matcher REQUIRES the
+    context anchor because 17..19 digit decimal blobs
+    are too easy to confuse with UNIX nanosecond
+    timestamps; todo_authors intentionally does NOT
+    dedupe because the same author may legitimately
+    own multiple TODOs and the count should be
+    accurate; rounding needs a NEW _find_signed_amount_after
+    helper because the existing _find_amount_after's
+    [:\\-]? separator class would eat a leading minus
+    and emit unsigned; sign captured both before and
+    after currency symbol (-$0.02 OR $-0.02).
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
