@@ -290,6 +290,15 @@ PII_REDACT_MODES: tuple[str, ...] = (
     # cards. US 5- and 5+4-digit ZIPs plus UK postcode shapes are
     # handled in the same matcher.
     "address",
+    # Passport-number mode added in autoship tick 14. Requires the
+    # word ``passport`` immediately before the candidate so a bare
+    # 9-digit run on a receipt does NOT misfire as a passport.
+    # Recognises US / UK 9-digit, Canada 2-letter+6-digit, German
+    # 1-letter+8-alphanum, Australia 1-2-letter+7-digit, and other
+    # common EU / shape variants. The redaction strips ONLY the
+    # number, leaving the ``Passport: `` label so a reader knows
+    # the field WAS a passport without the number leaking.
+    "passport",
 )
 
 

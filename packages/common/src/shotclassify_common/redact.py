@@ -4,13 +4,13 @@ This module is the single source of truth for what counts as PII inside
 shotclassify. The :func:`redact_text` helper takes a string and a set of
 mode names (``email``, ``phone``, ``ssn``, ``credit_card``, ``ip``,
 ``iban``, ``jwt``, ``aws_access_key``, ``github_token``,
-``slack_token``) and returns a copy with each match replaced by a typed
-placeholder such as ``[REDACTED:email]`` or
-``[REDACTED:aws_access_key]``. The :func:`redact_fields` helper walks
-an arbitrary JSON-shaped value (dict / list / str) and applies the
-same rules to every string leaf, which lets the pipeline sanitize OCR
-results and extracted structured fields with one call before any of it
-is persisted or shipped to an outbound webhook.
+``slack_token``, ``address``, ``passport``) and returns a copy with
+each match replaced by a typed placeholder such as ``[REDACTED:email]``
+or ``[REDACTED:aws_access_key]``. The :func:`redact_fields` helper
+walks an arbitrary JSON-shaped value (dict / list / str) and applies
+the same rules to every string leaf, which lets the pipeline sanitize
+OCR results and extracted structured fields with one call before any
+of it is persisted or shipped to an outbound webhook.
 
 The developer-secret modes (``jwt``, ``aws_access_key``,
 ``github_token``, ``slack_token``) cover the obvious leaked-secret
@@ -163,6 +163,54 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r")?"
         ),
     ),
+    (
+        # Passport number. Passport numbers vary wildly by country (US
+        # / UK use 9 digits; Canada uses 2 letters + 6 digits;
+        # Germany uses 1 letter + 8 alphanumerics; Australia uses 1-2
+        # letters + 7 digits; many EU countries use 9 alphanumeric
+        # mixes). Surfacing a bare 9-digit run as a passport would
+        # false-positive on every receipt order number, every UPS
+        # tracking suffix, every phone number, and every credit card
+        # last-9-digits in a screenshot.
+        #
+        # We require the word ``passport`` (case-insensitive) to
+        # appear immediately before the candidate so the matcher
+        # fires ONLY on labelled passport numbers. Accepted label
+        # forms:
+        #
+        #   Passport: A12345678
+        #   Passport No: 123456789
+        #   Passport No. 123456789
+        #   Passport Number: A1234567
+        #   Passport # 12345678
+        #   Passport ID: 12345678
+        #   Passport #: 12345678
+        #   Passport: 123456789
+        #
+        # Accepted candidate shapes (after the label):
+        #
+        #   * 9 digits (US, UK, Russia, ...)
+        #   * 1 letter + 7-8 digits (Australia, Germany, NZ, ...)
+        #   * 2 letters + 6-7 digits (Canada, ...)
+        #   * 1 letter + 8 alphanumerics (Germany legacy)
+        #   * 8-9 mixed alphanumerics
+        #
+        # Letter portions captured case-insensitively but real passport
+        # numbers are uppercase by convention. The matcher accepts
+        # mixed-case but downstream redaction strips the whole match
+        # regardless.
+        #
+        # When the label appears with a colon / hash / period / space
+        # separator we tolerate up to 5 separator chars between the
+        # label and the number so ``Passport No. 12345678`` works as
+        # well as ``Passport#12345678``.
+        "passport",
+        re.compile(
+            r"\bpassport\s*(?:no\.?|number|id|#)?\s*[:#.\s]{0,5}"
+            r"(?P<num>[A-Z]{0,2}[A-Z0-9]{6,9})\b",
+            re.IGNORECASE,
+        ),
+    ),
 )
 
 
@@ -215,6 +263,24 @@ def redact_text(text: str, modes: Iterable[str] | None) -> str:
                     return _placeholder("credit_card")
                 return m.group(0)
             out = pattern.sub(_sub_cc, out)
+        elif mode == "passport":
+            # Passport mode replaces only the captured ``num`` group
+            # (the actual number) so the surrounding label
+            # ``Passport No: `` stays visible to the reader -- they
+            # know the field WAS a passport without leaking the
+            # number itself. The placeholder slots into the
+            # number's original position.
+            def _sub_passport(m: re.Match[str]) -> str:
+                start, end = m.span("num")
+                whole_start, whole_end = m.span()
+                # Preserve the prefix before the number, then placeholder,
+                # then any tail after the number within the match.
+                return (
+                    m.string[whole_start:start]
+                    + _placeholder("passport")
+                    + m.string[end:whole_end]
+                )
+            out = pattern.sub(_sub_passport, out)
         else:
             out = pattern.sub(_placeholder(mode), out)
     return out
