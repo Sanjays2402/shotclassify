@@ -122,6 +122,8 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             cashier=r.get("cashier"),
             server=r.get("server"),
             signature=r.get("signature"),
+            service_charge=r.get("service_charge"),
+            delivery_fee=r.get("delivery_fee"),
             items=items,
         )
     if c := fields_in.get("code"):

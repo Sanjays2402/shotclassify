@@ -88,6 +88,80 @@ def _find_discount(text: str) -> float | None:
     return None
 
 
+# Service-charge keywords. Service charges are distinct from tips on
+# many restaurant / delivery receipts: a mandatory auto-gratuity for
+# large parties, a platform-fee surcharge by UberEats / DoorDash, or
+# a hotel-style "service" line. Keywords are ordered MOST SPECIFIC
+# first so ``Service Charge`` wins over a bare ``Service`` keyword
+# that already exists in the tip catalogue. The bare ``Service``
+# alias intentionally lives in ``_TIP_KEYWORDS`` rather than here
+# because the legacy ``tip`` field already treats a bare "Service N"
+# line as gratuity-equivalent on a UK-style bar tab -- changing that
+# would break callers. The service_charge field captures the EXPLICIT
+# service-charge / service-fee phrasing that is unambiguous.
+_SERVICE_CHARGE_KEYWORDS = (
+    "service charge",
+    "service fee",
+    "svc charge",
+    "svc fee",
+)
+
+
+def _find_service_charge(text: str) -> float | None:
+    """Return the service-charge amount on the receipt, or None.
+
+    Matches explicit "Service Charge" / "Service Fee" / "Svc Charge" /
+    "Svc Fee" phrasings (case-insensitive). Returns the LAST occurrence
+    so a "Service Fee suggested" header above a real "Service Fee 5.00"
+    line resolves to the line the customer paid -- mirrors the tip
+    semantics. ``None`` when the receipt prints no explicit
+    service-charge line.
+    """
+    for keyword in _SERVICE_CHARGE_KEYWORDS:
+        value = _find_amount_after(text, keyword)
+        if value is not None:
+            return value
+    return None
+
+
+# Delivery / shipping fee keywords. Recognised across food-delivery
+# (UberEats / DoorDash / Deliveroo / Grubhub), e-commerce (Amazon /
+# Shopify / general), and grocery-delivery (Instacart) receipts.
+# Ordered most-specific first so the multi-word forms beat the bare
+# "Delivery" / "Shipping" aliases. The bare aliases are kept as the
+# last fallbacks because retail receipts often print just
+# ``Shipping  4.99`` with no qualifier.
+_DELIVERY_FEE_KEYWORDS = (
+    "delivery fee",
+    "delivery charge",
+    "shipping fee",
+    "shipping & handling",
+    "shipping and handling",
+    "shipping charge",
+    "shipping cost",
+    "delivery",
+    "shipping",
+)
+
+
+def _find_delivery_fee(text: str) -> float | None:
+    """Return the delivery / shipping fee on the receipt, or None.
+
+    Matches "Delivery Fee" / "Delivery Charge" / "Delivery" /
+    "Shipping" / "Shipping Fee" / "Shipping & Handling" / "Shipping
+    and Handling" / "Shipping Charge" / "Shipping Cost" (case-
+    insensitive). LAST-occurrence semantics for consistency with tip /
+    discount / service-charge. ``None`` when the receipt prints no
+    delivery line (typical for dine-in restaurant and in-person retail
+    receipts).
+    """
+    for keyword in _DELIVERY_FEE_KEYWORDS:
+        value = _find_amount_after(text, keyword)
+        if value is not None:
+            return value
+    return None
+
+
 def _detect_currency(text: str) -> str | None:
     # 1) Unambiguous currency symbols win when present. ``$`` is
     #    canonically USD here because the symbol is shared across many
@@ -1116,6 +1190,8 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         cashier=_find_cashier(text),
         server=_find_server(text),
         signature=_find_signature(text),
+        service_charge=_find_service_charge(text),
+        delivery_fee=_find_delivery_fee(text),
         items=_parse_items(text),
     )
 
@@ -1130,6 +1206,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "currency", "payment_method", "order_number", "tax_mode",
         "party_size", "refund_amount", "loyalty_id", "store_id",
         "register_id", "cashier", "server", "signature",
+        "service_charge", "delivery_fee",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))

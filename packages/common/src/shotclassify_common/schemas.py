@@ -158,6 +158,33 @@ class ReceiptFields(BaseModel):
     # ``None`` when the receipt prints no signature line at all
     # (typical for retail point-of-sale receipts).
     signature: dict[str, str | bool] | None = None
+    # Service charge billed separately from the tip. Restaurants and
+    # delivery-aggregator receipts often print an explicit "Service
+    # Charge" / "Service Fee" line that represents a mandatory
+    # auto-gratuity (a 15% added for parties of 6+) or a platform fee
+    # (a $2.99 DoorDash service fee). Distinct from ``tip`` because:
+    #
+    # * ``tip`` is the customer-discretionary gratuity (or the
+    #   automatically computed gratuity if printed under a "Tip" /
+    #   "Gratuity" label).
+    # * ``service_charge`` is the line-itemed service / platform fee
+    #   the merchant charges regardless of customer choice.
+    #
+    # The two CAN coexist on the same receipt -- a restaurant may
+    # print both "Service Charge 5.00" (mandatory) and "Tip 4.00"
+    # (additional voluntary). Stored as a positive float; ``None``
+    # when the receipt does not break out a service charge.
+    service_charge: float | None = None
+    # Delivery / shipping fee billed for receipts that involve
+    # off-premise fulfilment. Surfaces on food-delivery (UberEats /
+    # DoorDash / Deliveroo), e-commerce (Amazon / Shopify), and
+    # grocery-delivery receipts (Instacart). Recognised wording:
+    # "Delivery Fee", "Delivery Charge", "Delivery", "Shipping",
+    # "Shipping Fee", "Shipping & Handling". Stored as a positive
+    # float; ``None`` for in-person retail and dine-in restaurant
+    # receipts. Dashboards split this out from tax / tip / service
+    # to surface per-fulfilment-channel margin.
+    delivery_fee: float | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
