@@ -64,6 +64,16 @@ class ReceiptLine(BaseModel):
     # absolute amount knocked off. Stored positive so callers can
     # subtract without sign confusion.
     discount_amount: float | None = None
+    # Stock-keeping unit / barcode / UPC / EAN printed alongside the
+    # line item on many retail receipts (``SKU: 1234567`` /
+    # ``Barcode 0123456789012`` / ``Item #ABC-99`` / ``UPC 0420700``).
+    # Stored as a string (alphanumeric IDs are common -- retail chains
+    # mix digits, letters, and dashes). ``None`` for restaurant-style
+    # receipts that do not break out per-item SKUs and for items that
+    # appear without an explicit SKU/barcode line. Dashboards use this
+    # to link a captured receipt back to the item catalogue without
+    # forcing an LLM round trip.
+    sku: str | None = None
 
 
 class ReceiptFields(BaseModel):

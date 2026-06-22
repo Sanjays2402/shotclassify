@@ -245,6 +245,66 @@ def _find_change(text: str) -> float | None:
     return None
 
 
+# SKU / barcode / UPC / EAN / Item-Code / PLU printed alongside the
+# line item. Recognised wording (case-insensitive; ordered
+# most-specific-first so a "Item Code" beats a bare "Item #"):
+#
+#   SKU: 1234567                  -> 1234567
+#   SKU 1234567                   -> 1234567
+#   Barcode: 0123456789012        -> 0123456789012
+#   Barcode 0123456789012         -> 0123456789012
+#   UPC: 042100005264             -> 042100005264
+#   EAN: 5012345678900            -> 5012345678900
+#   Item Code: ABC-12345          -> ABC-12345
+#   Item #ABC-12345               -> ABC-12345
+#   Item No. ABC-99               -> ABC-99
+#   PLU: 4011                     -> 4011
+#
+# The value catch (alphanumerics + dashes / underscores / dots /
+# slashes) is bounded 3..32 chars to keep noisy OCR runs out. The
+# regex is anchored to consume the keyword + value as a single
+# group so callers can strip the matched span from the line and use
+# the leftover description for the per-line parser.
+_SKU_KEYWORD_RE = re.compile(
+    r"(?<![A-Za-z])"
+    r"(?:"
+    r"item\s+(?:code|no\.?|number)|"
+    r"item\s*#|"
+    r"sku|barcode|upc|ean|gtin|plu"
+    r")"
+    r"\s*[:#\-]?\s*"
+    r"(?P<sku>[A-Za-z0-9][A-Za-z0-9._/\-]{2,31})",
+    re.IGNORECASE,
+)
+
+
+def _extract_sku_from_line(line: str) -> tuple[str | None, str]:
+    """Return ``(sku, cleaned_line)`` where the SKU keyword + value
+    span has been stripped from the line.
+
+    Returns ``(None, line)`` unchanged when no SKU keyword is present.
+
+    The SKU value preserves the original case (alphanumeric IDs are
+    case-meaningful on many systems) and strips surrounding
+    whitespace from the cleaned line so the per-item parser can
+    re-parse it cleanly. Multiple SKU keywords on the same line
+    collapse to the FIRST match because per-item SKUs are normally
+    printed exactly once per line.
+    """
+    if not line:
+        return None, line
+    m = _SKU_KEYWORD_RE.search(line)
+    if not m:
+        return None, line
+    sku = m.group("sku")
+    # Strip the matched span; collapse multiple whitespace runs left
+    # over to a single space so a description split across the SKU
+    # ("Latte SKU: 12345 5.00" -> "Latte 5.00") re-parses cleanly.
+    cleaned = (line[: m.start()] + " " + line[m.end():]).strip()
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return sku, cleaned
+
+
 def _detect_currency(text: str) -> str | None:
     # 1) Unambiguous currency symbols win when present. ``$`` is
     #    canonically USD here because the symbol is shared across many
@@ -1131,16 +1191,31 @@ def _parse_items(text: str) -> list[ReceiptLine]:
         line = raw.strip()
         if not line:
             continue
+        # 0a) Per-line SKU / barcode extraction. We strip the SKU
+        #     keyword + value off the line BEFORE the per-item parsers
+        #     fire so a line like "Latte SKU: 12345 5.00" parses as
+        #     "Latte 5.00" with sku=12345 attached. A line that is
+        #     ONLY a SKU declaration ("SKU: 12345" on its own) attaches
+        #     to the LAST item already in the list -- that mirrors how
+        #     retail printers commonly print the SKU on the line
+        #     below the item description.
+        sku, line = _extract_sku_from_line(line)
+        if sku is not None and not line:
+            if items:
+                items[-1].sku = sku
+            continue
         low = line.lower()
-        # 0) Per-item percent-off discount. Run BEFORE the keyword skip
-        #    so a line like ``Promo: BOGO 50% off Latte 4.00`` is parsed
-        #    as a discounted item even though it contains the
-        #    ``promo`` / ``discount`` keywords that would otherwise
-        #    push it through ``continue``. We only short-circuit when
-        #    the line genuinely has a ``\d+% off`` clause.
+        # 0b) Per-item percent-off discount. Run BEFORE the keyword skip
+        #     so a line like ``Promo: BOGO 50% off Latte 4.00`` is parsed
+        #     as a discounted item even though it contains the
+        #     ``promo`` / ``discount`` keywords that would otherwise
+        #     push it through ``continue``. We only short-circuit when
+        #     the line genuinely has a ``\d+% off`` clause.
         if re.search(r"\d{1,2}\s*%\s*off\b", line, re.IGNORECASE):
             discounted = _try_pct_off(line)
             if discounted is not None:
+                if sku is not None:
+                    discounted.sku = sku
                 items.append(discounted)
                 if len(items) >= 30:
                     break
@@ -1175,7 +1250,7 @@ def _parse_items(text: str) -> list[ReceiptLine]:
                 continue
             desc = qty_match.group("desc").strip().strip(".:-")
             if 0.01 <= unit <= 9999 and 2 <= len(desc) <= 60 and qty > 0:
-                items.append(ReceiptLine(description=desc, qty=qty, price=unit))
+                items.append(ReceiptLine(description=desc, qty=qty, price=unit, sku=sku))
                 if len(items) >= 30:
                     break
                 continue
@@ -1196,13 +1271,21 @@ def _parse_items(text: str) -> list[ReceiptLine]:
                 continue
             desc = at_match.group("desc").strip().strip(".:-")
             if 0.01 <= unit <= 9999 and 2 <= len(desc) <= 60 and qty > 0:
-                items.append(ReceiptLine(description=desc, qty=qty, price=unit))
+                items.append(ReceiptLine(description=desc, qty=qty, price=unit, sku=sku))
                 if len(items) >= 30:
                     break
                 continue
         # 3) Bare desc + price (original behaviour).
         m = re.search(r"^(.*?)\s+(\d+(?:[.,]\d{2}))$", line)
         if not m:
+            # The line had no recognisable price tail. If we extracted
+            # a SKU off the line and the leftover is non-empty
+            # (description-only line followed by a SKU keyword), we
+            # still want to attach the SKU to the most-recent item --
+            # treat this case the same as the SKU-only-line branch
+            # at the top.
+            if sku is not None and items:
+                items[-1].sku = sku
             continue
         desc = m.group(1).strip().strip(".:-")
         try:
@@ -1210,7 +1293,7 @@ def _parse_items(text: str) -> list[ReceiptLine]:
         except ValueError:
             continue
         if 0.01 <= price <= 9999 and 2 <= len(desc) <= 60:
-            items.append(ReceiptLine(description=desc, price=price))
+            items.append(ReceiptLine(description=desc, price=price, sku=sku))
     return items[:30]
 
 
