@@ -329,6 +329,155 @@ def _find_rounding(text: str) -> float | None:
     return None
 
 
+# Tax-jurisdiction keywords. Each entry is the canonical title-case
+# rendering we emit; the matcher is case-insensitive. Recognised
+# vocabularies:
+#
+#   * US: state / county / city / local / sales / federal / use
+#     tax (each with the "Tax" suffix)
+#   * Canada: HST, PST, GST, QST (no "Tax" suffix; the abbreviation
+#     IS the jurisdiction name)
+#   * EU / UK: VAT, EU VAT, Import VAT
+#   * India: CGST, SGST, IGST, UTGST, CESS
+#   * AU / NZ: GST (also matched by the Canada entry; same name)
+#   * Specialty: Liquor Tax, Tobacco Tax, Hotel Tax, Lodging Tax,
+#     Tourism Tax, Restaurant Tax, Resort Fee Tax, Service Tax
+#
+# Ordered MOST SPECIFIC FIRST so multi-word forms ("State Tax")
+# win over the bare alias ("Tax") that already powers the top-level
+# ``tax`` slot. The plain "Tax" keyword is intentionally NOT in
+# this catalogue because a receipt that just prints "Tax 2.00"
+# carries no jurisdiction signal -- the top-level ``tax`` field
+# captures the amount and ``tax_lines`` stays empty for the single-
+# line case.
+_TAX_JURISDICTION_KEYWORDS: tuple[str, ...] = (
+    # US multi-word forms (most specific first).
+    "Resort Fee Tax",
+    "Restaurant Tax",
+    "Lodging Tax",
+    "Tourism Tax",
+    "Liquor Tax",
+    "Tobacco Tax",
+    "Hotel Tax",
+    "Service Tax",
+    "Federal Tax",
+    "Sales Tax",
+    "County Tax",
+    "State Tax",
+    "Local Tax",
+    "City Tax",
+    "Use Tax",
+    # EU / UK.
+    "Import VAT",
+    "EU VAT",
+    "VAT",
+    # India (specific GST forms before bare GST).
+    "UTGST",
+    "CGST",
+    "SGST",
+    "IGST",
+    "CESS",
+    # Canada.
+    "HST",
+    "PST",
+    "QST",
+    # AU / NZ / Canada (bare GST is the shortest unambiguous tax tag).
+    "GST",
+)
+
+
+def _find_tax_lines(text: str) -> list[dict[str, str | float]]:
+    """Return the per-jurisdiction tax breakdown found in ``text``.
+
+    Each entry is a ``{"jurisdiction": str, "amount": float}`` dict.
+    Jurisdictions are emitted in the canonical title-case form from
+    ``_TAX_JURISDICTION_KEYWORDS``. Amount is the signed positive
+    float printed on the line (negative tax adjustments are extremely
+    rare and would land via ``_find_amount_after``'s unsigned capture
+    -- we accept that limitation and surface them as the absolute
+    value).
+
+    Returns an empty list when the receipt has 0 or 1 distinct tax
+    jurisdictions. The single-line case (a bare ``Tax 2.00``) lives
+    in the top-level ``tax`` slot; ``tax_lines`` only carries a
+    breakdown when MULTIPLE jurisdictions appear so a dashboard can
+    rely on ``len(tax_lines) > 0`` meaning "this receipt has a real
+    multi-jurisdiction breakdown".
+
+    Each (jurisdiction, line-position) pair is captured exactly once.
+    A keyword that appears multiple times in OCR order (a printed
+    summary echoing the line items) captures the LAST occurrence per
+    jurisdiction, mirroring ``_find_amount_after``'s last-wins
+    semantics. The returned list is sorted by source-text offset so a
+    dashboard rendering the breakdown sees the same top-to-bottom
+    ordering as the printer.
+    """
+    if not text:
+        return []
+    # Track (best_offset, amount, end_offset) per canonical jurisdiction.
+    # We pick the LAST printed occurrence of each jurisdiction (matches
+    # last-wins semantics for the top-level ``tax`` slot when a receipt
+    # echoes the summary at the bottom), with the constraint that the
+    # match cannot overlap any longer-keyword jurisdiction already
+    # recorded (so ``VAT`` doesn't double-match inside ``Import VAT``).
+    hits: dict[str, tuple[int, float, int]] = {}
+    for keyword in _TAX_JURISDICTION_KEYWORDS:
+        # We need both a per-keyword position AND the amount, so use a
+        # local regex instead of calling _find_amount_after (which only
+        # returns the value). Same separator class so we stay
+        # compatible with the rest of the receipt extractor.
+        pattern = re.compile(
+            rf"(?:(?<=\n)|(?<=^)|(?<=[^a-zA-Z])){re.escape(keyword)}"
+            r"\s*[:\-]?\s*[$€£¥]?\s*"
+            r"(?P<amt>\d{1,5}(?:[.,]\d{2}))",
+            re.IGNORECASE,
+        )
+        # Walk every match in source order. The longest-first keyword
+        # ordering means the spans of already-recorded jurisdictions
+        # are pinned; we accept the LAST current-keyword match that
+        # doesn't overlap any of them. This keeps last-wins semantics
+        # for echoed summary lines (a receipt that prints the totals
+        # twice picks up the bottom copy) while preventing ``VAT``
+        # from stealing the suffix of an ``Import VAT`` span recorded
+        # by an earlier loop iteration.
+        existing_spans = _spans(hits)
+        chosen: re.Match[str] | None = None
+        for m in pattern.finditer(text):
+            start = m.start()
+            end = m.end()
+            overlap = any(
+                existing_start <= start < existing_end
+                or existing_start < end <= existing_end
+                for existing_start, existing_end in existing_spans
+            )
+            if overlap:
+                continue
+            chosen = m
+        if chosen is None:
+            continue
+        try:
+            amt = float(chosen.group("amt").replace(",", "."))
+        except ValueError:
+            continue
+        # Defensive: bound the amount at 0.01..99999.99 so a garbage
+        # OCR match on a long number doesn't sneak in.
+        if not (0.01 <= amt <= 99999.99):
+            continue
+        hits[keyword] = (chosen.start(), amt, chosen.end())
+    # Sort by source-text offset and emit. We need len >= 2 for the
+    # breakdown to be useful (one jurisdiction lives in the top-level
+    # ``tax`` slot already).
+    if len(hits) < 2:
+        return []
+    ordered = sorted(hits.items(), key=lambda kv: kv[1][0])
+    return [{"jurisdiction": k, "amount": v[1]} for k, v in ordered]
+
+
+def _spans(hits: dict[str, tuple[int, float, int]]) -> list[tuple[int, int]]:
+    """Return the (start, end) spans of every recorded hit."""
+    return [(v[0], v[2]) for v in hits.values()]
+
+
 # SKU / barcode / UPC / EAN / Item-Code / PLU printed alongside the
 # line item. Recognised wording (case-insensitive; ordered
 # most-specific-first so a "Item Code" beats a bare "Item #"):
@@ -1445,6 +1594,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         tendered=_find_tendered(text),
         change=_find_change(text),
         rounding=_find_rounding(text),
+        tax_lines=_find_tax_lines(text),
         items=_parse_items(text),
     )
 
@@ -1466,6 +1616,11 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
             setattr(merged, f, getattr(parsed, f))
     if not merged.items:
         merged.items = parsed.items
+    # Backfill tax_lines when caller supplied none. We never override
+    # a non-empty caller-supplied list because the LLM may have
+    # surfaced a richer breakdown than the regex-based extractor can.
+    if not merged.tax_lines:
+        merged.tax_lines = parsed.tax_lines
     # Recompute tip_percent against the merged tip + subtotal/total so a
     # caller that only supplied a subtotal still gets a derived percent
     # when the OCR pass discovered the tip.

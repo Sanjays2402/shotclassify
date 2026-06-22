@@ -128,6 +128,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             tendered=r.get("tendered"),
             change=r.get("change"),
             rounding=r.get("rounding"),
+            tax_lines=r.get("tax_lines") or [],
             items=items,
         )
     if c := fields_in.get("code"):

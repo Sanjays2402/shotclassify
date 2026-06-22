@@ -228,6 +228,32 @@ class ReceiptFields(BaseModel):
     # reduction the merchant chose) and ``change`` (the bills /
     # coins handed back); rounding is a regulatory adjustment.
     rounding: float | None = None
+    # Tax-jurisdiction breakdown. When a receipt prints MORE than one
+    # tax line (``State Tax 1.50 / County Tax 0.50 / City Tax 0.25``,
+    # ``VAT 2.00 / GST 0.50``, ``HST 1.30 / PST 0.40``, etc.) each
+    # jurisdiction is captured as a ``{"jurisdiction": str, "amount":
+    # float}`` dict. The top-level ``tax`` slot continues to carry the
+    # single SUM (last-match-wins on the bare ``Tax`` keyword) for
+    # backward-compat with existing dashboards.
+    #
+    # Recognised jurisdiction vocabulary (case-insensitive):
+    # * US: State Tax, County Tax, City Tax, Local Tax, Sales Tax,
+    #   Federal Tax, Use Tax
+    # * Canada: HST, PST, GST, QST
+    # * EU / UK: VAT, EU VAT, Import VAT
+    # * AU / NZ: GST
+    # * India: CGST, SGST, IGST, UTGST, CESS
+    # * Other: Service Tax (legacy IN), Liquor Tax, Tobacco Tax,
+    #   Hotel Tax, Lodging Tax, Tourism Tax, Restaurant Tax,
+    #   Resort Fee Tax
+    #
+    # Jurisdictions are preserved verbatim in title-case for stable
+    # dashboard rendering. Empty list when the receipt has 0 or 1 tax
+    # lines (a single ``Tax 2.00`` lives in the top-level ``tax``
+    # slot; we only break out the list when MULTIPLE distinct
+    # jurisdictions appear so dashboards always know "len > 0 means
+    # this receipt has a real jurisdiction breakdown").
+    tax_lines: list[dict[str, str | float]] = Field(default_factory=list)
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
