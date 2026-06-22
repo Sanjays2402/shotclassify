@@ -20,6 +20,7 @@ from .macs import extract_macs
 from .network import extract_network
 from .paths import extract_paths
 from .phones import extract_phones
+from .postal_codes import extract_postal_codes
 from .receipt import enrich_receipt
 from .slack_ids import extract_slack_ids
 from .social import extract_social
@@ -345,5 +346,29 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if amounts:
         out.raw = dict(out.raw or {})
         out.raw["amounts"] = amounts
+
+    # Cross-category: stash postal codes (US ZIP / UK postcode / CA
+    # / DE / FR / NL / AU / JP / IN / BR) found in the OCR text
+    # under raw["postal_codes"]. Postal codes surface across every
+    # category -- addresses on receipts, customer info in code
+    # snippets, error pages that cite a billing address, chat
+    # captures of shipping discussions, document captures of
+    # letters / invoices / forms.
+    #
+    # Each entry is a {"country", "code"} dict where country is the
+    # ISO 3166-1 alpha-2 code (US / GB / CA / DE / FR / NL / AU /
+    # JP / IN / BR) and code is the postal code in its canonical
+    # printed form for that country.
+    #
+    # Anchored shapes (US ZIP, German PLZ, French CP, Australian
+    # postcode, Indian PIN) require a same-line country / state /
+    # city anchor because bare digit-runs of those lengths are too
+    # common to land safely without one. Self-anchored shapes
+    # (UK postcode, Canadian, Japanese, Brazilian, Dutch) fire
+    # without an extra anchor because their format is unique.
+    postal_codes = extract_postal_codes(text)
+    if postal_codes:
+        out.raw = dict(out.raw or {})
+        out.raw["postal_codes"] = postal_codes
 
     return out

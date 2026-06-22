@@ -48,6 +48,7 @@ from .network import extract_network
 from .paths import extract_paths
 from .phones import extract_phones
 from .pipeline import enrich
+from .postal_codes import extract_postal_codes
 from .receipt import enrich_receipt, parse_receipt_text
 from .slack_ids import extract_slack_ids
 from .social import extract_social
@@ -111,4 +112,5 @@ __all__ = [
     "extract_arns",
     "extract_discord_ids",
     "extract_jwts",
+    "extract_postal_codes",
 ]
