@@ -623,6 +623,58 @@ class CodeFields(BaseModel):
     # order preserved. Capped at 50 entries. Empty list when no
     # regex literal is present.
     regexes: list[dict[str, str]] = Field(default_factory=list)
+    # Build-tool / package-manager / task-runner command lines
+    # detected in the snippet. Code snippets and terminal captures
+    # often paste a recipe alongside the actual code:
+    #
+    #   $ npm install
+    #   $ yarn add react@18
+    #   $ pnpm run build
+    #   $ pip install -r requirements.txt
+    #   $ poetry add httpx
+    #   $ uv sync
+    #   $ cargo build --release
+    #   $ go build ./...
+    #   $ make test
+    #   $ bundle install
+    #   $ gem install rails
+    #   $ composer require monolog/monolog
+    #   $ mvn clean install
+    #   $ gradle wrapper
+    #   $ dotnet restore
+    #   $ docker build -t app .
+    #   $ kubectl apply -f deploy.yaml
+    #   $ terraform apply
+    #   $ helm install app ./chart
+    #
+    # Each entry is a ``{"tool": str, "command": str}`` dict.
+    # ``tool`` is the canonical lowercase package-manager / build-
+    # tool name (``npm`` / ``yarn`` / ``pnpm`` / ``pip`` / ``poetry``
+    # / ``uv`` / ``cargo`` / ``go`` / ``make`` / ``bundle`` / ``gem``
+    # / ``composer`` / ``mvn`` / ``gradle`` / ``dotnet`` / ``docker``
+    # / ``kubectl`` / ``terraform`` / ``helm`` / ``brew`` / ``apt`` /
+    # ``yum`` / ``dnf`` / ``pacman`` / ``apk``). ``command`` is the
+    # full command line as printed, with any leading shell prompt
+    # (``$ `` / ``# `` / ``> `` / ``PS> `` / ``$ \\``) stripped.
+    #
+    # The detector recognises commands whether they appear:
+    #   * On a leading prompt line (``$ npm install``) -- the most
+    #     common shape in tutorial / README screenshots.
+    #   * At line-start with no prompt (``npm install``) -- a copy-
+    #     pasted recipe.
+    #   * Inside a shell script (``#!/bin/bash`` followed by command
+    #     lines).
+    #
+    # Dashboards use this list to surface "uses npm + cargo + docker"
+    # toolchain annotations on code-review screenshots and to spot
+    # incompatible-with-CI commands at a glance (a screenshot that
+    # shows ``yarn`` when the repo's lockfile is ``package-lock.json``
+    # is a red flag).
+    #
+    # De-duped on the (tool, command) tuple; first-seen order
+    # preserved. Capped at 50 entries. Empty list when no recognised
+    # command is present.
+    build_commands: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):

@@ -18,6 +18,7 @@ from .code import (
     detect_todo_count,
     detect_ts_features,
     enrich_code,
+    extract_build_commands,
     extract_copyrights,
     extract_feature_flags,
     extract_imports,
@@ -117,4 +118,5 @@ __all__ = [
     "extract_jwts",
     "extract_postal_codes",
     "extract_regex_literals",
+    "extract_build_commands",
 ]

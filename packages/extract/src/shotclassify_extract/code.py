@@ -2547,6 +2547,233 @@ def detect_numbered(code: str) -> tuple[bool, str]:
     return False, code
 
 
+# Build-tool / package-manager / task-runner command detection.
+# Code snippets and terminal captures often include recipe lines
+# (``$ npm install`` / ``cargo build --release`` / ``docker build .``)
+# alongside the actual source. We recognise the most common 25
+# package-manager / build-tool / runtime / cloud-CLI commands and
+# surface each as a ``{tool, command}`` dict so dashboards can
+# annotate "uses npm + cargo + docker" toolchains at a glance.
+#
+# Detection rules:
+#   * The line MUST start the command at its first non-prompt token.
+#     A leading shell prompt (``$ `` / ``# `` / ``> `` / ``PS> ``
+#     / ``[user@host]$ ``) is stripped first.
+#   * The tool name MUST match one of the catalogue keys.
+#   * The line MUST have at least one space-separated subcommand
+#     or flag after the tool name (``npm`` alone is the executable
+#     name, not a command). EXCEPTION: ``make`` accepts a bare
+#     invocation since ``make`` with no target is meaningful
+#     (it runs the first target in the Makefile).
+
+# Canonical tool catalogue. Keys are the lowercase executable names
+# we recognise; values are tuples of subcommands the tool typically
+# takes (used to harden matches -- a line with a recognised tool
+# but no recognised subcommand is allowed through but flagged as
+# generic). For tools where any subcommand is plausible (docker,
+# kubectl, terraform, helm, etc.) we use the wildcard tuple ``()``
+# which accepts anything after the tool name.
+_BUILD_TOOLS: dict[str, tuple[str, ...]] = {
+    # Node ecosystem -- npm / yarn / pnpm / npx / bun
+    "npm": ("install", "run", "test", "build", "start", "init", "publish",
+            "audit", "update", "ci", "rebuild", "exec", "outdated",
+            "uninstall", "link", "view", "version", "dedupe", "fund",
+            "pack"),
+    "yarn": ("install", "add", "remove", "run", "test", "build", "start",
+             "init", "publish", "upgrade", "remove", "outdated",
+             "create", "exec", "global", "workspace", "workspaces"),
+    "pnpm": ("install", "add", "remove", "run", "test", "build", "start",
+             "init", "publish", "update", "outdated", "exec", "create",
+             "dlx", "store"),
+    "bun": ("install", "add", "remove", "run", "test", "build", "create",
+            "init", "x", "link"),
+    "npx": (),
+    # Python ecosystem
+    "pip": ("install", "uninstall", "freeze", "list", "show", "search",
+            "download", "wheel", "check", "config", "cache", "debug"),
+    "pip3": ("install", "uninstall", "freeze", "list"),
+    "pipx": ("install", "run", "uninstall", "upgrade", "list", "inject",
+             "runpip", "ensurepath", "completions"),
+    "poetry": ("add", "install", "update", "remove", "publish", "build",
+               "run", "init", "lock", "show", "env", "config", "shell",
+               "version", "new", "export"),
+    "uv": ("sync", "add", "remove", "run", "pip", "tool", "init",
+           "lock", "build", "publish", "venv", "cache", "self",
+           "python"),
+    "conda": ("install", "create", "activate", "env", "update", "remove",
+              "search", "list", "info"),
+    "pipenv": ("install", "uninstall", "update", "lock", "shell", "run",
+               "graph", "check"),
+    # Ruby
+    "bundle": ("install", "update", "exec", "add", "remove", "outdated",
+               "lock", "init", "show", "info", "platform"),
+    "gem": ("install", "uninstall", "update", "list", "search", "build",
+            "push", "fetch", "outdated", "cleanup", "which"),
+    # Rust
+    "cargo": ("build", "run", "test", "check", "install", "publish",
+              "new", "init", "update", "fmt", "clippy", "doc", "tree",
+              "add", "remove", "search", "bench", "fix", "audit",
+              "expand"),
+    "rustup": ("install", "update", "default", "show", "self", "component",
+               "target", "toolchain", "completions"),
+    # Go
+    "go": ("build", "run", "test", "get", "install", "mod", "fmt",
+           "vet", "tool", "doc", "version", "env", "generate", "list",
+           "clean", "work"),
+    # PHP
+    "composer": ("install", "require", "update", "remove", "init",
+                 "dump-autoload", "create-project", "search", "show",
+                 "outdated", "self-update", "global"),
+    # Java / JVM
+    "mvn": ("install", "clean", "test", "package", "compile", "verify",
+            "deploy", "site", "dependency", "archetype", "wrapper"),
+    "gradle": ("build", "test", "run", "clean", "tasks", "init", "wrapper",
+               "publish", "assemble", "check", "dependencies"),
+    "sbt": ("compile", "test", "run", "clean", "assembly", "publish",
+            "console", "stage"),
+    # .NET
+    "dotnet": ("build", "run", "test", "publish", "new", "restore", "add",
+               "remove", "list", "pack", "tool", "nuget", "watch",
+               "format", "clean"),
+    "nuget": ("install", "update", "restore", "push", "pack", "list"),
+    # Make / build runners
+    "make": (),
+    "just": (),
+    "task": (),
+    # Containers / orchestration
+    "docker": ("build", "run", "push", "pull", "compose", "exec", "ps",
+               "images", "rmi", "rm", "tag", "save", "load", "inspect",
+               "stop", "start", "restart", "logs", "kill", "cp",
+               "network", "volume", "system"),
+    "podman": ("build", "run", "push", "pull", "exec", "ps", "images",
+               "rmi", "rm", "tag", "inspect", "stop", "start"),
+    "kubectl": ("apply", "get", "delete", "create", "describe", "logs",
+                "exec", "edit", "patch", "rollout", "scale", "expose",
+                "run", "port-forward", "cp", "explain", "config",
+                "annotate", "label"),
+    "helm": ("install", "upgrade", "uninstall", "list", "repo", "search",
+             "show", "template", "lint", "package", "history", "rollback",
+             "status", "version"),
+    "terraform": ("init", "plan", "apply", "destroy", "validate", "fmt",
+                  "show", "import", "output", "workspace", "state",
+                  "providers", "version", "console", "graph", "refresh"),
+    # OS package managers
+    "brew": ("install", "uninstall", "update", "upgrade", "list", "search",
+             "info", "outdated", "cleanup", "doctor", "tap", "cask",
+             "services", "bundle"),
+    "apt": ("install", "update", "upgrade", "remove", "purge", "search",
+            "show", "list", "autoremove", "full-upgrade", "policy",
+            "edit-sources"),
+    "apt-get": ("install", "update", "upgrade", "remove", "purge",
+                "autoremove", "clean"),
+    "yum": ("install", "update", "remove", "search", "info", "list",
+            "clean", "check-update", "history"),
+    "dnf": ("install", "update", "remove", "search", "info", "list",
+            "clean", "upgrade", "history"),
+    "pacman": ("-S", "-R", "-U", "-Q", "-Sy", "-Syu", "-Syyu", "-Ss",
+               "-Si", "-Qi"),
+    "apk": ("add", "del", "update", "upgrade", "info", "search", "fix"),
+    # CI / version control / others worth catching
+    "act": ("-l", "-j", "push", "pull_request"),
+    "gh": ("repo", "pr", "issue", "auth", "release", "workflow", "run",
+           "api", "browse", "label", "secret"),
+}
+
+# Maximum number of build_commands entries surfaced per snippet.
+_MAX_BUILD_COMMANDS = 50
+
+# Shell prompts recognised on the leading position of a line. The
+# regex strips them so the cleaned command line can be tokenised.
+# Supports bash / zsh / fish ``$``, root ``#``, PowerShell ``PS>``
+# and ``>``, conda env ``(env) $``, bracket-then-prompt
+# ``[user@host project]$``, and continuation ``$ \\``.
+_PROMPT_RE = re.compile(
+    r"^\s*"
+    r"(?:"
+    # ``(env) `` virtualenv / conda env prefix
+    r"\([\w./@\-]+\)\s+"
+    # ``[user@host project]$ `` brackets
+    r"|\[[^\]]+\]\s*"
+    # ``user@host:path# `` shell-style prompt (consumed up to the ``$``/``#``/``>``)
+    r"|[\w.@\-]+@[\w.@\-]+:[^$#>]*"
+    r")?"
+    r"(?:"
+    # PowerShell ``PS C:\path>`` or ``PS>``. Accepts the bare ``PS``
+    # form OR ``PS`` + space + drive-letter + ``:`` + path + ``>``.
+    r"PS(?:\s+[A-Z]:[^\s>]*)?\s*>\s+"
+    r"|\$\s+"                     # bash / zsh ``$ ``
+    r"|#\s+"                      # root ``# `` (must be followed by space)
+    r"|>\s+"                      # generic ``> ``
+    r")"
+)
+
+
+def extract_build_commands(code: str) -> list[dict[str, str]]:
+    """Return build / package-manager command entries found in ``code``.
+
+    Each entry is a ``{"tool": str, "command": str}`` dict. ``tool``
+    is the lowercase canonical executable name. ``command`` is the
+    full command line as printed, with any leading shell prompt
+    stripped so the cleaned form is directly executable.
+
+    Detection rules:
+      * Per-line scan over the snippet body.
+      * Leading shell prompt (``$ ``, ``# ``, ``> ``, ``PS> ``,
+        ``(env) $ ``, ``[user@host]$ ``) stripped.
+      * The first token MUST match a tool key in the catalogue.
+      * The tool name MUST be followed by at least one space-
+        separated subcommand or flag (exception: ``make`` /
+        ``just`` / ``task`` / ``npx`` accept bare invocations).
+      * The match must be at the START of the cleaned line so a
+        prose mention of ``npm install`` mid-sentence doesn't
+        false-positive.
+
+    De-duped on the (tool, command) tuple; first-seen order
+    preserved. Capped at 50 entries.
+    """
+    if not code:
+        return []
+    seen: set[tuple[str, str]] = set()
+    out: list[dict[str, str]] = []
+    bare_ok = {"make", "just", "task", "npx"}
+    for raw_line in code.splitlines():
+        # Strip a leading shell prompt if present.
+        m = _PROMPT_RE.match(raw_line)
+        if m:
+            line = raw_line[m.end():].lstrip()
+        else:
+            line = raw_line.lstrip()
+        if not line:
+            continue
+        # First token = tool name. Tokenise on whitespace.
+        toks = line.split()
+        if not toks:
+            continue
+        tool = toks[0].lower()
+        # ``./mvnw`` / ``./gradlew`` wrapper forms re-map to the
+        # underlying tool so dashboards group wrapper + bare calls.
+        if tool in ("./mvnw", "mvnw"):
+            tool = "mvn"
+        elif tool in ("./gradlew", "gradlew", "gradlew.bat"):
+            tool = "gradle"
+        if tool not in _BUILD_TOOLS:
+            continue
+        # Tools that need at least one subcommand or flag.
+        if tool not in bare_ok and len(toks) < 2:
+            continue
+        # Clean the captured command: drop trailing prompt continuations
+        # and normalise internal runs of whitespace.
+        cleaned = re.sub(r"\s+", " ", line).strip()
+        key = (tool, cleaned)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"tool": tool, "command": cleaned})
+        if len(out) >= _MAX_BUILD_COMMANDS:
+            break
+    return out
+
+
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     code = (existing.code if existing and existing.code else ocr.text or "").strip()
     # Markdown fence-language detection. Runs FIRST on the original
@@ -2714,6 +2941,20 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if not regexes:
         regexes = extract_regex_literals(code, language)
+    # Build-tool / package-manager command detection. Caller-supplied
+    # list wins (preserved verbatim); otherwise scan the snippet for
+    # recognised npm / yarn / pnpm / pip / poetry / uv / cargo / go /
+    # make / bundle / gem / composer / mvn / gradle / dotnet / docker
+    # / kubectl / terraform / helm / brew / apt / yum / dnf / pacman /
+    # apk command lines and surface each ``{tool, command}`` pair.
+    # Returns an empty list when no recognised command is present.
+    build_commands = (
+        list(existing.build_commands)
+        if existing and existing.build_commands
+        else []
+    )
+    if not build_commands:
+        build_commands = extract_build_commands(code)
     return CodeFields(
         language=language,
         code=code,
@@ -2734,4 +2975,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         feature_flags=feature_flags,
         css_vendor_prefixes=css_vendor_prefixes,
         regexes=regexes,
+        build_commands=build_commands,
     )
