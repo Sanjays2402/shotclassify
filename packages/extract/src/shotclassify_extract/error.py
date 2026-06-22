@@ -553,6 +553,28 @@ def parse_sql_error(text: str) -> tuple[str, str, str, int | None] | None:
     return _parse_sql_error(text)
 
 
+def parse_spring_whitelabel(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    """Return ``(exception, message, path or None, status or None)``
+    for a Spring Boot WhiteLabel error page, or ``None`` when no
+    WhiteLabel signature is present.
+
+    The exception slot prefers a Java-style FQCN
+    (``com.example.app.NotFoundException``) when included in the
+    stack-trace dump (server.error.include-stacktrace=always);
+    otherwise it falls back to Spring's HTTP reason phrase tagged
+    as ``Type: <reason>``. The message slot is the captured
+    exception message when present, else a composed
+    ``HTTP <status> on <path>`` summary so dashboards still have a
+    triage tag. The path is the failing request path when Spring
+    printed ``no explicit mapping for /xxx``, else ``None``. The
+    status is the integer HTTP status code from the
+    ``(type=..., status=NNN)`` summary line.
+    """
+    return _parse_spring_whitelabel(text)
+
+
 def _parse_sql_error(text: str) -> tuple[str, str, str, int | None] | None:
     if not text:
         return None
@@ -1183,6 +1205,262 @@ _NEST_EXC = re.compile(
 )
 
 
+# Spring Boot WhiteLabel error page. Spring's default ``/error`` HTML
+# endpoint surfaces a small standalone HTML page that screenshots
+# capture often -- a user hits a 404 / 500 and the WhiteLabel page is
+# what they paste into their bug report. The page has a distinctive
+# layout that doesn't appear anywhere else:
+#
+#   Whitelabel Error Page
+#   This application has no explicit mapping for /error, so you are seeing this as a fallback.
+#   Sat May 21 16:14:21 IST 2023
+#   There was an unexpected error (type=Not Found, status=404).
+#   No message available
+#
+# Spring Boot 2.x and 3.x both ship this same fallback. The
+# ``Whitelabel Error Page`` heading is the unambiguous discriminator;
+# the ``type=...`` and ``status=...`` fields carry the exception
+# class (Spring's reason phrase) and HTTP status code. The trailing
+# ``message`` line is the captured exception message (or the literal
+# ``No message available`` when Spring couldn't extract one).
+#
+# A modern Spring Boot deployment can be configured to disable the
+# WhiteLabel page (``server.error.whitelabel.enabled=false``) and
+# return a structured JSON body instead -- those cases would tag as
+# generic ``jvm`` via the regular stacktrace branch, not here.
+_SPRING_WHITELABEL_PRELUDE = re.compile(
+    r"Whitelabel\s+Error\s+Page",
+    re.IGNORECASE,
+)
+# The summary line: ``There was an unexpected error (type=Not Found, status=404).``
+# Status is always present and always a 3-digit integer; the type
+# string is Spring's HTTP reason phrase (``Not Found`` / ``Internal
+# Server Error`` / ``Bad Request`` / etc).
+_SPRING_WHITELABEL_TYPE = re.compile(
+    r"\(\s*type\s*=\s*(?P<type>[^,)]+?)\s*,\s*status\s*=\s*(?P<status>\d{3})\s*\)",
+    re.IGNORECASE,
+)
+# The timestamp line: ``Sat May 21 16:14:21 IST 2023`` (Java's
+# Date.toString() format). Captured optionally so it can land in the
+# message slot when the printed message is just "No message
+# available".
+_SPRING_WHITELABEL_DATE = re.compile(
+    r"^(?P<date>(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)\s+"
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
+    r"\d{1,2}\s+\d{1,2}:\d{2}:\d{2}(?:\s+[A-Z]{2,5})?\s+\d{4})\s*$",
+    re.MULTILINE,
+)
+# Spring's "No message available" placeholder. When the printed
+# message line matches this, the real message text is missing.
+_SPRING_WHITELABEL_NO_MSG = re.compile(r"^\s*No\s+message\s+available\s*$", re.MULTILINE)
+# Path line: ``This application has no explicit mapping for /error``
+# - used to capture the request path when present. We stop at the
+# first whitespace, comma, semicolon, or closing-paren so trailing
+# punctuation in Spring's "/path, so you are seeing this" wording
+# doesn't bleed into the path. Path chars per RFC 3986 (plus the
+# common query/fragment chars) are: a-z A-Z 0-9 ._~!$&'()*+:@%/?#=&-
+# We restrict to a conservative set so OCR noise doesn't run away.
+_SPRING_WHITELABEL_PATH = re.compile(
+    r"no\s+explicit\s+mapping\s+for\s+(?P<path>/[A-Za-z0-9._~!$&'*+:@%/?#=&\-]*)",
+    re.IGNORECASE,
+)
+# Spring stack-trace exception class can sometimes appear below the
+# summary line in a stack-trace dump (when server.error.include-
+# stacktrace is set). The shape is ``com.foo.Bar$Baz: message`` --
+# the same as JVM but we capture it here separately so we don't have
+# to walk into _JAVA_EXC.
+_SPRING_WHITELABEL_EXC = re.compile(
+    r"^(?P<exc>[a-z][\w]*(?:\.[A-Za-z][\w]*)+(?:Exception|Error))\s*:?\s*(?P<msg>.*)$",
+    re.MULTILINE,
+)
+
+
+def _parse_spring_whitelabel(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    """Return (exception, message, path, status) for a Spring Boot
+    WhiteLabel error page, or None.
+
+    Detection requires the literal ``Whitelabel Error Page`` heading
+    (Spring's unambiguous signature) AND the typed summary line
+    ``(type=..., status=NNN)``. Without both we return None so a
+    document that mentions the phrase in prose (a runbook entry, a
+    bug-report template) doesn't false-positive.
+
+    The exception slot is populated with the most informative tag
+    available, in this priority:
+
+    1. A Java-style stack-trace exception class
+       (``com.example.app.NotFoundException``) when included in the
+       output (server.error.include-stacktrace=always).
+    2. Spring's HTTP reason phrase as ``Type: <type>``
+       (``Not Found`` / ``Internal Server Error``) -- this is always
+       printed.
+
+    The message slot is the captured exception message when present;
+    when Spring printed ``No message available`` we fall back to a
+    composed ``HTTP <status> on <path>`` summary so the dashboard
+    still has triage information. The path is pulled from the
+    ``no explicit mapping for /xxx`` line when present, else None.
+    The status is the integer HTTP status code from the summary
+    line (always present when the WhiteLabel page renders).
+
+    Returns ``None`` when the text is not recognisably a Spring
+    WhiteLabel page, so the caller can fall through to the regular
+    JVM branch (which would otherwise tag the stack-trace dump as
+    framework='jvm').
+    """
+    if not text:
+        return None
+    if _SPRING_WHITELABEL_PRELUDE.search(text) is None:
+        return None
+    summary = _SPRING_WHITELABEL_TYPE.search(text)
+    if summary is None:
+        return None
+    type_phrase = summary.group("type").strip()
+    try:
+        status = int(summary.group("status"))
+    except ValueError:
+        return None
+    # Path lookup (informational; not a hard requirement).
+    path_match = _SPRING_WHITELABEL_PATH.search(text)
+    path = path_match.group("path") if path_match else None
+    # Exception class preference: a Java-style FQCN in the body wins
+    # over the bare HTTP reason phrase.
+    exc: str | None = None
+    msg: str | None = None
+    exc_match = _SPRING_WHITELABEL_EXC.search(text)
+    if exc_match is not None:
+        # Defence: don't accept the WhiteLabel summary line itself or
+        # the prelude as the exception. Both contain dots but the
+        # WhiteLabel page heading isn't a FQCN.
+        candidate = exc_match.group("exc")
+        # Reject anything that's clearly not a Java class (no dot, or
+        # a single dotted segment that's actually a host like
+        # localhost.example.com which wouldn't end in Exception/Error
+        # but we add the safety belt).
+        if "." in candidate and (
+            candidate.endswith("Exception") or candidate.endswith("Error")
+        ):
+            exc = candidate
+            msg_candidate = exc_match.group("msg").strip()
+            msg = msg_candidate or None
+    if exc is None:
+        # Fall back to the HTTP reason phrase tag.
+        exc = f"Type: {type_phrase}"
+    if msg is None:
+        # Look for the printed message line (everything after the
+        # summary that isn't the No-message placeholder).
+        if _SPRING_WHITELABEL_NO_MSG.search(text):
+            # No real message available; compose a triage summary.
+            if path:
+                msg = f"HTTP {status} on {path}"
+            else:
+                msg = f"HTTP {status}"
+        else:
+            # Find the first non-empty line AFTER the type=..., status=...
+            # summary that isn't the timestamp or the no-explicit-
+            # mapping prose. Spring prints "Message: <msg>" or "<msg>"
+            # on a line of its own when include-message=always is set.
+            #
+            # We iterate by LINE boundaries (not by the summary regex's
+            # end offset, which may sit mid-line and leave the line's
+            # trailing punctuation as the first "tail" token). Walk
+            # ahead to the first newline after the summary's start,
+            # then split the rest on newlines.
+            summary_line_end = text.find("\n", summary.start())
+            if summary_line_end == -1:
+                tail = ""
+            else:
+                tail = text[summary_line_end + 1:]
+            for raw in tail.splitlines():
+                stripped = raw.strip()
+                if not stripped:
+                    continue
+                # Skip Spring's own date line and the mapping notice.
+                if _SPRING_WHITELABEL_DATE.match(raw):
+                    continue
+                if "no explicit mapping" in stripped.lower():
+                    continue
+                if "whitelabel" in stripped.lower():
+                    continue
+                # Skip stack-trace frame lines (they start with ``at ``
+                # or are empty). The exception line itself would have
+                # been picked up by _SPRING_WHITELABEL_EXC above.
+                if stripped.startswith("at "):
+                    continue
+                # Skip pure HTML closing tags (``</body></html>``) that
+                # screenshot-OCR captures from the rendered HTML page.
+                if stripped.startswith("<") and stripped.endswith(">") and "</" in stripped:
+                    continue
+                # Strip a leading "Message:" prefix when present (some
+                # Spring versions print this label).
+                if stripped.lower().startswith("message:"):
+                    stripped = stripped[8:].strip()
+                if stripped:
+                    msg = stripped
+                    break
+            if msg is None:
+                if path:
+                    msg = f"HTTP {status} on {path}"
+                else:
+                    msg = f"HTTP {status}"
+    return exc, msg, path, status
+
+
+def _spring_whitelabel_likely_cause(status: int | None, exc: str | None, message: str | None) -> str | None:
+    """Return operator-friendly hints for common Spring WhiteLabel pages."""
+    if status is None:
+        return None
+    exc_l = (exc or "").lower()
+    msg_l = (message or "").lower()
+    # Class-level hits dominate the cause hint when present.
+    if "notfoundexception" in exc_l or "nosuchelementexception" in exc_l:
+        return "Resource missing; check repository lookup before the controller returns."
+    if "methodargumentnotvalidexception" in exc_l or "constraintviolationexception" in exc_l:
+        return "Request body / params failed validation; check @Valid annotations and DTO."
+    if "accessdeniedexception" in exc_l or "authenticationexception" in exc_l:
+        return "Spring Security denied the request; check role hierarchy and method security."
+    if "httpmessagenotreadable" in exc_l:
+        return "Request body could not be deserialised; check Content-Type and JSON schema."
+    if "datainsertionexception" in exc_l or "dataintegrityviolation" in exc_l:
+        return "DB constraint violated; check unique key / foreign key / not-null."
+    if "httpmediatypenotsupported" in exc_l:
+        return "Endpoint cannot consume the request Content-Type."
+    if "httprequestmethodnotsupported" in exc_l:
+        return "Endpoint cannot handle the request method (POST vs GET / etc)."
+    if "responsestatusexception" in exc_l or "errorresponseexception" in exc_l:
+        return "Controller raised a typed ResponseStatusException; check the source endpoint."
+    # Status-level fallback.
+    if status == 404:
+        return "Route did not match any @RequestMapping; check controller path."
+    if status == 401:
+        return "Missing or invalid auth credentials; check Spring Security filter chain."
+    if status == 403:
+        return "Authenticated but lacking required role / permission."
+    if status == 400:
+        return "Request failed validation; check binding result and validator."
+    if status == 409:
+        return "Resource conflict; check unique constraint or optimistic lock."
+    if status == 415:
+        return "Endpoint does not accept the request Content-Type."
+    if status == 422:
+        return "Semantic validation failed; payload is well-formed but invalid."
+    if status == 429:
+        return "Rate limit triggered upstream; back off and retry."
+    if status == 500 and "no message" in msg_l:
+        return "Spring caught an unhandled exception with no message; enable include-stacktrace."
+    if status == 500:
+        return "Unhandled server exception reached the default error handler."
+    if status == 502:
+        return "Upstream HTTP / gateway call failed; check RestTemplate / WebClient."
+    if status == 503:
+        return "Downstream dependency is down or refusing connections."
+    if status == 504:
+        return "Upstream call exceeded the deadline; raise timeout or add circuit breaker."
+    return None
+
+
 def _parse_nest_error(
     text: str,
 ) -> tuple[str, str, str | None, int | None] | None:
@@ -1653,6 +1931,32 @@ def parse_error_text(text: str) -> ErrorFields:
             likely_cause=_kotlin_likely_cause(exc, msg),
             file=file_,
             line=line_,
+        )
+    elif _parse_spring_whitelabel(text) is not None:
+        # Spring Boot WhiteLabel error page. Placed BEFORE the JVM
+        # branch because the page often includes a JVM-style
+        # stacktrace dump (when server.error.include-stacktrace is
+        # enabled) and the bare JVM branch would tag the
+        # ``com.example.app.NotFoundException`` line as ``jvm`` --
+        # missing the Spring-specific HTTP status + reason phrase
+        # signal that dashboards want for triage. The discriminator
+        # is the literal ``Whitelabel Error Page`` heading combined
+        # with the ``(type=..., status=NNN)`` summary line, both of
+        # which only appear together on Spring's default fallback
+        # page -- a regular JVM trace lacks both so it can't be
+        # stolen.
+        spring = _parse_spring_whitelabel(text)
+        assert spring is not None  # narrowed by the elif guard
+        spring_exc, spring_msg, spring_path, spring_status = spring
+        return ErrorFields(
+            framework="spring_boot_whitelabel",
+            exception=spring_exc,
+            message=spring_msg,
+            likely_cause=_spring_whitelabel_likely_cause(
+                spring_status, spring_exc, spring_msg
+            ),
+            file=spring_path,
+            line=spring_status,
         )
     elif _JAVA_EXC.search(text):
         framework = "jvm"
