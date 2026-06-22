@@ -185,6 +185,19 @@ class ReceiptFields(BaseModel):
     # receipts. Dashboards split this out from tax / tip / service
     # to surface per-fulfilment-channel margin.
     delivery_fee: float | None = None
+    # Cash tendered by the customer. On cash-handling receipts the
+    # printer typically writes "Tendered 20.00", "Cash 20.00", or
+    # "Paid 20.00" followed by the change due. Stored as a positive
+    # float; ``None`` for card-only receipts that do not break out a
+    # tender amount.
+    tendered: float | None = None
+    # Change handed back to the customer. Printed as "Change 7.50",
+    # "Change Due 7.50", or "Change Given 7.50" on cash receipts.
+    # Stored as a positive float; ``None`` when no change line is
+    # printed (card-only receipts or cash receipts that paid the
+    # exact amount). Dashboards use the (tendered, change) pair to
+    # spot till-discrepancy anomalies.
+    change: float | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 

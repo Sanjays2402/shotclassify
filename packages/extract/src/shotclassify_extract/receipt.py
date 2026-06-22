@@ -162,6 +162,89 @@ def _find_delivery_fee(text: str) -> float | None:
     return None
 
 
+# Tender / change keywords for cash-handling receipts. Recognised
+# wording across US / UK / EU printers:
+#
+#   Tendered 20.00
+#   Cash Tendered 20.00
+#   Cash 20.00
+#   Paid 20.00
+#   Payment 20.00
+#
+#   Change 7.50
+#   Change Due 7.50
+#   Change Given 7.50
+#   Cash Change 7.50
+#
+# The tender catalogue intentionally puts the more-specific
+# "Tendered" / "Cash Tendered" first so a bare "Cash 20.00" alias
+# only fires when the more-explicit wording is absent. "Paid" /
+# "Payment" sit at the tail because they overlap with merchant-
+# language on invoices ("Paid in full") -- the specific amount-
+# bearing form still works but the precedence keeps the unambiguous
+# wording in front.
+_TENDERED_KEYWORDS = (
+    "cash tendered",
+    "tendered",
+    "tender",
+    "amount tendered",
+    "amount paid",
+    "paid",
+    "payment",
+    "cash",
+)
+
+_CHANGE_KEYWORDS = (
+    "change due",
+    "change given",
+    "cash change",
+    "change",
+)
+
+
+def _find_tendered(text: str) -> float | None:
+    """Return the cash tendered by the customer, or None.
+
+    Recognises "Tendered 20.00", "Cash Tendered 20.00", "Cash 20.00",
+    "Paid 20.00", "Payment 20.00", "Amount Tendered 20.00", "Amount
+    Paid 20.00", "Tender 20.00" (case-insensitive). LAST-occurrence
+    semantics for consistency with the other ``_find_amount_after``
+    callers. ``None`` for card-only receipts that do not break out a
+    tender amount.
+
+    NOTE: The "Cash" alias is the loosest -- if a receipt prints
+    "Cashier #04" the underlying ``_find_amount_after`` regex won't
+    match because it requires a digit-amount IMMEDIATELY after the
+    keyword (with at most ``:`` / ``-`` separators), and "Cashier #04"
+    has the ``ier #`` between "Cash" and "04". A future tightening
+    could anchor the keyword on a word-boundary, but the regex layer
+    already handles it.
+    """
+    for keyword in _TENDERED_KEYWORDS:
+        value = _find_amount_after(text, keyword)
+        if value is not None:
+            return value
+    return None
+
+
+def _find_change(text: str) -> float | None:
+    """Return the change handed back to the customer, or None.
+
+    Recognises "Change 7.50", "Change Due 7.50", "Change Given 7.50",
+    "Cash Change 7.50" (case-insensitive). LAST-occurrence semantics.
+    ``None`` when no change line is printed (card-only receipts, or
+    cash receipts that paid the exact amount). The bare "Change"
+    alias is the catch-all so receipts that print just "CHANGE 0.00"
+    still register as a tendered/change pair for till-discrepancy
+    dashboards.
+    """
+    for keyword in _CHANGE_KEYWORDS:
+        value = _find_amount_after(text, keyword)
+        if value is not None:
+            return value
+    return None
+
+
 def _detect_currency(text: str) -> str | None:
     # 1) Unambiguous currency symbols win when present. ``$`` is
     #    canonically USD here because the symbol is shared across many
@@ -1192,6 +1275,8 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         signature=_find_signature(text),
         service_charge=_find_service_charge(text),
         delivery_fee=_find_delivery_fee(text),
+        tendered=_find_tendered(text),
+        change=_find_change(text),
         items=_parse_items(text),
     )
 
@@ -1206,7 +1291,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "currency", "payment_method", "order_number", "tax_mode",
         "party_size", "refund_amount", "loyalty_id", "store_id",
         "register_id", "cashier", "server", "signature",
-        "service_charge", "delivery_fee",
+        "service_charge", "delivery_fee", "tendered", "change",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
