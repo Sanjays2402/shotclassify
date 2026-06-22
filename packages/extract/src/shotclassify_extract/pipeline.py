@@ -4,6 +4,7 @@ from __future__ import annotations
 from shotclassify_common import Category, ExtractedFields, OCRResult
 
 from .airports import extract_airports
+from .amounts import extract_amounts
 from .arns import extract_arns
 from .chat import enrich_chat
 from .code import enrich_code
@@ -324,5 +325,25 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if jwts:
         out.raw = dict(out.raw or {})
         out.raw["jwts"] = jwts
+
+    # Cross-category: stash currency amounts found in the OCR text
+    # under raw["amounts"]. Amounts surface across every category --
+    # receipts are the obvious case but error logs cite billing
+    # thresholds, code snippets quote prices in test fixtures, chat
+    # captures share pricing discussions, and document captures of
+    # invoices / quotes / contracts.
+    #
+    # Each entry is a {"currency", "amount"} dict where currency is
+    # the ISO 4217 three-letter code (USD / EUR / GBP / JPY / etc.)
+    # when we can infer one from a symbol or explicit code, or None
+    # for bare-number-with-currency-keyword shapes. Recognises
+    # symbol-prefix ($12.99), symbol-suffix (12.99$), ISO-code-prefix
+    # (USD 12.99), and ISO-code-suffix (12.99 USD) shapes. Decimal
+    # normalisation handles both US (1,234.56) and EU (1.234,56)
+    # conventions.
+    amounts = extract_amounts(text)
+    if amounts:
+        out.raw = dict(out.raw or {})
+        out.raw["amounts"] = amounts
 
     return out
