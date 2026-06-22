@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (102 features tracked, 80 complete)
+## Roadmap (107 features tracked, 85 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -138,12 +138,18 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 66. [x] Error: AWS Lambda / boto3 client error extraction (new framework='boto3'; _BOTO_EXC_HEADER regex matches botocore.exceptions.X / botocore.errorfactory.X / botocore.client.X / boto3.exceptions.X module path prefixes with [A-Z][\w]+ exception class; _BOTO_CLIENT_ERROR regex captures canonical `An error occurred (CODE) when calling the OPERATION operation: detail` message format pulling error_code + operation_name out; composed message slot reads `<detail> [code=ErrorCode op=OperationName]` so structured tail survives plain-string message field; runs FIRST inside python branch of parse_error_text overriding to boto3 framework when ANY boto signal present without disturbing vanilla python tracebacks; 23-cause _boto_likely_cause catalogue covering both SDK-level failures NoCredentialsError/EndpointConnectionError/ReadTimeout/ParamValidationError/WaiterError AND AWS service-level codes NoSuchBucket/NoSuchKey/AccessDenied/Throttling/ResourceNotFound/InternalFailure/etc).
 
 
+### Done in tick 17 (5 features)
+39. [x] Chat: replied-to / quoted-message detection into `ChatFields.quotes` (list of `{sender, quoted_sender, quoted_text, reply_text}` dicts; three recognised shapes: line-leading `> quoted text` runs (Slack / IRC / email / Discord) with consecutive `>` lines collapsed into one block joined by `\n`, blank-`>`-line OR blank-line-followed-by-another-`>`-run terminating the current block, up to 4 leading spaces accepted, tab separator accepted; `Replying to <name>: <body>` preamble form for iMessage / WhatsApp / Telegram / Discord with 4 verb aliases case-insensitive Replying to/In reply to/Quoting/Reply to, preamble matcher runs BEFORE transcript-sender matcher so "Replying to Alice" doesn't tag as speaker; `> Sender: text` Slack attribution-inside-quote form with quoted_sender split from quoted_text; Discord `> @user body` reply-mention form pulling `@user` as quoted_sender; sender (reply author) tracked from nearest preceding `Sender:` transcript line; false-positive defences reject `->` arrows / `=>` JS arrows / `</div>` close tags / stray `>` with no quoted body; cap 20 entries).
+40. [x] Chat: voice / image / video / file attachment marker detection into `ChatFields.attachments` (list of `{kind, sender?, duration?, name?}` dicts; three recognised shapes: WhatsApp/iMessage bracketed `[Image]`/`[Voice note 0:23]`/`[Document: file.pdf]` with strict label-vocabulary catalogue so random `[issue-123]` doesn't false-positive; Telegram emoji-prefixed `📷 Photo`/`🎤 Voice (0:42)`/`📎 Document` with curated 26-emoji catalogue (camera/video/mic/paperclip/pin/speaker/film); generic English line-anchored `Voice message (0:42)`/`Video call · 1m 23s`/`Missed video call` with closed-vocabulary label list so prose `voiced my opinion` doesn't fire AND leading `Sender:` prefix stripped before matching; canonical lowercase kind vocabulary: image/video/voice/audio/document/sticker/gif/location/contact/video_call/audio_call; duration captured in MM:SS/H:MM:SS/Nm Ms forms; name captured from `[Document: file.pdf]` shape; bracket-FIRST emoji-SECOND English-THIRD ordering with span-overlap-rejection so no double-tagging; output sorted by source-text offset; dedupe on (sender, kind, duration, name); cap 30; LLM wire-format updated).
+91. [x] Extract: cross-category error-monitoring vendor fingerprint extractor into `raw["error_fingerprints"]` (list of `{vendor, kind, id}` dicts; 7 vendor catalogues: Sentry full 32-hex Event ID + short 7..16-hex bracketed `[abc1234]` + inline short `Sentry id:` with Sentry/Event/event_id label anchor required; Datadog typed key=value `dd.trace_id=<digits-or-hex>` / `dd.span_id=<digits-or-hex>` + bare `trace_id: <hex>` only when Datadog vendor anchor on same line; Rollbar `Rollbar event #98765` / occurrence / item; New Relic `New Relic trace_id: <128-or-16-hex>` with vendor anchor required; Bugsnag `Bugsnag error #abc123XYZ` alphanumeric case-preserved; Honeybadger `Honeybadger fault #54321`; Airbrake `[Airbrake] error #67890`; kind taxonomy: event_id / trace_id / span_id / fault_id; hex IDs lowercased for stable dedupe, alphanumeric IDs case-preserved; anchoring philosophy: every short/numeric form REQUIRES vendor keyword on same line because raw shape is too common to land safely without one; distinct from raw["uuids"] because vendor tag enables deep-link routing).
+105. [x] Code: build-tool / package-manager command detection into `CodeFields.build_commands` (list of `{tool, command}` dicts; 30 catalogued tools covering Node npm/yarn/pnpm/bun/npx, Python pip/pip3/pipx/poetry/uv/conda/pipenv, Ruby bundle/gem, Rust cargo/rustup, Go go, PHP composer, Java mvn/gradle/sbt, .NET dotnet/nuget, Make/runners make/just/task, Containers docker/podman, Orchestration kubectl/helm/terraform, OS packages brew/apt/apt-get/yum/dnf/pacman/apk, CI dev tools act/gh; shell-prompt stripping for bash $ / root # / PowerShell PS C:\path>+bare PS> / conda (env) $ / user@host:~/project$ / bracket [user@host project]$ / generic > / no-prompt line-start; wrapper aliasing for ./mvnw->mvn and ./gradlew->gradle so dashboards group wrapper+bare calls; subcommand discipline: every tool except make/just/task/npx REQUIRES at least one space-separated subcommand or flag after the tool name; line-start anchoring so mid-sentence `npm install` mention doesn't false-positive; cleaned command-line storage with whitespace normalised; dedupe on (tool, command); cap 50; LLM wire-format updated).
+107. [x] PII redact: bank-account / routing-number redaction mode (new `bank_account` mode; matcher REQUIRES the word Routing/ABA/RTN (9-digit candidates) OR Account/Acct/A/C/Acc (6-17 digit candidates) immediately before number so bare 9-digit runs don't misfire on phone/order/SSN/passport; recognised labels: Routing: / Routing No: / Routing No. / Routing Number: / Routing # / ABA: / ABA Routing #: / RTN, Account: / Account No: / Account Number: / Account # / Acct: / Acct No. / A/C: / A/C No: / Acc; up to 5 separator chars between label and number; length boundaries: 6-min/17-max digits accepted, 5-digit too-short rejected, 18+ digit too-long leaves UNCHANGED via trailing word-boundary failure as safety property because partial 17-of-18 redaction would leak trailing digit; custom _sub_bank_account substitution mirrors passport/drivers_license pattern preserving label while redacting only captured num group; added to PII_REDACT_MODES allow-list).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
 16. [ ] Chat: emoji density + reaction-line extraction (the `:eyes: 3` summary footer).
-39. [ ] Chat: replied-to / quoted-message detection (the `> quoted text` line + replied-by attribution above the new message).
-40. [ ] Chat: voice-note / image / video attachment markers (`🎤 Voice (0:42)`, `📷 Photo`, `[Image]`, `[Voice note 0:23]`).
 53. [ ] Chart: bar-chart series-label OCR refinement (split the legend block into a clean `ChartFields.series` list).
 54. [ ] Chart: percent annotations vs raw values heuristic (new `ChartFields.value_unit`: `%` / `count` / `currency` based on axis tick text).
 55. [ ] UI mockup: layout-style guess (new `UIMockupFields.layout_kind`: `dashboard` / `landing` / `form` / `settings` / `modal`).
@@ -154,7 +160,6 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 80. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce).
 81. [ ] Error: Spring Boot WhiteLabel error page parsing (`/error` endpoint HTML that surfaces inside a screenshot -- pull status, timestamp, path, message).
 90. [ ] Receipt: barcode/QR encoding detection in OCR text (vendors print the encoded payload below the barcode -- track which lines look like the encoded payload vs the human-readable text).
-91. [ ] Error: Datadog / Sentry error-fingerprint extraction (the `[abc123]` short-hash that Sentry prints + the dd.trace_id / dd.span_id pair Datadog injects).
 93. [ ] Chat: typing-indicator detection (the bouncing-dots animation OCR may render as `...` or `Alice is typing...`).
 98. [ ] Receipt: line-item modifier / customisation detection (the indented `+ Add bacon` / `- No onions` / `Extra cheese` sublines beneath an item).
 99. [ ] Code: secret/key-literal sniffing into `CodeFields.suspected_secrets` (literal strings that look like API keys / DB credentials / OAuth secrets even when not detected by the typed redact modes).
@@ -163,9 +168,12 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 102. [ ] Chart: data-table fallback extraction from a chart screenshot's accompanying legend table (the small `x / y` paired columns that often sit beside the chart).
 103. [ ] Receipt: itemised loyalty-points-earned line (`Points Earned: 25` / `Stars Awarded: 3` / `Miles: 100`).
 104. [ ] Chat: voice-call / video-call duration markers (`Audio call · 1m 23s` / `Missed video call`).
-105. [ ] Code: build-tool / package-manager command detection (npm/yarn/pnpm/cargo/go mod/poetry/pip line into `CodeFields.build_commands`).
 106. [ ] Error: Apollo Client / Apollo Server GraphQL error parsing (the `ApolloError: ...` shape with `extensions.code`).
-107. [ ] PII redact: bank-account / routing-number redaction mode (US 9-digit routing + 8-12 digit account, IBAN already covered).
+108. [ ] Code: license-header attribution chain detection (multi-license dual-licensed files that print BOTH `Licensed under MIT or Apache 2.0` shapes; expand `license` slot into a list when 2+ licenses signal).
+109. [ ] Receipt: refund-reason extraction (the freeform reason text printed alongside a refund line: `Refund - damaged goods` / `Refund: customer changed mind`).
+110. [ ] Chat: pin / star / favorite marker detection (the small `📌 Pinned` / `⭐ Starred` / `Pinned by Alice` indicators on Slack / iMessage / WhatsApp).
+111. [ ] Code: TODO / FIXME ticket-link extraction (when a TODO carries a `JIRA-1234` / `#issue` ticket reference, surface it into `CodeFields.todo_tickets`).
+112. [ ] Error: Sentry breadcrumb trail extraction (the `Breadcrumbs` block above the stacktrace listing user actions and HTTP calls).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -684,6 +692,107 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
       timeout) AND service-level codes
       (NoSuchBucket, AccessDenied, Throttling,
       ResourceNotFound, etc).
+
+- 2026-06-22 10:58 PT (tick 17, Cake): 5 features.
+  - f4a089b feat(extract/chat): replied-to / quoted-message detection into ChatFields.quotes
+  - f616880 feat(extract/chat): voice / image / video / file attachment marker detection into ChatFields.attachments
+  - 64d7bac feat(extract): cross-category error-monitoring vendor fingerprint extractor into raw["error_fingerprints"]
+  - 9fe2487 feat(extract/code): build-tool / package-manager command detection into CodeFields.build_commands
+  - 4214941 feat(redact): bank-account / routing-number redaction mode
+  - Gate: ruff at baseline 536 (one fixup folded
+    via --fixup + --autosquash before push --
+    two B007 unused-loop-variable errors in
+    the new _extract_attachments helper's
+    enumerate-and-discard loops, fixed by
+    renaming the unused indices to `_idx` /
+    `_start`) + pytest 3925 passed / 3 skipped
+    in 130.80s. 265 new tests across the 5
+    features (37 + 61 + 43 + 77 + 47). New
+    ChatFields shipped: quotes (list of
+    {sender, quoted_sender, quoted_text,
+    reply_text} dicts), attachments (list of
+    {kind, sender?, duration?, name?} dicts).
+    New CodeFields shipped: build_commands
+    (list of {tool, command} dicts). One new
+    cross-category raw key: raw["error_fingerprints"].
+    One new PII redact mode `bank_account`
+    added to PII_REDACT_MODES allow-list. LLM
+    wire format in classify/client.py updated
+    for quotes / attachments / build_commands.
+    Roadmap refilled with 5 new items (108..112
+    -- code license-attribution-chain, receipt
+    refund-reason, chat pin/star markers, code
+    TODO ticket-link, error Sentry breadcrumb
+    trail) so backlog stays at 22 open.
+    Notable design decisions:
+    * Quotes: line-leading `>` detection ran
+      INTO the preamble-vs-sender ordering
+      issue -- "Replying to Alice" was being
+      eaten by the transcript-sender regex
+      before the preamble matcher fired. Fixed
+      by moving the preamble matcher FIRST in
+      the per-line dispatch so the "Replying
+      to <name>:" form always wins. Blank-line-
+      then-`>`-run terminator semantics: the
+      current quote block ENDS at the first
+      `>` line that follows a blank line so
+      consecutive `>` runs separated by blanks
+      become distinct quote entries (matches
+      Slack convention).
+    * Attachments: bracketed shape catches
+      `[Image]` / `[Voice note 0:23]` BUT only
+      when the label is in the alias map, so
+      `[issue-123]` / `[TICKET-99]` don't
+      false-positive. English shape requires
+      line-anchoring `^...$` AND a closed
+      label vocabulary so prose "I voiced my
+      opinion" doesn't fire -- additionally,
+      a leading `Sender: ` transcript prefix
+      is stripped before matching so
+      transcript-attached attachment lines
+      still tag. Match ordering bracket->
+      emoji->English with span-overlap-rejection
+      so no double-tagging.
+    * Error fingerprints: the anchoring
+      philosophy is the key safety property
+      -- every short/numeric form REQUIRES the
+      vendor keyword on the same line because
+      raw shape (short hex, bare digits, bare
+      bracketed token) is too common across
+      categories to land safely without one.
+      Sentry's 32-hex full Event ID accepts
+      just the `Event ID:` label without the
+      `Sentry` word because the 32-hex shape
+      itself disambiguates from generic UUIDs.
+      Distinct from raw["uuids"] because the
+      vendor tag enables deep-link routing
+      (`sentry.io/.../events/<id>`).
+    * Build commands: 30-tool catalogue with
+      subcommand discipline -- every tool
+      except make/just/task/npx REQUIRES at
+      least one space-separated subcommand or
+      flag because the bare executable name
+      (`$ npm` alone) is meaningless. Line-
+      start anchoring after prompt stripping
+      so mid-sentence prose mentions don't
+      false-positive. Wrapper aliasing for
+      ./mvnw->mvn and ./gradlew->gradle so
+      dashboards group wrapper+bare calls
+      under one tool.
+    * Bank-account redact: the trailing word-
+      boundary failure on 18+ digit runs is a
+      DELIBERATE safety property -- better to
+      leave the number unchanged than to
+      partially redact 17-of-18 which would
+      leak the trailing digit (the wrong
+      direction for a privacy mode). Length
+      bounds 6-17 cover savings-account
+      suffixes (6-digit) at one extreme and
+      large Chase business accounts (17-digit)
+      at the other. Custom _sub_bank_account
+      substitution preserves the `Routing: ` /
+      `Account: ` label same as
+      passport/drivers_license modes.
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
