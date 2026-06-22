@@ -772,6 +772,97 @@ def detect_todo_count(code: str, language: str | None = None) -> int:
     return count
 
 
+# Author-tagged TODO matcher. Recognises the standard
+# ``MARKER(author):`` and ``MARKER(author)`` forms used across most
+# codebases. The author handle is captured up to the closing
+# parenthesis. Whitespace-only authors and empty parens are
+# rejected; a leading ``@`` on the handle is preserved verbatim
+# because some codebases prefix GitHub handles with ``@``.
+_TODO_AUTHOR_RE = re.compile(
+    r"\b(?P<marker>" + "|".join(re.escape(m) for m in _TODO_MARKERS) + r")"
+    r"\((?P<author>[^()\n]{1,64})\)"
+)
+
+
+# Maximum number of author-tagged TODOs returned. A snippet with
+# more than 50 author-tagged TODOs is extraordinarily unusual; the
+# cap is purely defensive.
+_MAX_TODO_AUTHORS = 50
+
+
+def extract_todo_authors(
+    code: str, language: str | None = None
+) -> list[dict[str, str]]:
+    """Return the author-tagged TODO / FIXME / XXX / HACK / BUG /
+    NOTE / OPTIMIZE markers found in ``code``.
+
+    Output is a list of ``{"marker", "author"}`` dicts preserving
+    first-seen order. Dedupe is intentionally NOT performed because
+    the same author may legitimately own multiple TODOs in one
+    snippet.
+
+    The matcher recognises the canonical ``MARKER(author):`` and
+    ``MARKER(author)`` forms used across most codebases:
+
+    * ``# TODO(alice): hook up retries``
+    * ``// FIXME(bob): off-by-one``
+    * ``/* HACK(carol-87): rewrite once we drop py3.9 */``
+    * ``; XXX(@dave): clean up``
+
+    Each marker must satisfy ALL of:
+
+    1. ALL-CAPS spelling (case-sensitive). A prose mention
+       ``the bug we fixed`` is not a marker.
+    2. Preceded somewhere on the same line by a comment leader
+       for ``language`` (or ``#`` for unknown languages). Block-
+       comment openers (``/*``, ``\"\"\"``, ``'''``) count when
+       they sit earlier on the same line.
+    3. Followed immediately by ``(`` + 1..64 chars (non-paren,
+       non-newline) + ``)`` capturing the author handle.
+
+    The author capture is post-processed:
+
+    * Trailing ``,`` / ``;`` / ``:`` / ``-`` whitespace is
+      stripped.
+    * Leading whitespace is stripped.
+    * Empty-after-stripping authors are dropped (a ``TODO()``
+      with an empty paren is not an author tag).
+
+    Pure data languages (json / csv / tsv) return an empty list
+    unconditionally because they have no comment syntax to host
+    action markers.
+    """
+    if not code or not code.strip():
+        return []
+    leaders = _comment_leaders_for(language)
+    if not leaders:
+        return []
+    out: list[dict[str, str]] = []
+    for raw in code.splitlines():
+        # Find the FIRST comment opener on the line (mirrors
+        # detect_todo_count -- markers in a non-commented line are
+        # not action-comment markers).
+        first_leader_pos: int | None = None
+        for leader in leaders:
+            pos = raw.find(leader)
+            if pos == -1:
+                continue
+            if first_leader_pos is None or pos < first_leader_pos:
+                first_leader_pos = pos
+        if first_leader_pos is None:
+            continue
+        comment_body = raw[first_leader_pos:]
+        for m in _TODO_AUTHOR_RE.finditer(comment_body):
+            marker = m.group("marker")
+            author = m.group("author").strip().rstrip(",;:- \t")
+            if not author:
+                continue
+            out.append({"marker": marker, "author": author})
+            if len(out) >= _MAX_TODO_AUTHORS:
+                return out
+    return out
+
+
 # License-header detection. We scan the first ~30 lines of the snippet
 # for the distinctive opening phrase of each common open-source
 # license. Each license catalogues:
@@ -1861,6 +1952,18 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if todo_count == 0:
         todo_count = detect_todo_count(code, language)
+    # Author-tagged TODO extraction. Caller-supplied list wins
+    # (preserved verbatim); otherwise scan the snippet for the
+    # canonical ``MARKER(author):`` form. Returns an empty list
+    # when no author-tagged markers are present so a TODO-free
+    # snippet stays at the default [].
+    todo_authors = (
+        list(existing.todo_authors)
+        if existing and existing.todo_authors
+        else []
+    )
+    if not todo_authors:
+        todo_authors = extract_todo_authors(code, language)
     # License-header detection. Caller-supplied value wins; otherwise
     # scan the snippet's header for a recognised open-source license.
     # The detector returns None when no header matches so a TODO-free
@@ -1905,6 +2008,7 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         comment_density=comment_density,
         numbered=numbered,
         todo_count=todo_count,
+        todo_authors=todo_authors,
         license=license_tag,
         docstring=docstring,
         imports=imports,

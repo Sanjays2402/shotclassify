@@ -141,6 +141,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             comment_density=float(c.get("comment_density") or 0.0),
             numbered=bool(c.get("numbered") or False),
             todo_count=int(c.get("todo_count") or 0),
+            todo_authors=c.get("todo_authors") or [],
             license=c.get("license"),
             docstring=c.get("docstring"),
             imports=c.get("imports") or [],

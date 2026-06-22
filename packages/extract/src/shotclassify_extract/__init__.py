@@ -17,6 +17,7 @@ from .code import (
     enrich_code,
     extract_copyrights,
     extract_imports,
+    extract_todo_authors,
 )
 from .credit_cards import extract_credit_cards
 from .crypto import extract_crypto
@@ -92,6 +93,7 @@ __all__ = [
     "extract_credit_cards",
     "extract_imports",
     "extract_copyrights",
+    "extract_todo_authors",
     "extract_airports",
     "extract_social",
     "extract_slack_ids",

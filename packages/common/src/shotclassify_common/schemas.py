@@ -300,6 +300,30 @@ class CodeFields(BaseModel):
     # a conservative overcount we accept as the trade-off for keeping
     # the detector deterministic and fast.
     todo_count: int = 0
+    # TODO / FIXME / XXX / HACK / BUG / NOTE / OPTIMIZE markers that
+    # carry an explicit author handle in parentheses immediately
+    # after the marker word. Examples:
+    #
+    #   # TODO(alice): hook up retries
+    #   // FIXME(bob): off-by-one on the binary search
+    #   /* HACK(carol-87): rewrite once we drop py3.9 */
+    #   ; XXX(@dave): clean up
+    #
+    # Each entry is a ``{"marker": str, "author": str}`` dict
+    # preserving first-seen order. The marker is the recognised
+    # ALL-CAPS keyword; the author is the captured handle with
+    # surrounding whitespace stripped. A leading ``@`` on the
+    # handle is preserved verbatim (some codebases prefix GitHub
+    # handles with ``@``). A trailing ``,`` / ``;`` / ``:`` /
+    # ``)`` from the OCR pass is trimmed.
+    #
+    # Dashboards use this to surface "Alice owns 4 outstanding
+    # TODOs in this file" annotations on code-review screenshots
+    # without re-reading the snippet line by line. Capped at 50
+    # entries. Dedupe is intentionally NOT done because the same
+    # author may legitimately own multiple TODOs in one snippet
+    # and we want to count all of them.
+    todo_authors: list[dict[str, str]] = Field(default_factory=list)
     # Detected open-source license header at the top of the snippet,
     # as a short SPDX-style tag: ``mit`` / ``apache-2.0`` / ``gpl-3.0`` /
     # ``gpl-2.0`` / ``lgpl-3.0`` / ``bsd-2-clause`` / ``bsd-3-clause`` /
