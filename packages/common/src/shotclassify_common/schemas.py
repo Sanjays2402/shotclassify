@@ -518,6 +518,51 @@ class CodeFields(BaseModel):
     # Empty list when the snippet is non-CSS or has no recognised
     # vendor-prefix usage.
     css_vendor_prefixes: list[str] = Field(default_factory=list)
+    # Regex literals extracted from the snippet. Each entry is a
+    # ``{"flavor": str, "pattern": str, "flags": str}`` dict capturing
+    # the regex's source pattern, the regex flags (when present), and
+    # the syntax flavor (the language family the literal was found in,
+    # because syntactic details differ -- Python ``re``, JS slash-
+    # delimited, Ruby ``%r{...}``, Perl ``qr/.../``, Go raw-string
+    # backtick blocks passed to ``regexp.MustCompile``, etc.).
+    #
+    # Recognised flavors:
+    #
+    #   * ``js``      -- JavaScript / TypeScript ``/pattern/flags``
+    #                    literals (with the standard JS flag set
+    #                    ``gimsuyd``)
+    #   * ``python``  -- ``re.compile("pattern")`` / ``re.match`` /
+    #                    ``re.search`` / ``re.findall`` / ``re.sub``
+    #                    + ``r"..."`` raw-string variants
+    #   * ``ruby``    -- ``%r{...}`` / ``%r!...!`` / ``%r/.../``
+    #                    forms; slash-delimited Ruby regexes share
+    #                    JS syntax and are captured under ``js``
+    #                    flavor when the language detector hasn't
+    #                    settled
+    #   * ``perl``    -- ``qr/.../`` / ``qr{...}`` literals
+    #   * ``go``      -- ``regexp.MustCompile(`pattern`)`` /
+    #                    ``regexp.Compile(`pattern`)`` with both
+    #                    backtick raw-string and double-quoted body
+    #   * ``java``    -- ``Pattern.compile("pattern")`` /
+    #                    ``Pattern.compile("pattern", flags)``
+    #   * ``rust``    -- ``Regex::new("pattern")`` /
+    #                    ``Regex::new(r"...")``
+    #   * ``c#``      -- ``new Regex("pattern")`` /
+    #                    ``Regex.Match("input", "pattern")``
+    #   * ``shell``   -- ``grep "pattern"`` / ``sed 's/pattern/.../''``
+    #                    NOT extracted -- shell regex is too varied
+    #                    and the extractor would false-positive on
+    #                    quoted prose. Future-work item.
+    #
+    # Dashboards use this list to surface "this code defines 6 regex
+    # literals" annotations and to flag obviously-wrong patterns
+    # (catastrophic backtracking, double-escaping bugs, unanchored
+    # email regexes) on code-review screenshots.
+    #
+    # De-duped on ``(flavor, pattern, flags)`` tuple. First-seen
+    # order preserved. Capped at 50 entries. Empty list when no
+    # regex literal is present.
+    regexes: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):

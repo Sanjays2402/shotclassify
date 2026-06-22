@@ -21,6 +21,7 @@ from .code import (
     extract_copyrights,
     extract_feature_flags,
     extract_imports,
+    extract_regex_literals,
     extract_todo_authors,
 )
 from .credit_cards import extract_credit_cards
@@ -113,4 +114,5 @@ __all__ = [
     "extract_discord_ids",
     "extract_jwts",
     "extract_postal_codes",
+    "extract_regex_literals",
 ]

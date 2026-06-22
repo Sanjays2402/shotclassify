@@ -2063,6 +2063,258 @@ def detect_css_vendor_prefixes(
 _CSS_DECL_RE = re.compile(r":\s*[^;{}\n]{1,200};")
 
 
+# Regex-literal extraction. Many languages embed regular expressions
+# as literals -- some with dedicated syntax (JS / Perl / Ruby slash-
+# delimited), others through API calls (Python / Java / Go / Rust /
+# C#). Dashboards want a single list of the patterns the snippet
+# defines so reviewers can spot obviously-wrong patterns
+# (catastrophic backtracking, double-escaping bugs, unanchored
+# email regexes) without scanning the whole snippet.
+#
+# Output shape: list of ``{"flavor", "pattern", "flags"}`` dicts.
+# ``flavor`` is the syntax family (``js`` / ``python`` / ``ruby`` /
+# ``perl`` / ``go`` / ``java`` / ``rust`` / ``c#``). ``pattern`` is
+# the regex source as written (delimiters / quotes stripped).
+# ``flags`` is the flag string when present (JS-flavor ``g`` /
+# ``i`` / ``m`` / ``s`` / ``u`` / ``y`` / ``d``; other flavors
+# stored without flags).
+#
+# Recognised shapes:
+#
+# * JS slash-delimited: ``/pattern/flags`` -- the slash form is the
+#   tricky one because ``/`` is also the division operator. We
+#   require a left-context that rules out division (line start, an
+#   operator like ``=`` / ``(`` / ``,`` / ``;`` / ``return`` / a
+#   logical operator) and reject zero-length patterns.
+# * Python ``re.compile("pattern")`` / ``re.match`` / ``re.search``
+#   / ``re.findall`` / ``re.sub`` with both raw-string ``r"..."``
+#   / ``r'...'`` and plain ``"..."`` / ``'...'`` arguments.
+# * Ruby ``%r{...}`` / ``%r!...!`` / ``%r/.../`` percent-literal
+#   shapes; the delimiter character selects the closer.
+# * Perl ``qr/.../`` / ``qr{...}`` literals.
+# * Go ``regexp.MustCompile(\`pattern\`)`` / ``regexp.Compile(...)``
+#   with backtick raw-string OR double-quoted body.
+# * Java ``Pattern.compile("pattern")`` / ``Pattern.compile("pattern", flags)``.
+# * Rust ``Regex::new("pattern")`` / ``Regex::new(r"pattern")``.
+# * C# ``new Regex("pattern")`` / ``Regex.Match(input, "pattern")``
+#   / ``Regex.IsMatch(input, "pattern")``.
+
+_MAX_REGEXES = 50
+
+# JS slash-delimited regex. The key challenge is distinguishing the
+# regex literal from the division operator. Heuristic: the regex
+# literal must be preceded by a context where division would be
+# unexpected -- line start, an opener / separator / operator / a
+# control keyword.
+_JS_REGEX_RE = re.compile(
+    r"(?:(?<=^)|(?<=[\[\(,;=:!&|?+\-*/%~])|(?<=\breturn\b)|"
+    r"(?<=\btypeof\b)|(?<=\bin\b)|(?<=\bof\b)|(?<=\binstanceof\b))"
+    r"\s*"
+    r"/(?P<pattern>(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n])+)"
+    r"/(?P<flags>[gimsuyd]*)"
+    r"(?![A-Za-z0-9_])",
+    re.MULTILINE,
+)
+
+# Python re.* call with first-arg string. Both raw-string and plain
+# string accepted. Triple-quoted strings handled by a second pattern
+# because the inner content rules differ.
+_PY_REGEX_CALL_RE = re.compile(
+    r"\bre\.(?:compile|match|search|fullmatch|findall|finditer|sub|subn|split)\s*\(\s*"
+    r"(?P<rawmark>r)?(?P<q>['\"])(?P<pattern>(?:\\.|(?!(?P=q)).)+?)(?P=q)"
+)
+
+# Ruby %r{...} percent-literal. Each opener/closer pair gets its
+# own pattern so the inner character class cannot accidentally
+# terminate the match (e.g. ``%r{[a-z]+}`` -- the inner ``]`` is
+# part of the character class, not the closer for the regex).
+_RB_REGEX_CURLY_RE = re.compile(
+    r"%r\{(?P<pattern>(?:\\.|[^}\\])+?)\}(?P<flags>[imxoesun]*)"
+)
+_RB_REGEX_PAREN_RE = re.compile(
+    r"%r\((?P<pattern>(?:\\.|[^)\\])+?)\)(?P<flags>[imxoesun]*)"
+)
+_RB_REGEX_BRACKET_RE = re.compile(
+    r"%r\[(?P<pattern>(?:\\.|[^\]\\])+?)\](?P<flags>[imxoesun]*)"
+)
+_RB_REGEX_ANGLE_RE = re.compile(
+    r"%r<(?P<pattern>(?:\\.|[^>\\])+?)>(?P<flags>[imxoesun]*)"
+)
+_RB_REGEX_SAME_RE = re.compile(
+    r"%r(?P<delim>[!|@#~/+\-])"
+    r"(?P<pattern>(?:\\.|(?!(?P=delim)).)+?)"
+    r"(?P=delim)"
+    r"(?P<flags>[imxoesun]*)"
+)
+
+# Perl qr literal. Same per-delimiter-pair scheme as Ruby.
+_PERL_REGEX_CURLY_RE = re.compile(
+    r"\bqr\{(?P<pattern>(?:\\.|[^}\\])+?)\}(?P<flags>[imsxoadlu]*)"
+)
+_PERL_REGEX_PAREN_RE = re.compile(
+    r"\bqr\((?P<pattern>(?:\\.|[^)\\])+?)\)(?P<flags>[imsxoadlu]*)"
+)
+_PERL_REGEX_BRACKET_RE = re.compile(
+    r"\bqr\[(?P<pattern>(?:\\.|[^\]\\])+?)\](?P<flags>[imsxoadlu]*)"
+)
+_PERL_REGEX_ANGLE_RE = re.compile(
+    r"\bqr<(?P<pattern>(?:\\.|[^>\\])+?)>(?P<flags>[imsxoadlu]*)"
+)
+_PERL_REGEX_SAME_RE = re.compile(
+    r"\bqr(?P<delim>[!|/@#~+\-])"
+    r"(?P<pattern>(?:\\.|(?!(?P=delim)).)+?)"
+    r"(?P=delim)"
+    r"(?P<flags>[imsxoadlu]*)"
+)
+
+# Go regexp.MustCompile / regexp.Compile. Both backtick-raw and
+# double-quoted forms accepted.
+_GO_REGEX_RAW_RE = re.compile(
+    r"\bregexp\.(?:MustCompile|Compile)\s*\(\s*"
+    r"`(?P<pattern>[^`]+)`"
+)
+_GO_REGEX_QUOTED_RE = re.compile(
+    r"\bregexp\.(?:MustCompile|Compile)\s*\(\s*"
+    r"\"(?P<pattern>(?:\\.|[^\"\\])+?)\""
+)
+
+# Java Pattern.compile. Single-string and string+flags both fit.
+_JAVA_REGEX_RE = re.compile(
+    r"\bPattern\.compile\s*\(\s*"
+    r"\"(?P<pattern>(?:\\.|[^\"\\])+?)\""
+)
+
+# Rust Regex::new. Both raw-string and plain string.
+_RUST_REGEX_RAW_RE = re.compile(
+    r"\bRegex::new\s*\(\s*"
+    r"r#*\"(?P<pattern>(?:[^\"\\]|\\.)+?)\"#*"
+)
+_RUST_REGEX_QUOTED_RE = re.compile(
+    r"\bRegex::new\s*\(\s*"
+    r"\"(?P<pattern>(?:\\.|[^\"\\])+?)\""
+)
+
+# C# new Regex(...) / Regex.Match(input, pattern) / Regex.IsMatch.
+_CS_REGEX_NEW_RE = re.compile(
+    r"\bnew\s+Regex\s*\(\s*"
+    r"@?\"(?P<pattern>(?:\\.|[^\"\\])+?)\""
+)
+_CS_REGEX_STATIC_RE = re.compile(
+    r"\bRegex\.(?:Match|IsMatch|Matches|Replace|Split)\s*\([^,)]*,\s*"
+    r"@?\"(?P<pattern>(?:\\.|[^\"\\])+?)\""
+)
+
+
+def extract_regex_literals(
+    code: str, language: str | None = None
+) -> list[dict[str, str]]:
+    """Return regex literals found in ``code``.
+
+    Output is a list of ``{"flavor", "pattern", "flags"}`` dicts.
+    ``flavor`` tags the syntax family. ``pattern`` is the regex
+    source as written (delimiters / quotes stripped). ``flags`` is
+    the flag string when present (empty string when absent).
+
+    Recognised flavors: ``js``, ``python``, ``ruby``, ``perl``,
+    ``go``, ``java``, ``rust``, ``c#``.
+
+    De-dupes on ``(flavor, pattern, flags)`` tuple. Preserves first-
+    seen-in-text order. Capped at :data:`_MAX_REGEXES` entries.
+
+    Returns an empty list when no regex literal is present.
+
+    The matcher runs every flavor's matcher against every snippet
+    (not gated by language) because OCR captures often mix shells +
+    configs + code and a hard language gate would lose hits. The
+    flavor tag in the output preserves which syntax was matched.
+    """
+    if not code or not code.strip():
+        return []
+    candidates: list[tuple[int, str, str, str]] = []
+
+    # Python re.* calls.
+    for m in _PY_REGEX_CALL_RE.finditer(code):
+        candidates.append((m.start(), "python", m.group("pattern"), ""))
+
+    # Ruby percent-literal regexes.
+    for pat in (
+        _RB_REGEX_CURLY_RE,
+        _RB_REGEX_PAREN_RE,
+        _RB_REGEX_BRACKET_RE,
+        _RB_REGEX_ANGLE_RE,
+        _RB_REGEX_SAME_RE,
+    ):
+        for m in pat.finditer(code):
+            candidates.append((
+                m.start(), "ruby", m.group("pattern"), m.group("flags") or ""
+            ))
+
+    # Perl qr literals.
+    for pat in (
+        _PERL_REGEX_CURLY_RE,
+        _PERL_REGEX_PAREN_RE,
+        _PERL_REGEX_BRACKET_RE,
+        _PERL_REGEX_ANGLE_RE,
+        _PERL_REGEX_SAME_RE,
+    ):
+        for m in pat.finditer(code):
+            candidates.append((
+                m.start(), "perl", m.group("pattern"), m.group("flags") or ""
+            ))
+
+    # Go regexp.MustCompile.
+    for m in _GO_REGEX_RAW_RE.finditer(code):
+        candidates.append((m.start(), "go", m.group("pattern"), ""))
+    for m in _GO_REGEX_QUOTED_RE.finditer(code):
+        candidates.append((m.start(), "go", m.group("pattern"), ""))
+
+    # Java Pattern.compile.
+    for m in _JAVA_REGEX_RE.finditer(code):
+        candidates.append((m.start(), "java", m.group("pattern"), ""))
+
+    # Rust Regex::new.
+    for m in _RUST_REGEX_RAW_RE.finditer(code):
+        candidates.append((m.start(), "rust", m.group("pattern"), ""))
+    for m in _RUST_REGEX_QUOTED_RE.finditer(code):
+        candidates.append((m.start(), "rust", m.group("pattern"), ""))
+
+    # C# new Regex / Regex.Static.
+    for m in _CS_REGEX_NEW_RE.finditer(code):
+        candidates.append((m.start(), "c#", m.group("pattern"), ""))
+    for m in _CS_REGEX_STATIC_RE.finditer(code):
+        candidates.append((m.start(), "c#", m.group("pattern"), ""))
+
+    # JS slash-delimited LAST because it has the most false-positive
+    # risk (division ambiguity) and we want the explicit API-call
+    # forms above to land first.
+    for m in _JS_REGEX_RE.finditer(code):
+        pattern = m.group("pattern")
+        if not pattern:
+            continue
+        candidates.append((
+            m.start(), "js", pattern, m.group("flags") or ""
+        ))
+
+    candidates.sort(key=lambda x: x[0])
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for _off, flavor, pattern, flags in candidates:
+        key = (flavor, pattern, flags)
+        if key in seen:
+            continue
+        seen.add(key)
+        entry: dict[str, str] = {"flavor": flavor, "pattern": pattern}
+        if flags:
+            entry["flags"] = flags
+        else:
+            entry["flags"] = ""
+        out.append(entry)
+        if len(out) >= _MAX_REGEXES:
+            break
+    return out
+
+
+
 # Markdown code-fence language detection. Markdown wraps code in
 # triple-backtick fences with an optional language tag immediately
 # after the opening fence:
@@ -2449,6 +2701,19 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if not css_vendor_prefixes:
         css_vendor_prefixes = detect_css_vendor_prefixes(code, language)
+    # Regex literal extraction. Caller-supplied list wins (preserved
+    # verbatim); otherwise scan the snippet for embedded regex
+    # literals across 8 language flavors (js / python / ruby / perl /
+    # go / java / rust / c#) and surface each ``{flavor, pattern,
+    # flags}`` triple found. Returns an empty list when no regex
+    # literal is present.
+    regexes = (
+        list(existing.regexes)
+        if existing and existing.regexes
+        else []
+    )
+    if not regexes:
+        regexes = extract_regex_literals(code, language)
     return CodeFields(
         language=language,
         code=code,
@@ -2468,4 +2733,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         fence_language=fence_language,
         feature_flags=feature_flags,
         css_vendor_prefixes=css_vendor_prefixes,
+        regexes=regexes,
     )
