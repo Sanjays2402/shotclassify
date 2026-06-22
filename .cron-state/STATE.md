@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (97 features tracked, 75 complete)
+## Roadmap (102 features tracked, 80 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -130,6 +130,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 32. [x] Chat: per-message emoji reaction counts into `ChatFields.reactions` (list of `{sender, reactions: [{emoji, count}, ...]}` dicts; Slack shortcode form `:eyes: 3` with shortcode regex `[a-z0-9_+-]{1,40}` (+/- preserved for :+1:/:-1:), Discord inline Unicode emoji + count with emoji range U+1F300..U+1FAFF (faces/gestures/hands/objects) + U+2600..U+27BF BMP miscellaneous symbols + U+FE0F variation selector, iMessage reaction-by lines `❤️ by Alice` (speaker = REACTOR not author), WhatsApp `❤️ 3`; per-line _is_reaction_line heuristic: at least one emoji+count match AND matched chars >= 30% of non-whitespace content so regular prose containing trailing emoji+number doesn't fire; sender attribution to nearest preceding `Sender:` line; iMessage reaction-by overrides current_sender with reactor name; dedupe on (sender, tuple-of-(emoji, count)) key; per-message reactions cap 20; total entries cap 30; LLM wire-format updated).
 
 
+### Done in tick 16 (5 features)
+94. [x] Receipt: tax-jurisdiction breakdown into `ReceiptFields.tax_lines` (list of `{jurisdiction, amount}` dicts; 30+ jurisdiction catalogue covering US state/county/city/local/sales/federal/use tax + multi-word specialty taxes hotel/lodging/tourism/restaurant/resort-fee/liquor/tobacco/service, Canadian HST/PST/GST/QST, EU/UK VAT/Import VAT/EU VAT, Indian CGST/SGST/IGST/UTGST/CESS; longest-first ordering so multi-word forms beat short aliases AND overlap-defence skips shorter matches inside already-recorded longer spans VAT-inside-Import-VAT; bare Tax keyword intentionally OUT of catalogue because top-level tax slot owns it; last-occurrence-per-jurisdiction semantics for echoed summary lines; tax_lines empty for 0 or 1 jurisdiction so dashboards rely on len(tax_lines) > 0 meaning real multi-jurisdiction breakdown; output sorted by source-text offset for top-to-bottom rendering; LLM wire-format updated).
+73. [x] Receipt: gift-card / promo-code redemption detection (TWO new ReceiptFields: gift_card_applied float + promo_code string; gift-card catalogue: Gift Card Applied / Gift Card Redeemed / Gift Card / GC Redeemed / GC Applied / Store Credit Applied / Store Credit / Voucher Applied / Voucher Redeemed / Voucher (most-specific-first); always emitted POSITIVE regardless of leading minus on the printer because field semantic implies sign; promo-code catalogue: Discount Code / Coupon Code / Voucher Code / Promo Code / Promotion Code / Rebate Code / Offer Code / Referral Code; bare `Code: X` form fires only when same line carries discount/promo/coupon/voucher/rebate vocab so generic Order Code doesn't false-positive; pure-digit codes longer than 3 digits rejected because almost always order numbers; original case preserved (Shopify uses lowercase, legacy uses uppercase); LLM wire-format updated).
+72. [x] PII redact: drivers-license-number redaction mode (new `drivers_license` mode; matcher REQUIRES word DL/license/licence/driver's license/drivers license/lic case-insensitive immediately before candidate so bare 7-12 digit runs don't misfire; recognised labels: DL: / DL # / DL No: / Driver's License: / Drivers License: / License No: / License Number: / License #: / Lic: / Lic. No. / D.L.; apostrophe optional; British/Canadian Licence spelling supported; accepted candidate shapes cover 50 US-state formats: 7-12 pure digits TX/NY/OH/MI/IL/NJ AND 1-2 letters + 6-13 alphanumerics CA/NC/FL/MD; custom _sub_drivers_license substitution preserves DL: label while redacting only the captured num group same as passport mode; added to PII_REDACT_MODES allow-list).
+96. [x] Error: NestJS exception filter parsing (new framework='nestjs'; _NEST_PRELUDE regex matches [Nest]...ERROR [<context>] message where context is ExceptionsHandler/HttpExceptionFilter/RpcExceptionFilter/WsExceptionFilter/ValidationPipe/AuthGuard/RolesGuard or any bare alphanumeric with Filter/Handler/Pipe/Exception/Guard suffix; _NEST_EXC regex matches 23 standard HttpException subclasses (NotFound/Unauthorized/Forbidden/BadRequest/Conflict/UnprocessableEntity/TooManyRequests/InternalServerError/BadGateway/ServiceUnavailable/GatewayTimeout/PayloadTooLarge/NotImplemented/NotAcceptable/RequestTimeout/MethodNotAllowed/MisdirectedRequest/ImATeapot/PreconditionFailed/UnsupportedMediaType/Http) + Rpc/Ws/Validation Exception variants; placed BEFORE generic Node branch because Nest runs on Node with identical frame shape; typed exception class beats context name when both present because dashboards care about specific status code; 15-cause _nest_likely_cause catalogue).
+66. [x] Error: AWS Lambda / boto3 client error extraction (new framework='boto3'; _BOTO_EXC_HEADER regex matches botocore.exceptions.X / botocore.errorfactory.X / botocore.client.X / boto3.exceptions.X module path prefixes with [A-Z][\w]+ exception class; _BOTO_CLIENT_ERROR regex captures canonical `An error occurred (CODE) when calling the OPERATION operation: detail` message format pulling error_code + operation_name out; composed message slot reads `<detail> [code=ErrorCode op=OperationName]` so structured tail survives plain-string message field; runs FIRST inside python branch of parse_error_text overriding to boto3 framework when ANY boto signal present without disturbing vanilla python tracebacks; 23-cause _boto_likely_cause catalogue covering both SDK-level failures NoCredentialsError/EndpointConnectionError/ReadTimeout/ParamValidationError/WaiterError AND AWS service-level codes NoSuchBucket/NoSuchKey/AccessDenied/Throttling/ResourceNotFound/InternalFailure/etc).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -141,23 +149,23 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 55. [ ] UI mockup: layout-style guess (new `UIMockupFields.layout_kind`: `dashboard` / `landing` / `form` / `settings` / `modal`).
 56. [ ] PII redact: phone-number redaction mode (`phone` mode; normalises to `<PHONE>` stub form). (Note: a tight `phone` regex already exists in redact.py with `[REDACTED:phone]` placeholder; this would refine to the `<PHONE>` stub form.)
 65. [ ] Chat: link preview block detection (the inline OG-card with title + description that platforms inline for shared URLs).
-66. [ ] Error: AWS Lambda / boto3 client error extraction (BotoCoreError, ClientError with operation_name + error_code).
 69. [ ] Receipt: tip-jar / suggested-tip table detection (the "10% 12.34 / 15% 18.51 / 20% 24.68" footer table).
 71. [ ] Chart: pie-slice percent extraction from in-pie labels (new ChartFields.slices list of {label, percent}).
-72. [ ] PII redact: drivers-license-number redaction mode (per-state US shape catalogues, the most common 7-9 alphanumeric forms).
-73. [ ] Receipt: gift-card / promo-code redemption detection (new ReceiptFields.gift_card_applied amount + ReceiptFields.promo_code string; "Gift card -25.00" / "Promo code SAVE10 applied" shapes).
 80. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce).
 81. [ ] Error: Spring Boot WhiteLabel error page parsing (`/error` endpoint HTML that surfaces inside a screenshot -- pull status, timestamp, path, message).
 90. [ ] Receipt: barcode/QR encoding detection in OCR text (vendors print the encoded payload below the barcode -- track which lines look like the encoded payload vs the human-readable text).
 91. [ ] Error: Datadog / Sentry error-fingerprint extraction (the `[abc123]` short-hash that Sentry prints + the dd.trace_id / dd.span_id pair Datadog injects).
 93. [ ] Chat: typing-indicator detection (the bouncing-dots animation OCR may render as `...` or `Alice is typing...`).
-94. [ ] Receipt: tax-jurisdiction breakdown (when a receipt prints multiple tax lines `State Tax 1.50 / County Tax 0.50 / City Tax 0.25` surface as ReceiptFields.tax_lines list of {jurisdiction, amount}).
-96. [ ] Error: NestJS exception filter parsing (`ExceptionsHandler` / `HttpException` shape; framework=nestjs).
 98. [ ] Receipt: line-item modifier / customisation detection (the indented `+ Add bacon` / `- No onions` / `Extra cheese` sublines beneath an item).
 99. [ ] Code: secret/key-literal sniffing into `CodeFields.suspected_secrets` (literal strings that look like API keys / DB credentials / OAuth secrets even when not detected by the typed redact modes).
 100. [ ] Extract: cross-category emoji-density tally into `raw["emoji_density"]` (a single float fraction of chars that are emoji -- a quick "this capture is meme-heavy" signal).
 101. [ ] Error: GraphQL execution error extraction (the `errors` array shape `[{"message", "path", "locations"}]` GraphQL clients print).
 102. [ ] Chart: data-table fallback extraction from a chart screenshot's accompanying legend table (the small `x / y` paired columns that often sit beside the chart).
+103. [ ] Receipt: itemised loyalty-points-earned line (`Points Earned: 25` / `Stars Awarded: 3` / `Miles: 100`).
+104. [ ] Chat: voice-call / video-call duration markers (`Audio call · 1m 23s` / `Missed video call`).
+105. [ ] Code: build-tool / package-manager command detection (npm/yarn/pnpm/cargo/go mod/poetry/pip line into `CodeFields.build_commands`).
+106. [ ] Error: Apollo Client / Apollo Server GraphQL error parsing (the `ApolloError: ...` shape with `extensions.code`).
+107. [ ] PII redact: bank-account / routing-number redaction mode (US 9-digit routing + 8-12 digit account, IBAN already covered).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -584,6 +592,98 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     iMessage reaction-by `❤️ by Alice` lines override
     the current_sender with the REACTOR's name (the
     semantics differ from a normal reaction footer).
+
+- 2026-06-22 07:23 PT (tick 16, Cake): 5 features.
+  - 19b9169 feat(extract/receipt): tax-jurisdiction breakdown into ReceiptFields.tax_lines
+  - 23f8acd feat(extract/receipt): gift-card and promo-code redemption detection
+  - 84be9df feat(redact): drivers-license-number redaction mode
+  - d00ca90 feat(extract/error): NestJS exception filter parsing (framework='nestjs')
+  - d23625f feat(extract/error): AWS Lambda / boto3 client error extraction (framework='boto3')
+  - Gate: ruff at baseline 536 (three fixups folded
+    via --fixup + --autosquash before push -- one E501
+    on the boto NoCredentialsError cause string (split
+    across two lines), plus two I001 fixups on the two
+    receipt test files (ruff wants a blank line between
+    `from __future__ import annotations` and the next
+    import paragraph)) + pytest 3660 passed / 3
+    skipped in 126.18s. 258 new tests across the 5
+    features (48 + 59 + 45 + 52 + 54). New ReceiptFields
+    shipped: tax_lines (list of jurisdiction/amount
+    dicts), gift_card_applied (positive float),
+    promo_code (str). One new PII redact mode
+    `drivers_license` added to PII_REDACT_MODES
+    allow-list (mirrors passport mode's _sub_drivers_license
+    substitution that preserves the label while
+    redacting only the captured num group). Two new
+    error frameworks: 'nestjs' (placed BEFORE Node
+    branch because Nest runs on Node with identical
+    frame shape; discriminator is the [Nest] PID
+    prefix + ERROR [<context>] tag) and 'boto3'
+    (placed FIRST inside the python branch so any
+    boto signal overrides framework='python' to
+    framework='boto3' without disturbing vanilla
+    Python tracebacks). LLM wire format in
+    classify/client.py updated for tax_lines /
+    gift_card_applied / promo_code. Roadmap refilled
+    with 5 new items (103..107 -- receipt loyalty
+    points, chat call duration, code build commands,
+    Apollo GraphQL errors, bank-account redact)
+    so backlog stays at 22 open. Notable design
+    decisions:
+    * tax_lines bare "Tax" keyword intentionally
+      OUT of the catalogue because the top-level
+      `tax` field already owns it; tax_lines
+      surfaces ONLY when 2+ jurisdictions are
+      present so dashboards can rely on
+      len(tax_lines) > 0 meaning "real multi-
+      jurisdiction breakdown" without per-receipt
+      special cases. Longest-first ordering with
+      overlap-defence prevents "VAT" stealing the
+      suffix of "Import VAT".
+    * gift_card_applied always emitted POSITIVE
+      regardless of leading `-` because the field
+      semantic implies the sign (it's the amount
+      knocked off by the gift card; whether the
+      printer wrote it as -25 or 25 carries no
+      extra information).
+    * promo_code rejects pure-digit codes longer
+      than 3 digits because a 5-digit run after
+      "Promo Code:" is almost always an order
+      number misprint. Original case preserved
+      so Shopify lowercase / legacy uppercase
+      both survive.
+    * drivers_license matcher requires the label
+      (DL / license / licence / lic / driver's
+      license) immediately BEFORE the candidate
+      so a bare 7-12 digit run on a receipt
+      doesn't misfire as a license. Mirrors the
+      passport mode's safety guarantee on every
+      axis: label-preserving substitution, custom
+      `_sub_drivers_license` handler, both
+      apostrophe-and-no-apostrophe `driver's
+      license` shapes, British `Licence` spelling,
+      50-state US format coverage.
+    * NestJS sits BEFORE Node in elif chain;
+      typed exception class (NotFoundException)
+      beats context name (ExceptionsHandler) when
+      both present because dashboards care about
+      the specific HTTP status code. Backed by
+      15-cause likely_cause catalogue.
+    * boto3 runs FIRST inside the python branch
+      so the framework override fires whenever
+      ANY boto signal is present (the typed
+      exception header or the canonical
+      "An error occurred ..." message). Composed
+      message slot reads `<detail> [code=X op=Y]`
+      so the structured AWS error code +
+      operation pair survives the schema's
+      plain-string `message` field. Backed by
+      23-cause _boto_likely_cause catalogue
+      covering both SDK-level failures (no
+      credentials, endpoint connection, waiter
+      timeout) AND service-level codes
+      (NoSuchBucket, AccessDenied, Throttling,
+      ResourceNotFound, etc).
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
