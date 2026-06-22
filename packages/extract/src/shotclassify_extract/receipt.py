@@ -478,6 +478,134 @@ def _spans(hits: dict[str, tuple[int, float, int]]) -> list[tuple[int, int]]:
     return [(v[0], v[2]) for v in hits.values()]
 
 
+# Gift-card / store-credit / voucher keywords ordered MOST-SPECIFIC
+# first so multi-word forms beat short aliases. The bare "Voucher"
+# alias sits LAST because it's the most ambiguous: some restaurants
+# print "Voucher Number: 12345" for promotional coupons (which the
+# promo_code matcher should catch instead). To keep voucher from
+# absorbing the promo case, the matcher requires a digit-amount on
+# the SAME line (an alphanumeric tail like "Voucher Number: ABC123"
+# fails the regex and falls through to promo_code).
+_GIFT_CARD_KEYWORDS: tuple[str, ...] = (
+    "gift card applied",
+    "gift card redeemed",
+    "gift card",
+    "store credit applied",
+    "store credit",
+    "gc redeemed",
+    "gc applied",
+    "voucher applied",
+    "voucher redeemed",
+    "voucher",
+)
+
+
+def _find_gift_card_applied(text: str) -> float | None:
+    """Return the gift-card amount applied to the receipt, or None.
+
+    Recognises "Gift Card -25.00", "Gift Card Applied 25.00",
+    "Store Credit -15.00", "GC Redeemed 10.00", "Voucher 5.00"
+    (case-insensitive). Stored as a POSITIVE float regardless of
+    whether the printer used a leading ``-``: the field's semantic
+    is "amount knocked off by the gift card" and the sign is
+    implied.
+
+    LAST-occurrence semantics for consistency with the other
+    receipt extractors. ``None`` when no gift-card line is printed.
+
+    Distinct from ``discount`` (a marketing promotion) and
+    ``tendered`` (the cash/card customer paid with) because a gift
+    card is a stored-value tender that dashboards want to track
+    separately for reconciliation.
+    """
+    for keyword in _GIFT_CARD_KEYWORDS:
+        value = _find_signed_amount_after(text, keyword)
+        if value is not None:
+            # Always positive: the printer's sign carries no extra
+            # information once we've identified the field's semantic.
+            return abs(value)
+    return None
+
+
+# Promo / discount / coupon code keywords. We expect the value to
+# be an alphanumeric CODE (not a money amount), so we use a
+# dedicated regex distinct from ``_find_amount_after``. Ordered
+# MOST SPECIFIC first so a multi-word form ("Promo Code") wins
+# over a bare alias ("Code").
+_PROMO_CODE_KEYWORDS: tuple[str, ...] = (
+    "discount code",
+    "coupon code",
+    "voucher code",
+    "promo code",
+    "promotion code",
+    "rebate code",
+    "offer code",
+    "referral code",
+)
+
+
+def _find_promo_code(text: str) -> str | None:
+    """Return the promo / discount / coupon code applied, or None.
+
+    Recognises "Promo Code: SAVE10", "Coupon Code SUMMER2024",
+    "Discount Code WELCOME20", "Voucher Code GIFT5", and the bare
+    "Code: NEWUSER" form (only when paired with a discount /
+    promo / coupon keyword on the SAME line so a generic
+    "Order Code: 12345" doesn't false-positive).
+
+    LAST-occurrence semantics: a receipt that lists multiple codes
+    (a refer-a-friend code AND a checkout promo) keeps the last
+    one applied. Codes are stored verbatim (case-preserved) with
+    surrounding punctuation stripped.
+
+    ``None`` when no recognised code is present.
+    """
+    if not text:
+        return None
+    # Try the explicit "X Code: VALUE" forms first.
+    for keyword in _PROMO_CODE_KEYWORDS:
+        pattern = re.compile(
+            rf"(?:(?<=\n)|(?<=^)|(?<=[^a-zA-Z])){re.escape(keyword)}"
+            r"\s*[:#\-]?\s*"
+            r"(?P<code>[A-Z0-9][A-Z0-9._\-]{1,31})\b",
+            re.IGNORECASE,
+        )
+        matches = list(pattern.finditer(text))
+        if matches:
+            code = matches[-1].group("code")
+            # Reject pure-digit codes longer than 2 digits because a
+            # bare 5+ digit run after "Promo Code:" is almost always
+            # an order number, not a promo code. Short numeric codes
+            # (e.g. "Promo: 50") stay because some merchants use
+            # them.
+            if code.isdigit() and len(code) > 3:
+                continue
+            return code.strip(",.:;-")
+    # Fall back to the "Code: VALUE" form ONLY when the line ALSO
+    # contains a discount / promo / coupon vocabulary word. This
+    # keeps "Order Code: 12345" / "Customer Code: ABC" from
+    # false-positiving.
+    for line in text.splitlines():
+        low = line.lower()
+        if not any(
+            kw in low for kw in ("discount", "promo", "coupon", "voucher", "rebate")
+        ):
+            continue
+        # Match a bare "Code: VALUE" on this line.
+        m = re.search(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-zA-Z]))code\s*[:#\-]?\s*"
+            r"(?P<code>[A-Z0-9][A-Z0-9._\-]{1,31})\b",
+            line,
+            re.IGNORECASE,
+        )
+        if m:
+            code = m.group("code")
+            if code.isdigit() and len(code) > 3:
+                continue
+            return code.strip(",.:;-")
+    return None
+
+
 # SKU / barcode / UPC / EAN / Item-Code / PLU printed alongside the
 # line item. Recognised wording (case-insensitive; ordered
 # most-specific-first so a "Item Code" beats a bare "Item #"):
@@ -1595,6 +1723,8 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         change=_find_change(text),
         rounding=_find_rounding(text),
         tax_lines=_find_tax_lines(text),
+        gift_card_applied=_find_gift_card_applied(text),
+        promo_code=_find_promo_code(text),
         items=_parse_items(text),
     )
 
@@ -1610,7 +1740,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "party_size", "refund_amount", "loyalty_id", "store_id",
         "register_id", "cashier", "server", "signature",
         "service_charge", "delivery_fee", "tendered", "change",
-        "rounding",
+        "rounding", "gift_card_applied", "promo_code",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))

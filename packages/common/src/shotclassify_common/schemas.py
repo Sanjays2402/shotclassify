@@ -254,6 +254,40 @@ class ReceiptFields(BaseModel):
     # jurisdictions appear so dashboards always know "len > 0 means
     # this receipt has a real jurisdiction breakdown").
     tax_lines: list[dict[str, str | float]] = Field(default_factory=list)
+    # Gift-card amount applied to the receipt. Surfaces on retail
+    # receipts that accept gift cards as tender, on e-commerce
+    # captures, and on restaurant receipts where the customer
+    # redeemed a gift card. Recognised wording:
+    #
+    #   Gift Card        -25.00
+    #   Gift Card Applied 25.00
+    #   GC Redeemed       10.00
+    #   Voucher            5.00
+    #   Store Credit     -15.00
+    #
+    # Stored as a POSITIVE float (the amount knocked off by the gift
+    # card) regardless of whether the printer used a leading ``-`` or
+    # wrote the value bare. ``None`` when no gift-card line is
+    # present. Distinct from ``discount`` (a marketing promotion the
+    # merchant chose) and ``tendered`` (the cash/card the customer
+    # paid with) because the gift card is a stored-value tender that
+    # dashboards want to track separately for reconciliation.
+    gift_card_applied: float | None = None
+    # Promo / discount code the customer applied. Surfaces on
+    # e-commerce receipts, food-delivery captures, and rideshare
+    # captures (UberEats / DoorDash / Shopify / Amazon).
+    # Recognised wording:
+    #
+    #   Promo Code: SAVE10
+    #   Coupon Code: SUMMER2024
+    #   Discount Code: WELCOME20
+    #   Code: NEWUSER          (only when paired with discount/promo on the same line)
+    #   Voucher Code: GIFT5
+    #
+    # Stored as the code string verbatim (case-preserved) with
+    # surrounding punctuation stripped. ``None`` when no promo code
+    # is printed.
+    promo_code: str | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
