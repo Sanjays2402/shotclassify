@@ -724,6 +724,41 @@ class ChatFields(BaseModel):
     # replies without an LLM round trip and to surface "X is
     # replying to Y" annotations on chat-screenshot cards.
     quotes: list[dict[str, str]] = Field(default_factory=list)
+    # Attachment markers (voice notes, images, videos, files, GIFs,
+    # stickers, locations) detected in the screenshot. Most chat
+    # platforms render an attachment as a small bracketed token or
+    # emoji-prefixed label in place of the message body. Recognised
+    # shapes:
+    #
+    #   * WhatsApp / iMessage:    ``[Image]`` / ``[Video]`` / ``[Voice note 0:23]``
+    #                              / ``[Sticker]`` / ``[Document]`` / ``[GIF]``
+    #                              / ``[Location]`` / ``[Contact]``
+    #   * Telegram (italic):       ``📷 Photo`` / ``🎥 Video`` / ``🎤 Voice (0:42)``
+    #                              / ``📎 Document`` / ``📍 Location``
+    #                              / ``🎵 Audio (3:12)`` / ``🎬 GIF``
+    #                              / ``💬 Sticker``
+    #   * Slack inline:            ``📎 Attached file: <name>``
+    #   * Generic English:         ``Voice message (0:42)`` / ``Photo`` / ``Image`` /
+    #                              ``Video call · 1m 23s`` / ``Missed video call``
+    #
+    # Each entry is a ``{"sender": str | None, "kind": str,
+    # "duration": str | None, "name": str | None}`` dict.
+    # ``kind`` is the canonical lowercase attachment type tag:
+    # ``image`` / ``video`` / ``voice`` / ``audio`` / ``document`` /
+    # ``sticker`` / ``gif`` / ``location`` / ``contact`` /
+    # ``video_call`` / ``audio_call``. ``duration`` (when present)
+    # is the ``MM:SS`` / ``H:MM:SS`` / ``Nm Ms`` duration text from
+    # voice / audio / video / call shapes. ``name`` (when present)
+    # is the filename or document title for ``document`` /
+    # ``image`` / ``video`` attachments that printed one.
+    #
+    # Ordering preserves first-seen-in-OCR order. Capped at 30
+    # entries. Distinct from ``messages`` because attachments
+    # carry no text body; dashboards use this list to surface
+    # "this thread is mostly photos" / "this chat has 4 voice
+    # notes" annotations and to bias OCR rescans toward the
+    # photo / video frames.
+    attachments: list[dict[str, str | None]] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):

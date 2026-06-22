@@ -484,6 +484,302 @@ def _strip_quote_lines(text: str) -> str:
     return "\n".join(out_lines)
 
 
+# Attachment marker detection. Modern chat platforms render
+# attachments as a small bracketed token or emoji-prefixed label
+# in place of the message body. Recognised shapes:
+#
+#   * WhatsApp / iMessage bracketed: ``[Image]`` / ``[Video]`` /
+#     ``[Voice note 0:23]`` / ``[Sticker]`` / ``[Document]`` /
+#     ``[GIF]`` / ``[Location]`` / ``[Contact]``
+#   * Telegram emoji-prefixed: ``📷 Photo`` / ``🎥 Video`` /
+#     ``🎤 Voice (0:42)`` / ``📎 Document`` / ``📍 Location``
+#   * Slack inline: ``📎 Attached file: <name>``
+#   * Generic English: ``Voice message (0:42)`` / ``Photo`` /
+#     ``Video call · 1m 23s`` / ``Missed video call``
+#
+# Output is a list of ``{sender, kind, duration?, name?}`` dicts.
+
+# Canonical attachment-type tags. ``kind`` values stay lowercase
+# so dashboards can switch on a fixed enum-like vocabulary
+# without normalisation gymnastics.
+_ATTACH_KIND_ALIASES: dict[str, str] = {
+    # Image
+    "image": "image",
+    "photo": "image",
+    "picture": "image",
+    "img": "image",
+    # Video
+    "video": "video",
+    "vid": "video",
+    "movie": "video",
+    # Voice / audio
+    "voice": "voice",
+    "voice note": "voice",
+    "voice message": "voice",
+    "audio note": "voice",
+    "voice memo": "voice",
+    "audio": "audio",
+    "audio message": "audio",
+    "music": "audio",
+    # Document / file
+    "document": "document",
+    "doc": "document",
+    "file": "document",
+    "pdf": "document",
+    # Sticker / GIF
+    "sticker": "sticker",
+    "gif": "gif",
+    "animated gif": "gif",
+    # Location / contact
+    "location": "location",
+    "live location": "location",
+    "contact": "contact",
+    "contact card": "contact",
+    # Calls
+    "video call": "video_call",
+    "missed video call": "video_call",
+    "audio call": "audio_call",
+    "voice call": "audio_call",
+    "missed audio call": "audio_call",
+    "missed voice call": "audio_call",
+    "missed call": "audio_call",
+}
+
+# Bracketed shape: [Image] / [Voice note 0:23] / [Voice note (0:23)]
+# / [Document: file.pdf] / [Photo]. The captured label is
+# lower-cased + normalised before lookup against
+# _ATTACH_KIND_ALIASES. Brackets are required around the entire
+# token so prose with [issue-id] doesn't false-positive (the
+# captured text is checked against the alias map, so unknown
+# bracketed labels are rejected).
+_BRACKET_ATTACH_RE = re.compile(
+    r"\[\s*(?P<label>[A-Za-z][A-Za-z ]{0,28})"
+    r"(?:\s*[:\-]?\s*(?P<duration>\d{1,2}:\d{2}(?::\d{2})?))?"
+    r"(?:\s*[:\-]\s*(?P<name>[^\]]{1,80}))?"
+    r"\s*\]"
+)
+
+# Emoji-prefixed shape: 📷 Photo / 🎤 Voice (0:42) / 📎 Document /
+# 🎥 Video. The emoji catalogue is a small curated set so we
+# don't false-positive on every leading emoji.
+_ATTACH_EMOJI = (
+    "📷", "📸", "🖼", "🖼️",      # photo / image
+    "🎥", "📹", "📽", "📽️",      # video
+    "🎤", "🎙", "🎙️", "🗣",      # voice
+    "🎵", "🎶", "🔊",              # audio / music
+    "📎", "📄", "📑", "📋",      # document
+    "📍", "🗺", "🗺️",            # location
+    "👤", "📇",                    # contact
+    "💬",                          # sticker (Telegram convention)
+    "🎬",                          # GIF
+)
+_EMOJI_ATTACH_RE = re.compile(
+    r"(?P<emoji>"
+    + "|".join(re.escape(e) for e in _ATTACH_EMOJI)
+    + r")\s+"
+    r"(?P<label>[A-Za-z][A-Za-z ]{0,28}?)"
+    r"(?:\s*\(\s*(?P<duration>\d{1,2}:\d{2}(?::\d{2})?)\s*\))?"
+    r"(?:\s*[:\-]\s*(?P<name>[^\n]{1,80}))?"
+    r"(?=\s|$|[.,;:])"
+)
+
+# Standalone duration suffix for `(0:42)` / `(1:23)` / `(3:12:45)`
+# parens. Used by the bracket and emoji shapes' duration groups
+# above; documented here for clarity.
+
+# Generic English shape: ``Voice message (0:42)`` / ``Video call ·
+# 1m 23s`` / ``Missed video call`` / ``Voice memo - 0:30``. Must
+# sit on its own (line-bounded) so prose like "I voiced my opinion"
+# doesn't fire. The label MUST appear in the alias catalogue --
+# we reject unknown bare-English labels because the false-positive
+# surface is too large.
+_ENGLISH_ATTACH_RE = re.compile(
+    r"^\s*(?P<label>"
+    r"Missed video call|Missed audio call|Missed voice call|Missed call|"
+    r"Video call|Audio call|Voice call|Voice message|Voice note|"
+    r"Voice memo|Audio message|Photo|Image|Picture|Video|Sticker|GIF|"
+    r"Location|Live Location|Contact|Document|Attached file)\b"
+    r"(?:\s*[·\-]\s*(?P<duration>\d{1,2}(?::\d{2}){1,2}|\d+m(?:\s*\d+s)?|\d+s))?"
+    r"(?:\s*\(\s*(?P<duration2>\d{1,2}:\d{2}(?::\d{2})?)\s*\))?"
+    r"(?:\s*[:\-]\s*(?P<name>[^\n]{1,80}))?"
+    r"\s*$",
+    re.IGNORECASE,
+)
+
+
+_MAX_ATTACHMENTS = 30
+
+
+def _kind_for(label: str) -> str | None:
+    """Return the canonical attachment kind for ``label`` or None."""
+    if not label:
+        return None
+    key = re.sub(r"\s+", " ", label.strip().lower())
+    if key in _ATTACH_KIND_ALIASES:
+        return _ATTACH_KIND_ALIASES[key]
+    # Allow "Voice note" / "Voice memo" / etc multi-word forms.
+    # We already canonicalised them in the alias map above; this
+    # branch is a no-op safety net.
+    return None
+
+
+def _extract_attachments(text: str) -> list[dict[str, str | None]]:
+    """Return attachment-marker entries found in ``text``.
+
+    Each entry is a ``{sender, kind, duration?, name?}`` dict.
+    ``sender`` is the speaker the attachment belongs to (the
+    nearest preceding ``Sender:`` line) or ``None`` when no
+    transcript context surrounds the marker.
+
+    Order preserves first-seen-in-OCR-text offset (across all
+    matchers). De-dupes on the (sender, kind, duration, name)
+    tuple so the same WhatsApp ``[Image]`` printed twice
+    collapses to one entry. Capped at 30 entries.
+    """
+    if not text:
+        return []
+    sender_re = re.compile(r"^(?P<sender>[A-Z][A-Za-z0-9 _\-]{1,24}):\s+\S")
+
+    # Build a per-line sender map so each match's sender can be
+    # looked up by source-text offset without walking the whole
+    # transcript every time.
+    line_starts: list[int] = []
+    pos = 0
+    for ln in text.splitlines(keepends=True):
+        line_starts.append(pos)
+        pos += len(ln)
+    sender_at_line: list[str | None] = []
+    current: str | None = None
+    for _idx, ln in enumerate(text.splitlines()):
+        sm = sender_re.match(ln)
+        if sm:
+            current = sm.group("sender").strip()
+        sender_at_line.append(current)
+
+    def _sender_for(offset: int) -> str | None:
+        # Binary-search-lite: walk until the next line_start exceeds.
+        for i, _start in enumerate(line_starts):
+            if i + 1 == len(line_starts) or line_starts[i + 1] > offset:
+                return sender_at_line[i] if i < len(sender_at_line) else None
+        return None
+
+    candidates: list[tuple[int, int, dict[str, str | None]]] = []
+
+    # Bracket shape -- run FIRST so emoji-prefixed bracketed
+    # variants ([📷 Image]) don't double-tag.
+    for m in _BRACKET_ATTACH_RE.finditer(text):
+        label = m.group("label").strip()
+        kind = _kind_for(label)
+        if kind is None:
+            continue
+        duration = (m.group("duration") or "").strip() or None
+        name = (m.group("name") or "").strip() or None
+        # If the label captured a multi-word like "Voice note" and
+        # the duration was actually inside the same label slot
+        # (e.g. "[Voice note 0:23]"), the regex's duration group
+        # already pulled it out -- nothing more to do.
+        entry: dict[str, str | None] = {"kind": kind}
+        if duration:
+            entry["duration"] = duration
+        if name:
+            entry["name"] = name
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), m.end(), entry))
+
+    # Emoji-prefixed shape -- run SECOND so a bracketed match's
+    # span is preserved.
+    for m in _EMOJI_ATTACH_RE.finditer(text):
+        label = m.group("label").strip()
+        kind = _kind_for(label)
+        if kind is None:
+            continue
+        # Skip if this emoji-prefix match overlaps any bracketed
+        # match already recorded (bracket wins, no double-tag).
+        overlap = any(s <= m.start() < e for s, e, _ in candidates)
+        if overlap:
+            continue
+        duration = (m.group("duration") or "").strip() or None
+        name = (m.group("name") or "").strip() or None
+        entry = {"kind": kind}
+        if duration:
+            entry["duration"] = duration
+        if name:
+            entry["name"] = name
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), m.end(), entry))
+
+    # Generic English shape -- per-line scan because the regex is
+    # line-anchored. We strip any leading ``Sender: `` transcript
+    # prefix before matching so a transcript-attached attachment
+    # line still tags.
+    for idx, ln in enumerate(text.splitlines()):
+        # Strip a leading "Sender: " prefix so the English regex's
+        # ^ anchor still triggers on transcript-attached lines.
+        stripped_offset = 0
+        scan_ln = ln
+        smp = sender_re.match(ln)
+        if smp:
+            scan_ln = ln[smp.end() - 1:].lstrip()
+            stripped_offset = len(ln) - len(scan_ln)
+        m = _ENGLISH_ATTACH_RE.match(scan_ln)
+        if not m:
+            continue
+        label = m.group("label").strip()
+        kind = _kind_for(label)
+        if kind is None:
+            continue
+        offset = line_starts[idx] + stripped_offset
+        end_offset = offset + (m.end() - m.start())
+        # Skip if this English-shape match overlaps with an
+        # already-recorded match span.
+        overlap = any(
+            s <= offset < e or s < end_offset <= e
+            for s, e, _ in candidates
+        )
+        if overlap:
+            continue
+        duration = (
+            (m.group("duration") or "").strip()
+            or (m.group("duration2") or "").strip()
+            or None
+        )
+        name = (m.group("name") or "").strip() or None
+        entry = {"kind": kind}
+        if duration:
+            entry["duration"] = duration
+        if name:
+            entry["name"] = name
+        sender = _sender_for(offset)
+        if sender:
+            entry["sender"] = sender
+        candidates.append((offset, end_offset, entry))
+
+    # Sort by source-text offset so the order matches what a human
+    # reading the screenshot top-to-bottom would see.
+    candidates.sort(key=lambda x: x[0])
+
+    out: list[dict[str, str | None]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for _, _, entry in candidates:
+        key = (
+            entry.get("sender") or "",
+            entry.get("kind") or "",
+            entry.get("duration") or "",
+            entry.get("name") or "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(entry)
+        if len(out) >= _MAX_ATTACHMENTS:
+            break
+    return out
+
+
 def _is_reaction_line(line: str) -> bool:
     """Return True when ``line`` looks like a reaction footer.
 
@@ -958,6 +1254,35 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         seen_quotes.add(qk)
         quotes.append(q)
 
+    # Attachment markers ([Image] / 📷 Photo / Voice message (0:42))
+    # merged with any caller-supplied attachments. De-dupes on the
+    # (sender, kind, duration, name) tuple so the same WhatsApp
+    # ``[Image]`` printed twice collapses to one entry. Caller
+    # order preserved first.
+    attachments: list[dict[str, str | None]] = (
+        list(existing.attachments) if existing else []
+    )
+    seen_attach: set[tuple[str, str, str, str]] = set()
+    for a in attachments:
+        ak = (
+            a.get("sender") or "",
+            a.get("kind") or "",
+            a.get("duration") or "",
+            a.get("name") or "",
+        )
+        seen_attach.add(ak)
+    for a in _extract_attachments(text):
+        ak = (
+            a.get("sender") or "",
+            a.get("kind") or "",
+            a.get("duration") or "",
+            a.get("name") or "",
+        )
+        if ak in seen_attach:
+            continue
+        seen_attach.add(ak)
+        attachments.append(a)
+
     return ChatFields(
         platform=platform,
         participants=participants,
@@ -968,4 +1293,5 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         edits=edits,
         reactions=reactions,
         quotes=quotes,
+        attachments=attachments,
     )
