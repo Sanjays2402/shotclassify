@@ -91,6 +91,99 @@ _STATUS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 _MAX_STATUSES = 20
 
 
+# Edited-message marker detection. Modern chat platforms append a
+# small marker to the body of a message that was modified after
+# being sent. The exact phrasing varies by platform:
+#
+#   * iMessage / generic:       ``(edited)``
+#   * WhatsApp:                  ``(edited)``
+#   * Discord (with elapsed):    ``(edited 2m)`` / ``(edited 5h)``
+#   * Slack (with relative):     ``(edited)`` / ``(edited just now)``
+#                                / ``(edited 12 minutes ago)``
+#   * Slack web (with stamp):    ``edited at 12:34``
+#   * Telegram bots:             ``[edited]``
+#   * Some clients (modified):   ``(modified)`` / ``(updated)``
+#
+# We surface the markers via :func:`_extract_edits`. The output is a
+# list of ``{"sender", "text", "tail"}`` dicts; ``sender`` is the
+# nearest preceding ``Sender: text`` speaker (or ``None`` for bare
+# lines), ``text`` is the message body with the edit marker stripped,
+# ``tail`` is the exact captured tail (``edited 2m``) so dashboards
+# can render the elapsed time without re-parsing.
+
+_EDIT_TAIL_RE = re.compile(
+    r"\s*"
+    r"(?:"
+    # Parenthesised: (edited) / (edited 2m) / (edited just now) /
+    # (edited 12 minutes ago) / (edited 2024-01-01) / (modified) /
+    # (updated)
+    r"\(\s*(?P<tail_paren>edited(?:[\s,]+[\w\d:\-./ ]{1,40})?"
+    r"|modified|updated)\s*\)"
+    r"|"
+    # Bracketed: [edited]
+    r"\[\s*(?P<tail_bracket>edited)\s*\]"
+    r"|"
+    # Trailing inline: edited at 12:34 / edited 2m ago. Requires a
+    # space-separated start so a word boundary protects against
+    # picking up substring "edited" inside prose.
+    r"(?<=\s)(?P<tail_inline>edited(?:[\s,]+at[\s,]+\d{1,2}:\d{2}"
+    r"(?:\s*[AaPp]\.?[Mm]\.?)?|[\s,]+\d+[smhd](?:\s+ago)?))"
+    r")"
+    r"\s*$",
+    re.IGNORECASE,
+)
+
+
+_MAX_EDITS = 30
+
+
+def _extract_edits(text: str) -> list[dict[str, str]]:
+    """Return edit-marker entries found in ``text``.
+
+    Each entry is a ``{"sender", "text", "tail"}`` dict. ``sender``
+    is the speaker the message belongs to when extractable from a
+    leading ``Sender: text`` pattern on the same line; ``None``
+    otherwise (a bare line that just shows the edited body).
+    ``text`` is the message body with the edit marker stripped.
+    ``tail`` is the matched marker tail (``edited`` / ``edited 2m`` /
+    ``modified`` / ``updated``) so dashboards can surface the
+    elapsed time without re-parsing.
+
+    Order preserves first-seen-in-OCR-text order. Capped at 30
+    entries because a single screenshot rarely shows more than a
+    handful of edits.
+    """
+    if not text:
+        return []
+    out: list[dict[str, str]] = []
+    sender_re = re.compile(r"^(?P<sender>[A-Z][A-Za-z0-9 _\-]{1,24}):\s+(?P<body>.+)$")
+    for line in text.splitlines():
+        m = _EDIT_TAIL_RE.search(line)
+        if not m:
+            continue
+        tail_raw = (
+            m.group("tail_paren")
+            or m.group("tail_bracket")
+            or m.group("tail_inline")
+            or ""
+        )
+        # Canonical tail form: lowercased, normalised whitespace.
+        tail = re.sub(r"\s+", " ", tail_raw.strip().lower())
+        body = line[: m.start()].rstrip()
+        sender: str | None = None
+        sm = sender_re.match(body)
+        if sm:
+            sender = sm.group("sender").strip()
+            body = sm.group("body").strip()
+        entry: dict[str, str] = {"text": body, "tail": tail}
+        if sender:
+            entry["sender"] = sender
+        out.append(entry)
+        if len(out) >= _MAX_EDITS:
+            break
+    return out
+
+
 def _extract_statuses(text: str) -> list[dict[str, str]]:
     """Return unique status markers found in ``text``.
 
@@ -385,6 +478,22 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         seen_status.add(key)
         statuses.append(s)
 
+    # Edited-message markers ((edited) / (edited 2m) / etc.) merged
+    # with any caller-supplied edits. De-dupes on the (sender, text,
+    # tail) triple so an LLM-supplied edit plus the OCR-parsed
+    # identical edit collapses to one entry. Caller order preserved
+    # first.
+    edits: list[dict[str, str]] = list(existing.edits) if existing else []
+    seen_edits: set[tuple[str, str, str]] = set()
+    for e in edits:
+        seen_edits.add((e.get("sender", ""), e.get("text", ""), e.get("tail", "")))
+    for e in _extract_edits(text):
+        key2 = (e.get("sender", ""), e.get("text", ""), e.get("tail", ""))
+        if key2 in seen_edits:
+            continue
+        seen_edits.add(key2)
+        edits.append(e)
+
     return ChatFields(
         platform=platform,
         participants=participants,
@@ -392,4 +501,5 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         hashtags=hashtags,
         mentions=mentions,
         statuses=statuses,
+        edits=edits,
     )

@@ -589,6 +589,30 @@ class ChatFields(BaseModel):
     # list of dicts to mirror how ``messages`` is shaped; ordering
     # preserves first-seen-in-OCR order.
     statuses: list[dict[str, str]] = Field(default_factory=list)
+    # Edited-message markers detected in the screenshot. Each entry
+    # is a ``{"sender": str | None, "text": str, "tail": str}`` dict
+    # capturing the message that was marked as edited (``(edited)`` /
+    # ``(edited 2m)`` tails appended to message bodies on iMessage,
+    # Slack, Discord, WhatsApp, Telegram). ``sender`` is the speaker
+    # when extractable from the surrounding context, or ``None`` for
+    # bare lines. ``text`` is the message body with the edit marker
+    # stripped. ``tail`` is the exact marker tail captured so
+    # dashboards can surface ``"edited 2m"`` (when present) without
+    # re-parsing.
+    #
+    # Recognised markers (case-insensitive):
+    #   * ``(edited)``                  -- generic / WhatsApp
+    #   * ``(edited 2m)``               -- Discord
+    #   * ``(edited just now)``         -- Slack
+    #   * ``(edited 2024-01-01)``       -- some clients
+    #   * ``edited at 12:34``           -- Slack web
+    #   * ``(modified)``                -- some bots
+    #   * ``[edited]``                  -- bracket form (Telegram bots)
+    #
+    # Ordering preserves first-seen-in-OCR order. Capped at 30
+    # entries (a single screenshot rarely shows more than a handful
+    # of edits).
+    edits: list[dict[str, str]] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):
