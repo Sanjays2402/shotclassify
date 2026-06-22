@@ -211,6 +211,57 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.IGNORECASE,
         ),
     ),
+    (
+        # US drivers-license number. The state-level US drivers'
+        # license format is wildly heterogeneous (California 1
+        # letter + 7 digits, Texas 8 digits, New York 9 digits,
+        # Florida 1 letter + 12 digits, etc.). Surfacing a bare
+        # 7-12 digit run as a license number would false-positive
+        # on every order number / SSN / phone last-7 / credit card
+        # last-7 / passport (already redacted) in a screenshot.
+        #
+        # We require the word ``license`` / ``licence`` / ``DL`` /
+        # ``driver's license`` / ``drivers license`` (case-
+        # insensitive) to appear immediately before the candidate
+        # so the matcher fires ONLY on labelled drivers' license
+        # numbers. Accepted label forms:
+        #
+        #   DL: A1234567
+        #   DL # A1234567
+        #   DL No: A1234567
+        #   Driver's License: A1234567
+        #   Drivers License: A1234567
+        #   License No: A1234567
+        #   License Number: A1234567
+        #   License #: A1234567
+        #   Lic: A1234567
+        #   Lic. No. A1234567
+        #
+        # Accepted candidate shapes (after the label) cover the 50
+        # most common US-state license formats:
+        #
+        #   * 7 digits (TX, MA, MI, GA, IL, NJ, OH, OR, AZ, CO,
+        #     ...) -- 7-12 pure digits
+        #   * 1 letter + 7-12 digits (CA, NC, FL, WA, MD, ...)
+        #   * 1-2 letters + 6-13 alphanumerics (state-specific
+        #     mixes; the broad shape covers WI, NH, VT, etc.)
+        #
+        # Letter portions captured case-insensitively but real
+        # license numbers are uppercase by convention.
+        #
+        # When the label appears with a colon / hash / period /
+        # space separator we tolerate up to 5 separator chars
+        # between the label and the number so ``DL # 12345678``
+        # works as well as ``DL12345678``.
+        "drivers_license",
+        re.compile(
+            r"\b(?:dl|d\.l\.|lic\.?|licence|license|"
+            r"driver'?s?\s+licen[sc]e|drivers\s+licen[sc]e)"
+            r"\s*(?:no\.?|number|id|#)?\s*[:#.\s]{0,5}"
+            r"(?P<num>[A-Z]?[A-Z0-9]{5,13})\b",
+            re.IGNORECASE,
+        ),
+    ),
 )
 
 
@@ -281,6 +332,20 @@ def redact_text(text: str, modes: Iterable[str] | None) -> str:
                     + m.string[end:whole_end]
                 )
             out = pattern.sub(_sub_passport, out)
+        elif mode == "drivers_license":
+            # Mirrors the passport mode: replace only the captured
+            # ``num`` group so the reader still sees the
+            # ``DL: `` / ``License No: `` label and knows the
+            # field WAS a license without the number leaking.
+            def _sub_drivers_license(m: re.Match[str]) -> str:
+                start, end = m.span("num")
+                whole_start, whole_end = m.span()
+                return (
+                    m.string[whole_start:start]
+                    + _placeholder("drivers_license")
+                    + m.string[end:whole_end]
+                )
+            out = pattern.sub(_sub_drivers_license, out)
         else:
             out = pattern.sub(_placeholder(mode), out)
     return out

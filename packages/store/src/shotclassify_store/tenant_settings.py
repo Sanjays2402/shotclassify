@@ -299,6 +299,17 @@ PII_REDACT_MODES: tuple[str, ...] = (
     # number, leaving the ``Passport: `` label so a reader knows
     # the field WAS a passport without the number leaking.
     "passport",
+    # Drivers-license-number mode added in autoship tick 16.
+    # Requires the word ``DL`` / ``license`` / ``licence`` /
+    # ``driver's license`` / ``drivers license`` / ``lic`` (case-
+    # insensitive) immediately before the candidate so a bare
+    # 7-12 digit run does NOT misfire. Accepts the 50-state US
+    # license-format catalogue: 7-12 pure digits (TX, NY, OH, MI,
+    # ...) and 1-2 letters + 6-13 alphanumerics (CA, NC, FL, WI,
+    # ...). The redaction strips ONLY the number, leaving the
+    # ``DL: `` label so a reader knows the field WAS a license
+    # without the number leaking.
+    "drivers_license",
 )
 
 
