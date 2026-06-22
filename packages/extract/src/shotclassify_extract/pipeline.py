@@ -16,6 +16,7 @@ from .network import extract_network
 from .paths import extract_paths
 from .phones import extract_phones
 from .receipt import enrich_receipt
+from .slack_ids import extract_slack_ids
 from .social import extract_social
 from .timezones import extract_timezones
 from .urls import extract_urls
@@ -212,5 +213,21 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if social:
         out.raw = dict(out.raw or {})
         out.raw["social"] = social
+
+    # Cross-category: stash Slack IDs (channel / DM / user / private
+    # channel / enterprise user / bot / team / enterprise / file /
+    # usergroup) found in the OCR text under raw["slack_ids"]. Slack
+    # IDs surface in code snippets that paste API URLs, error logs
+    # that cite a failing webhook, chat captures from Slack itself
+    # (the <@U012345ABCD> mention syntax), and document captures of
+    # API responses. Output is a list of {kind, id} dicts so
+    # downstream consumers don't have to maintain their own
+    # letter-to-name table. Distinct from raw["social"] (which is
+    # the cross-platform handle list) and ChatFields.mentions (chat
+    # platform-agnostic).
+    slack_ids = extract_slack_ids(text)
+    if slack_ids:
+        out.raw = dict(out.raw or {})
+        out.raw["slack_ids"] = slack_ids
 
     return out

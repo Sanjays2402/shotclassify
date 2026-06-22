@@ -40,6 +40,7 @@ from .paths import extract_paths
 from .phones import extract_phones
 from .pipeline import enrich
 from .receipt import enrich_receipt, parse_receipt_text
+from .slack_ids import extract_slack_ids
 from .social import extract_social
 from .timezones import extract_timezones
 from .urls import extract_urls
@@ -89,4 +90,5 @@ __all__ = [
     "extract_copyrights",
     "extract_airports",
     "extract_social",
+    "extract_slack_ids",
 ]
