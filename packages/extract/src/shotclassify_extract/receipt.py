@@ -707,6 +707,156 @@ _PROMO_CODE_KEYWORDS: tuple[str, ...] = (
 )
 
 
+# Loyalty / rewards points-earned keywords. Receipts from
+# point-issuing programmes (Starbucks Stars, Air Miles, hotel /
+# airline / supermarket points) print the per-transaction earn as
+# a small footer line. We catalogue the EARN vocabulary explicitly
+# so a balance line (``Total Points: 1245`` / ``Points Balance:
+# 1245`` / ``Current Points: 800``) is NEVER captured -- only the
+# per-transaction earn from THIS receipt.
+#
+# Ordered most-specific-first so multi-word earn forms win over the
+# bare ``Points`` alias. The bare ``Points`` matcher only fires when
+# the balance-disqualifying vocabulary is NOT present anywhere on
+# the same line.
+_POINTS_EARNED_KEYWORDS: tuple[str, ...] = (
+    # Multi-word earn forms (most specific first).
+    "Points Earned",
+    "Points Awarded",
+    "Points Added",
+    "Points Issued",
+    "Stars Earned",
+    "Stars Awarded",
+    "Stars Added",
+    "Miles Earned",
+    "Miles Awarded",
+    "Miles Added",
+    "Rewards Earned",
+    "Rewards Awarded",
+    "Rewards Points Earned",
+    "Reward Points Earned",
+    "Reward Points",
+    "Rewards Points",
+    "Bonus Points",
+    "Air Miles",
+    "FF Miles",
+    "Frequent Flyer Miles",
+    "Loyalty Points",
+    "Member Points",
+    "Club Points",
+    "Star Points",
+    "Avios",
+    # Bare aliases (last; balance-vocabulary guard below blocks misuse).
+    "Points",
+    "Stars",
+    "Miles",
+)
+
+# Balance-vocabulary tokens that DISQUALIFY a candidate line. When
+# any of these appear on the SAME line as a points keyword, the
+# matcher rejects the line because it's reporting account balance,
+# not per-transaction earn. We list this catalogue explicitly so
+# adding a new disqualifier is a one-line change.
+_POINTS_BALANCE_DISQUALIFIERS: tuple[str, ...] = (
+    "balance",
+    "total points",
+    "current",
+    "remaining",
+    "available",
+    "lifetime",
+    "redeemable",
+    "accumulated",
+    "ytd",
+    "year-to-date",
+    "year to date",
+)
+
+_POINTS_EARNED_MIN = 1
+_POINTS_EARNED_MAX = 1_000_000  # Defensive upper bound; real-world earns are rarely 6+ digits
+
+
+def _find_points_earned(text: str) -> int | None:
+    """Return the loyalty / rewards points earned for this receipt,
+    or None.
+
+    Walks every ``_POINTS_EARNED_KEYWORDS`` entry against every line.
+    The keyword + numeric value pattern is the standard
+    ``Keyword: NNN`` / ``Keyword NNN`` / ``Keyword #NNN`` shape with a
+    digit-only or thousands-grouped integer value. Decimals are
+    intentionally rejected (a points value is always a whole number).
+
+    Balance-vs-earn distinction: any line that ALSO contains a
+    balance-vocabulary token (``balance`` / ``total points`` /
+    ``current`` / ``remaining`` / ``available`` / ``lifetime`` /
+    ``redeemable`` / ``accumulated`` / ``ytd``) is skipped because
+    the printer is reporting the account balance, not the
+    per-receipt earn.
+
+    First-match-wins per keyword priority: the most-specific
+    keyword (``Points Earned``) is tried first; bare aliases
+    (``Points``) only fire when no specific form matched. Within a
+    single keyword, the LAST occurrence on the receipt wins (echoed
+    summary footers).
+
+    Bounds: 1..1_000_000. We reject 0 because a printed
+    ``Points: 0`` line is almost always "card not scanned" rather
+    than a genuine zero earn, and the false-positive cost of
+    surfacing those is higher than the cost of missing a true zero
+    earn. Values above 1_000_000 are rejected as defensive (a
+    real-world per-receipt earn is rarely 6+ digits; OCR runs that
+    high suggest a misread of the customer's account-balance).
+
+    Negative values are rejected (a refund that subtracts points
+    would print ``Points Redeemed: 10`` or ``Points Deducted: 10``;
+    we don't capture redeem/deduct here because the field semantic
+    is positive earn).
+
+    ``None`` when no recognised earn line is present, when the
+    candidate value is out of bounds, or when the only candidate
+    sits on a balance line.
+    """
+    if not text:
+        return None
+    for keyword in _POINTS_EARNED_KEYWORDS:
+        pattern = re.compile(
+            rf"(?:(?<=\n)|(?<=^)|(?<=[^A-Za-z])){re.escape(keyword)}"
+            r"\s*[:#\-]?\s*"
+            # Integer only; thousands-grouped 1,234 accepted but a
+            # decimal point disqualifies (we want pure integer). The
+            # trailing negative-lookahead rejects (a) any additional
+            # digit (so a 10-digit run doesn't partial-match as 7
+            # digits + 3 extra) AND (b) a decimal separator + digit
+            # (so 25.5 doesn't partial-match as 25).
+            r"(?P<n>\d{1,3}(?:,\d{3})+|\d{1,7})"
+            r"(?!\s*[.,]?\d)",
+            re.IGNORECASE,
+        )
+        # Walk every match in source order; pick the LAST hit on a
+        # NON-BALANCE line so an echoed footer wins over the header.
+        chosen: int | None = None
+        for m in pattern.finditer(text):
+            # Find the line this match sits on so we can check for
+            # balance-disqualifying vocabulary.
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            line_end = text.find("\n", m.end())
+            if line_end == -1:
+                line_end = len(text)
+            line = text[line_start:line_end].lower()
+            if any(d in line for d in _POINTS_BALANCE_DISQUALIFIERS):
+                continue
+            raw_value = m.group("n").replace(",", "")
+            try:
+                value = int(raw_value)
+            except ValueError:
+                continue
+            if not (_POINTS_EARNED_MIN <= value <= _POINTS_EARNED_MAX):
+                continue
+            chosen = value
+        if chosen is not None:
+            return chosen
+    return None
+
+
 def _find_promo_code(text: str) -> str | None:
     """Return the promo / discount / coupon code applied, or None.
 
@@ -1889,6 +2039,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         gift_card_applied=_find_gift_card_applied(text),
         promo_code=_find_promo_code(text),
         suggested_tips=_find_suggested_tips(text),
+        points_earned=_find_points_earned(text),
         items=_parse_items(text),
     )
 
@@ -1904,7 +2055,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "party_size", "refund_amount", "loyalty_id", "store_id",
         "register_id", "cashier", "server", "signature",
         "service_charge", "delivery_fee", "tendered", "change",
-        "rounding", "gift_card_applied", "promo_code",
+        "rounding", "gift_card_applied", "promo_code", "points_earned",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))

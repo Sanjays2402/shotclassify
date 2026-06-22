@@ -320,6 +320,35 @@ class ReceiptFields(BaseModel):
     # 5 rows (a screenshot showing more is almost certainly OCR
     # noise picking up unrelated percentages).
     suggested_tips: list[dict[str, float]] = Field(default_factory=list)
+    # Loyalty / rewards points earned for THIS transaction. Surfaces on
+    # receipts from programmes that issue per-transaction points
+    # (Starbucks Stars, Air Miles, hotel reward points, supermarket
+    # clubcard, airline frequent-flyer miles). Examples:
+    #
+    #   Points Earned: 25
+    #   Stars Awarded: 3
+    #   Miles Earned: 100
+    #   Rewards Points: 50
+    #   Air Miles: 12
+    #   Points: 35
+    #
+    # Stored as an int (the count of points / stars / miles awarded
+    # for this single receipt). Distinct from ``loyalty_id`` which is
+    # the customer's account identifier.
+    #
+    # ``None`` when the receipt doesn't print a points-earned line,
+    # when the value isn't a positive integer, or when the line refers
+    # to the BALANCE (``Total Points: 1245``, ``Points Balance:
+    # 1245``) rather than the per-receipt earn (``Points Earned:
+    # 25``). The earn-vs-balance distinction is enforced by
+    # keyword vocabulary: only EARN keywords populate this slot, never
+    # BALANCE / TOTAL / CURRENT.
+    #
+    # Dashboards use this to sum points earned per period, detect
+    # missing-points complaints (receipt printed earn but the account
+    # didn't credit), and benchmark per-transaction earn rates across
+    # merchants.
+    points_earned: int | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
