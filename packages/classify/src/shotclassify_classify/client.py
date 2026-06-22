@@ -131,6 +131,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             tax_lines=r.get("tax_lines") or [],
             gift_card_applied=r.get("gift_card_applied"),
             promo_code=r.get("promo_code"),
+            suggested_tips=r.get("suggested_tips") or [],
             items=items,
         )
     if c := fields_in.get("code"):

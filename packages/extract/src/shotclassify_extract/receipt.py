@@ -52,6 +52,169 @@ def _find_tip(text: str) -> float | None:
     return None
 
 
+# Suggested-tip table detection. Restaurants often print a small
+# reference table at the bottom of the receipt showing what the tip
+# would be for common percentages:
+#
+#   Suggested Tips:
+#   15% = 1.80
+#   18% = 2.16
+#   20% = 2.40
+#
+# or as a horizontal row:
+#
+#   15% $1.80    18% $2.16    20% $2.40
+#
+# or inline-after-label:
+#
+#   Tip Suggestions: 15% 1.80 | 18% 2.16 | 20% 2.40
+#
+# Each entry is captured as a (percent, amount) dict. We require
+# AT LEAST 2 distinct percent-amount pairs to surface the list --
+# a lone "Tip 20% 5.00" is the customer's chosen tip (already
+# handled by _find_tip + _compute_tip_percent) and shouldn't be
+# duplicated here.
+#
+# The matcher catches the percent + amount pair in either order:
+# percent-then-amount (15% 1.80) and amount-then-percent (1.80 15%)
+# are both real-world shapes. Currency symbol on the amount is
+# optional ($, €, £, ¥ accepted). Separator between percent and
+# amount can be space, ``=``, tab, ``:``, ``|``, ``->``, or nothing
+# when the table uses column alignment.
+
+# A "percent + amount" pair matcher. The percent is 5..50 (bounded
+# at the low end because <5% would be a typo and at the high end
+# because >50% would be an outlier). The amount is the standard
+# two-decimal currency form.
+#
+# We match both orientations:
+#   15% 1.80 / 15% $1.80 / 15% = 1.80 / 15%: 1.80 / 15%-1.80
+#   1.80 15% / $1.80 15%
+_SUGGESTED_TIP_PCT_AMT = re.compile(
+    r"(?P<pct>\d{1,2}(?:\.\d{1,2})?)\s*%"
+    r"\s*[=:\-|>\s]*\s*"
+    r"[$€£¥]?\s*(?P<amt>\d{1,4}(?:[.,]\d{2}))"
+)
+_SUGGESTED_TIP_AMT_PCT = re.compile(
+    r"[$€£¥]?\s*(?P<amt>\d{1,4}(?:[.,]\d{2}))"
+    r"\s*[=:\-|>\s]*\s*"
+    r"(?P<pct>\d{1,2}(?:\.\d{1,2})?)\s*%"
+)
+
+_SUGGESTED_TIP_PCT_MIN = 5.0
+_SUGGESTED_TIP_PCT_MAX = 50.0
+_SUGGESTED_TIP_AMT_MIN = 0.01
+_SUGGESTED_TIP_AMT_MAX = 9999.99
+_SUGGESTED_TIP_MAX_ENTRIES = 6
+
+
+def _find_suggested_tips(text: str) -> list[dict[str, float]]:
+    """Return the printed suggested-tip table, or empty list.
+
+    Walks every percent-amount pair in the text (both orientations:
+    ``15% 1.80`` AND ``1.80 15%``) and collects them. Returns an
+    empty list when fewer than 2 distinct (percent, amount) pairs
+    are found because a lone pair is almost always the customer's
+    actual tip (captured by ``_find_tip`` + ``_compute_tip_percent``),
+    not a printed suggestion table.
+
+    Output is a list of ``{"percent": float, "amount": float}`` dicts
+    sorted by percent ASC so dashboards render the table in the
+    natural reading order. Capped at 6 entries because real-world
+    tables rarely exceed 5 rows; a screenshot returning more is
+    almost certainly OCR noise pulling in unrelated percentages
+    (a 25% discount line, a 5% tax rate, etc.).
+
+    Boundaries enforced:
+
+    * percent: 5..50 (lower-bound rejects typos / fractional
+      percentages from prose, upper-bound rejects outliers)
+    * amount: 0.01..9999.99 (a positive currency value within the
+      printer's two-decimal format)
+
+    Defence against false positives:
+
+    * The same (percent, amount) pair captured twice (because the
+      table was OCR-doubled) deduplicates to one entry.
+    * The pct->amt and amt->pct matchers are tried per-LINE in
+      that priority order; whichever matcher fires first on a line
+      claims its spans and the other orientation only runs over
+      the unclaimed regions. This prevents cross-pair captures on
+      a line like ``15% 1.80   18% 2.16`` where a naive
+      amt->pct pass would also stitch ``1.80 18%`` as a phantom
+      pair.
+    * Discount / refund / tax percentages on UNRELATED lines bleed
+      in less often because we require BOTH a percent AND an
+      adjacent currency-shaped amount on the same line.
+    """
+    if not text:
+        return []
+    seen: dict[tuple[float, float], tuple[int, float, float]] = {}
+    # Walk every line; for each line, look for pct-then-amt first
+    # (the more common orientation), then re-scan with amt-then-pct
+    # only over the LINE REGIONS not already claimed by a pct-then-amt
+    # match. This prevents the amt-then-pct matcher from stitching
+    # a phantom pair out of an earlier amount and a later percent on
+    # the same horizontal table row (``15% 1.80   18% 2.16`` would
+    # otherwise also yield ``1.80 18%`` etc).
+    for idx, raw in enumerate(text.splitlines()):
+        if not raw.strip():
+            continue
+        # Pass 1: pct-then-amt. Walks left to right; finditer advances
+        # past each match's end so non-overlapping per-pass already.
+        claimed: list[tuple[int, int]] = []
+        for match in _SUGGESTED_TIP_PCT_AMT.finditer(raw):
+            _consider_suggested_tip(match, idx, seen)
+            claimed.append((match.start(), match.end()))
+        # Pass 2: amt-then-pct only on the segments NOT covered by
+        # any pass-1 match. We extract each unclaimed slice and run
+        # the matcher on it.
+        if claimed:
+            cursor = 0
+            for c_start, c_end in sorted(claimed):
+                if c_start > cursor:
+                    chunk = raw[cursor:c_start]
+                    for match in _SUGGESTED_TIP_AMT_PCT.finditer(chunk):
+                        _consider_suggested_tip(match, idx, seen)
+                cursor = max(cursor, c_end)
+            if cursor < len(raw):
+                chunk = raw[cursor:]
+                for match in _SUGGESTED_TIP_AMT_PCT.finditer(chunk):
+                    _consider_suggested_tip(match, idx, seen)
+        else:
+            for match in _SUGGESTED_TIP_AMT_PCT.finditer(raw):
+                _consider_suggested_tip(match, idx, seen)
+    if len(seen) < 2:
+        return []
+    # Sort by percent ASC. Where the percent is identical (rare; can
+    # happen on a doubled row) the lower amount wins to keep dedupe
+    # deterministic.
+    ordered = sorted(seen.items(), key=lambda kv: (kv[0][0], kv[0][1]))
+    result = [{"percent": pct, "amount": amt} for (pct, amt), _ in ordered]
+    return result[:_SUGGESTED_TIP_MAX_ENTRIES]
+
+
+def _consider_suggested_tip(
+    match: re.Match[str],
+    line_idx: int,
+    seen: dict[tuple[float, float], tuple[int, float, float]],
+) -> None:
+    """Validate and record a suggested-tip match if it passes bounds."""
+    try:
+        pct = float(match.group("pct"))
+        amt = float(match.group("amt").replace(",", "."))
+    except (ValueError, IndexError):
+        return
+    if not (_SUGGESTED_TIP_PCT_MIN <= pct <= _SUGGESTED_TIP_PCT_MAX):
+        return
+    if not (_SUGGESTED_TIP_AMT_MIN <= amt <= _SUGGESTED_TIP_AMT_MAX):
+        return
+    key = (pct, amt)
+    # First-seen wins on the line index (deterministic dedupe).
+    if key not in seen:
+        seen[key] = (line_idx, pct, amt)
+
+
 # Discount keywords ordered loosely by specificity. Discounts on
 # receipts are commonly printed as "Discount" / "Coupon" / "Promo" /
 # "Member savings" / "Loyalty". Same last-wins semantics as tips: a
@@ -1725,6 +1888,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         tax_lines=_find_tax_lines(text),
         gift_card_applied=_find_gift_card_applied(text),
         promo_code=_find_promo_code(text),
+        suggested_tips=_find_suggested_tips(text),
         items=_parse_items(text),
     )
 
@@ -1751,6 +1915,11 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     # surfaced a richer breakdown than the regex-based extractor can.
     if not merged.tax_lines:
         merged.tax_lines = parsed.tax_lines
+    # Backfill suggested_tips when caller supplied none. Same rule as
+    # tax_lines -- the LLM may surface the table; if not, the regex
+    # pass fills it.
+    if not merged.suggested_tips:
+        merged.suggested_tips = parsed.suggested_tips
     # Recompute tip_percent against the merged tip + subtotal/total so a
     # caller that only supplied a subtotal still gets a derived percent
     # when the OCR pass discovered the tip.

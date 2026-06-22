@@ -288,6 +288,38 @@ class ReceiptFields(BaseModel):
     # surrounding punctuation stripped. ``None`` when no promo code
     # is printed.
     promo_code: str | None = None
+    # Suggested-tip table printed at the bottom of restaurant receipts
+    # as a quick-pick reference for the customer. Example shapes:
+    #
+    #   Suggested Tips:
+    #   15% = 1.80
+    #   18% = 2.16
+    #   20% = 2.40
+    #
+    # or the inline form:
+    #
+    #   Tip suggestions: 15% $1.80 | 18% $2.16 | 20% $2.40
+    #
+    # Each entry is a ``{"percent": float, "amount": float}`` dict
+    # capturing one suggested-tip row. ``percent`` is the raw
+    # percentage value (15.0, not 0.15) for consistency with the
+    # ``tip_percent`` slot. ``amount`` is the positive currency
+    # amount printed alongside.
+    #
+    # Distinct from ``tip`` (the actual gratuity the customer chose
+    # to pay) and ``tip_percent`` (the derived percentage of that
+    # actual tip). This slot captures the merchant's PRINTED
+    # suggestions -- always 2+ rows when present, never the
+    # customer's chosen line. Dashboards use this to spot when a
+    # merchant's suggested-tip table is unusually steep / shallow
+    # and to differentiate "no tip printed" from "tip table was
+    # printed but customer skipped it".
+    #
+    # Empty list when the receipt prints no suggested-tip table.
+    # Capped at 6 entries because real-world tables rarely exceed
+    # 5 rows (a screenshot showing more is almost certainly OCR
+    # noise picking up unrelated percentages).
+    suggested_tips: list[dict[str, float]] = Field(default_factory=list)
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
