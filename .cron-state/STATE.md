@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (82 features tracked, 55 complete)
+## Roadmap (82 features tracked, 60 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -99,6 +99,13 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 52. [x] Extract: cross-category airport-code extractor into `raw["airports"]` (IATA 3-letter accepted from curated ~250-airport catalogue OR with travel-vocabulary anchor on same/previous line `flight`/`gate`/`depart`/`origin`/etc OR forming route-arrow pair `XXX-XXX`/`XXX -> XXX`/`XXX → XXX`; ICAO 4-letter accepted from curated ~150-hub catalogue OR with anchor AND valid ICAO region prefix; currency/country/prose-acronym reject list incl CSS/HTML/JSON/USD/USA; word-boundary defence so ATLAS doesn't yield ATL; pipeline writes raw["airports"] for every category).
 75. [x] Extract: cross-category social-handle extractor into `raw["social"]` (list of `{platform, handle}` dicts; 8 platforms: twitter/github/linkedin/instagram/tiktok/youtube/reddit/mastodon; URL forms always fire, @handle forms (twitter/instagram) only when same-line platform anchor present; reserved-path rejection on `/login`/`/marketplace`/`/p/`/`/r/`/`/status` etc; LinkedIn personal/company/school + country-subdomain; Reddit `u/` and `user/` canonicalise to `u/`; mastodon two-at `@user@instance.tld` distinct from email; distinct from `ChatFields.mentions` because that's platform-agnostic chat-only; pipeline writes raw["social"] for every category).
 
+### Done in tick 12 (5 features)
+76. [x] Receipt: delivery-fee / service-charge extraction (new `ReceiptFields.service_charge` and `ReceiptFields.delivery_fee`; service_charge matches explicit "Service Charge"/"Service Fee"/"Svc Charge"/"Svc Fee" -- bare "Service" intentionally stays in `_TIP_KEYWORDS` for backward-compat with UK bar-tab semantics; delivery_fee matches "Delivery Fee"/"Delivery Charge"/"Delivery"/"Shipping"/"Shipping Fee"/"Shipping & Handling"/"Shipping and Handling"/"Shipping Charge"/"Shipping Cost"; multi-word forms beat bare aliases; last-occurrence semantics; both fields can coexist with `tip` on the same receipt -- a restaurant prints "Service Charge 5.00" mandatory AND "Tip 4.00" voluntary; LLM wire-format updated).
+63. [x] Receipt: tender / change-given detection (new `ReceiptFields.tendered` and `ReceiptFields.change`; tender catalogue: "Cash Tendered"/"Tendered"/"Tender"/"Amount Tendered"/"Amount Paid"/"Paid"/"Payment"/"Cash" ordered most-specific-first; change catalogue: "Change Due"/"Change Given"/"Cash Change"/"Change"; "Change 0.00" intentionally registers because the explicit zero is meaningful for till-discrepancy dashboards; bare "Cash" matcher does NOT misfire on "Cashier #04" because the underlying _find_amount_after requires a digit-amount IMMEDIATELY after the keyword; LLM wire-format updated).
+61. [x] Receipt: per-line SKU/barcode/UPC/EAN extraction (new `ReceiptLine.sku` field; two recognised shapes -- inline "Latte SKU: 12345 5.00" -> cleaned to "Latte 5.00" with sku=12345 attached, AND standalone "SKU: 12345" on its own line attaches to the most-recent item; recognised wording SKU/Barcode/UPC/EAN/GTIN/PLU/Item Code/Item No./Item #/Item Number; value charset alphanumerics + dashes/underscores/dots/slashes bounded 3..32; original case preserved; left-side word-boundary defence keeps "askedSKU: 12345" from misfiring; first-match-wins on lines with multiple SKU keywords; all four per-item parser branches (pct-off, qty-prefixed, @-form, bare desc+price) attach the SKU; LLM wire-format updated).
+82. [x] Extract: cross-category Slack ID extractor into `raw["slack_ids"]` (list of `{kind, id}` dicts; 10 prefixes mapped to long-form kind tags: C->channel, D->dm, G->private_channel, U->user, W->enterprise_user, B->bot, T->team, E->enterprise, F->file, S->usergroup; 9..11 char total length; tail must contain at least ONE digit so all-letter prose words "CHEAPCODE"/"DESPAIRED" don't misfire; word-boundary isolation on BOTH ends so "C012345ABCD" inside "AC012345ABCDEF" hex blob doesn't misfire; lowercase/mixed-case rejected because Slack IDs are always uppercase in real payloads; Slack mention syntax <@U..>/<#C..|name>/<!subteam^S..> handled naturally because angle brackets/pipes/exclamation marks are non-word boundary chars; distinct from raw["social"] which is cross-platform typed handles, and ChatFields.mentions which is platform-agnostic chat-only; pipeline writes raw["slack_ids"] for every category).
+68. [x] Extract: cross-category crypto-address extractor into `raw["crypto"]` (list of `{chain, address}` dicts; bitcoin tag covers BOTH Base58Check P2PKH "1..."/P2SH "3..." with 4-byte SHA256(SHA256(payload))[:4] checksum validation AND Bech32/Bech32m SegWit "bc1q..."/Taproot "bc1p..." with BCH polymod validation against the right constant per witness version (1 for v0, 0x2bc830a3 for v1+ per BIP-350); ethereum tag is 0x+40 hex shape-only because EIP-55 needs keccak256 outside stdlib, all-zero null address rejected, output lowercased for dedup; solana tag is 32..44 Base58 shape-only AND requires a Solana-context anchor (sol/solana/spl/phantom/mint/pubkey/wallet/token) on same or previous line because Base58 alphabet overlaps with random base58-shaped IDs; pure-Python implementation -- no new heavy deps; BTC base58check runs first so 34-char address satisfying Solana shape gets tagged as bitcoin not double-tagged; pipeline writes raw["crypto"] for every category).
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -111,22 +118,22 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 55. [ ] UI mockup: layout-style guess (new `UIMockupFields.layout_kind`: `dashboard` / `landing` / `form` / `settings` / `modal`).
 56. [ ] PII redact: phone-number redaction mode (`phone` mode; normalises to `<PHONE>` stub). (Note: a tight `phone` regex already exists in redact.py; this would refine to the `<PHONE>` stub form.)
 59. [ ] Extract: cross-category currency-amount extractor into `raw["amounts"]` (cross-category so a code snippet or chat message that quotes a price is surfaced; symbol + ISO code aware).
-61. [ ] Receipt: barcode / SKU extraction at the line-item level (`SKU: 1234567`, `Barcode: 0123456789012`).
-63. [ ] Receipt: tender / change-given detection (new ReceiptFields.change; "Tendered 20.00 / Change 7.50" shape).
 65. [ ] Chat: link preview block detection (the inline OG-card with title + description that platforms inline for shared URLs).
 66. [ ] Error: AWS Lambda / boto3 client error extraction (BotoCoreError, ClientError with operation_name + error_code).
-68. [ ] Extract: cross-category bitcoin / ethereum / solana address extractor into `raw["crypto"]` (base58 BTC P2PKH/P2SH/SegWit-Bech32, EIP-55 ETH, base58 SOL).
 69. [ ] Receipt: tip-jar / suggested-tip table detection (the "10% 12.34 / 15% 18.51 / 20% 24.68" footer table).
 71. [ ] Chart: pie-slice percent extraction from in-pie labels (new ChartFields.slices list of {label, percent}).
 72. [ ] PII redact: drivers-license-number redaction mode (per-state US shape catalogues, the most common 7-9 alphanumeric forms).
 73. [ ] Receipt: gift-card / promo-code redemption detection (new ReceiptFields.gift_card_applied amount + ReceiptFields.promo_code string; "Gift card -25.00" / "Promo code SAVE10 applied" shapes).
-76. [ ] Receipt: delivery-fee / service-charge extraction (new ReceiptFields.delivery_fee and ReceiptFields.service_charge -- restaurant + food-delivery dashboards split these from tip and tax).
 77. [ ] Chat: edited-message marker detection (`(edited)` / `(edited 2m)` tails appended to message bodies on iMessage/Slack/Discord -- surface a parallel `edits` list on ChatFields).
 78. [ ] Code: vendor-prefix detection for CSS (new `CodeFields.css_vendor_prefixes` list -- `-webkit-` / `-moz-` / `-ms-` / `-o-` / `-khtml-`).
 79. [ ] Code: TODO action-comment AUTHOR extraction (`TODO(alice): fix this` -> `[{"marker": "TODO", "author": "alice"}]` into new `CodeFields.todo_authors`).
 80. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce).
 81. [ ] Error: Spring Boot WhiteLabel error page parsing (`/error` endpoint HTML that surfaces inside a screenshot -- pull status, timestamp, path, message).
-82. [ ] Extract: cross-category Slack channel-ID extractor (`C012345ABCD`, `D012345ABCD`, `U012345ABCD` -- Slack public/private/DM IDs).
+83. [ ] Extract: cross-category Discord ID extractor (`<@123456789012345678>` / `<#123456789012345678>` / `<@&123456789012345678>` -- Discord snowflake IDs are 17-19 decimal digits, distinct from Slack IDs).
+84. [ ] Extract: cross-category Stripe ID extractor (`cus_...`, `ch_...`, `pi_...`, `inv_...`, `sub_...`, `prod_...`, `price_...`, `acct_...` -- Stripe prefixes a typed ID family per object).
+85. [ ] Extract: cross-category AWS resource ARN extractor (`arn:aws:s3:::bucket/key`, `arn:aws:iam::ACCT:user/USER`, `arn:aws:lambda:REG:ACCT:function:FN` -- 6+ ARN families).
+86. [ ] PII redact: passport-number redaction mode (US 9-digit, UK 9-digit, EU letter+digit shapes -- new `passport` mode).
+87. [ ] Receipt: rounding / total-rounded-down detection (some EU countries print "Rounding -0.02" / "Cash rounding -0.03" to round to the nearest 5 cents when 1c/2c coins are out of circulation; new `ReceiptFields.rounding` field).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -334,6 +341,48 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     social extractor's @handle matchers (Twitter,
     Instagram) require a same-line platform anchor so a chat
     `@user` mention doesn't get mis-attributed.
+
+- 2026-06-21 17:53 PT (tick 12, Cake): 5 features.
+  - 3ec136f feat(extract/receipt): service_charge and delivery_fee extraction
+  - 8fb3d16 feat(extract/receipt): tendered and change extraction for cash receipts
+  - 6da532b feat(extract/receipt): per-line SKU/barcode/UPC/EAN extraction
+  - f440971 feat(extract): cross-category Slack ID extractor into raw["slack_ids"]
+  - 89d79ef feat(extract): cross-category crypto-address extractor into raw["crypto"]
+  - Gate: ruff at baseline 536 (zero new errors, zero
+    fixups needed -- all five files written clean on first
+    pass; two pre-existing UP042 errors in schemas.py
+    Category / RouteAction stay baselined, unchanged from
+    before) + pytest 2782 passed / 3 skipped in 156.0s.
+    203 new tests across the 5 features (38 + 39 + 40 +
+    43 + 43). New ReceiptFields shipped: service_charge,
+    delivery_fee, tendered, change. New ReceiptLine field
+    shipped: sku. LLM wire format in classify/client.py
+    updated for all five new receipt slots. Two new
+    cross-category raw keys: raw["slack_ids"],
+    raw["crypto"]. Roadmap refilled with 5 new items
+    (83..87 -- Discord IDs, Stripe IDs, AWS ARNs, passport
+    redact, EU cash-rounding) so backlog stays at 25 open.
+    Notable design decisions: service_charge intentionally
+    NOT routed through the legacy `tip` field so a
+    restaurant receipt's mandatory "Service Charge 5.00"
+    PLUS voluntary "Tip 4.00" populates BOTH fields; bare
+    "Service" alias stays in _TIP_KEYWORDS for UK bar-tab
+    compat. Tendered/change "Cash" matcher does not
+    misfire on "Cashier #04" because the underlying
+    _find_amount_after requires a digit-amount IMMEDIATELY
+    after the keyword (with at most :/- separators). SKU
+    extractor strips the keyword + value BEFORE per-item
+    parsers fire so the cleaned line re-parses cleanly;
+    standalone "SKU: 12345" lines attach to the last
+    item. Slack ID extractor requires at least one digit
+    in the tail so all-letter prose ("CHEAPCODE") doesn't
+    misfire. Crypto extractor uses pure-Python Base58
+    decode + double-SHA256 + bech32 polymod (no new heavy
+    deps); BTC base58check scanner runs FIRST so a
+    34-char address satisfying the Solana shape is tagged
+    bitcoin not double-tagged; Solana requires same/prev
+    line anchor because base58 alphabet overlaps with
+    random IDs.
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
