@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (87 features tracked, 65 complete)
+## Roadmap (87 features tracked, 70 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -114,6 +114,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 87. [x] Receipt: cash-rounding adjustment into `ReceiptFields.rounding` (signed float; regulatory adjustment for small-coin scarcity in AU/CA/NZ/NO/SE/CH/HU/IE/NL etc.; recognised wording most-specific-first: "Rounding Adjustment"/"Cash Rounding"/"Cash Discrepancy"/"Rounding"/"Round Down"/"Round Up"; new _find_signed_amount_after helper captures sign correctly because existing _find_amount_after's [:\\-]? separator class would eat the minus; sign captured both before AND after currency symbol (-$0.02 OR $-0.02); comma-decimal style (-0,02) supported; explicit 0.00 intentionally registers because printing the line at all is a useful signal; distinct from discount (marketing) and change (physical bills/coins) and refund (reversed transaction); LLM wire-format updated).
 
 
+### Done in tick 14 (5 features)
+88. [x] Extract: cross-category JWT extractor into `raw["jwts"]` (list of dicts summarising JOSE header alg/typ/kid + standard payload claims iss/sub/aud/exp/iat/nbf/jti; raw header_b64 segment preserved for forensic recovery; security guarantee: FULL TOKEN (header.payload.signature) NEVER stored in output and signature segment discarded entirely; custom payload claims like email/preferred_username intentionally NOT surfaced because tokens carry PII in custom claims; shape rules mirror existing redact regex -- three base64url segments separated by dots, header must start with eyJ, each segment >= 8 chars, word-boundary on both ends; corrupted-header tokens skipped entirely; unparseable-payload tokens still yield header-only entry; string claims capped at 256 chars; float exp/iat that are whole numbers collapse to int; list aud collapses to comma-joined string; capped at 20 entries; pairs with `jwt` redact mode for defence-in-depth).
+89. [x] Code: markdown fence-language detection into `CodeFields.fence_language` (lowercased language tag from opening fence; recognised CommonMark+GFM shapes ```LANG / ```LANG title="..." / ```LANG hl_lines=... / ~~~LANG / 4+ backticks-tildes; fence MUST sit at start of line optionally indented 0-3 spaces per CommonMark spec, 4-space indent is indented-code-block not fence; lang token is first whitespace-bounded token after fence run matched as [A-Za-z][\w+#.-]* so info-string titles don't bleed in; first tag wins when multiple fences differ; bare fences skipped; we do NOT canonicalise short forms (js stays js, py stays py) because original tag carries author intent; runs FIRST in enrich_code on pre-strip body so fence markers survive line-number stripping; LLM wire-format updated).
+92. [x] Code: feature-flag SDK call detection into `CodeFields.feature_flags` (list of `{vendor, key}` dicts; 8 vendors with canonical SDK shapes: launchdarkly (ldClient.variation / boolVariation / stringVariation / numberVariation / jsonVariation / variation_detail), statsig (Statsig.checkGate / check_gate / getExperiment / getConfig / getLayer + bare-import call), unleash (unleash.isEnabled / is_enabled / client.isEnabled / toggleClient.isEnabled), optimizely (isFeatureEnabled / is_feature_enabled / .activate / .getVariation / .getFeatureVariableString plus snake variants), split (client.getTreatment / get_treatment / splitClient.getTreatment / getTreatmentWithConfig), posthog (isFeatureEnabled / is_feature_enabled / getFeatureFlag / get_feature_flag / getFeatureFlagPayload), flagsmith (hasFeature / has_feature / is_feature_enabled / .getValue + flags.is_feature_enabled prefix), configcat (getValue / get_value / getValueAsync / configCatClient.getValue); flag-key charset [A-Za-z][A-Za-z0-9._-]{0,127} so dashed/dotted/snake_case all parse, spaces and special chars rejected; single OR double quotes accepted; patterns are vendor-specific so a given call site only matches one vendor; deduplicates on (vendor, key) pair; first-seen order; cap 50; distinct from `imports` which is library dependency vs this slot is per-call flag-key reference; LLM wire-format updated).
+78. [x] Code: CSS vendor-prefix detection into `CodeFields.css_vendor_prefixes` (5 recognised prefixes: -webkit- / -moz- / -ms- / -o- / -khtml-; entries include leading and trailing hyphen so output is directly usable as property-prefix in CSS rendering; detection matches `-(webkit|moz|ms|o|khtml)-` followed by identifier-start letter so property names AND function calls AND @-keyframe at-rules all qualify; language-gated to CSS-family {css, scss, sass, less, stylus} with content fallback that fires when snippet contains BOTH vendor-prefix candidate AND CSS-like property declaration `property: value;` within 200 chars of candidate so pygments mis-tags get covered while a JS comment that mentions -webkit- with no nearby declaration doesn't false-positive; fallback window intentionally LOCAL not global so a faraway random `color: red;` doesn't trigger; first-seen order; no cap because theoretical max is 5; LLM wire-format updated).
+86. [x] PII redact: passport-number mode (`passport` mode added; matcher REQUIRES the word `passport` (case-insensitive) immediately before candidate so bare 9-digit runs on receipts don't misfire; recognised label forms: Passport: / Passport No: / Passport No. / Passport Number: / Passport # / Passport ID: with 0-5 separator chars; accepted candidate shapes US/UK 9-digit + Australia 1-letter+7-digit + Germany 1-letter+8-digit + Canada 2-letter+6-digit + Canada 2-letter+7-digit + Germany legacy 1-letter+8-alphanum + mixed 6-9 alphanumerics; redaction strips ONLY the captured `num` group leaving the `Passport: ` label visible to reader so they know field WAS a passport without number leaking; custom `_sub_passport` substitution handler mirrors the credit_card mode's Luhn-gated pattern; 11+ digit runs that fail trailing word-boundary are LEFT UNCHANGED rather than partially redacted as safety property; added to PII_REDACT_MODES allow-list).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -124,7 +132,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 53. [ ] Chart: bar-chart series-label OCR refinement (split the legend block into a clean `ChartFields.series` list).
 54. [ ] Chart: percent annotations vs raw values heuristic (new `ChartFields.value_unit`: `%` / `count` / `currency` based on axis tick text).
 55. [ ] UI mockup: layout-style guess (new `UIMockupFields.layout_kind`: `dashboard` / `landing` / `form` / `settings` / `modal`).
-56. [ ] PII redact: phone-number redaction mode (`phone` mode; normalises to `<PHONE>` stub). (Note: a tight `phone` regex already exists in redact.py; this would refine to the `<PHONE>` stub form.)
+56. [ ] PII redact: phone-number redaction mode (`phone` mode; normalises to `<PHONE>` stub form). (Note: a tight `phone` regex already exists in redact.py with `[REDACTED:phone]` placeholder; this would refine to the `<PHONE>` stub form.)
 59. [ ] Extract: cross-category currency-amount extractor into `raw["amounts"]` (cross-category so a code snippet or chat message that quotes a price is surfaced; symbol + ISO code aware).
 65. [ ] Chat: link preview block detection (the inline OG-card with title + description that platforms inline for shared URLs).
 66. [ ] Error: AWS Lambda / boto3 client error extraction (BotoCoreError, ClientError with operation_name + error_code).
@@ -133,15 +141,15 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 72. [ ] PII redact: drivers-license-number redaction mode (per-state US shape catalogues, the most common 7-9 alphanumeric forms).
 73. [ ] Receipt: gift-card / promo-code redemption detection (new ReceiptFields.gift_card_applied amount + ReceiptFields.promo_code string; "Gift card -25.00" / "Promo code SAVE10 applied" shapes).
 77. [ ] Chat: edited-message marker detection (`(edited)` / `(edited 2m)` tails appended to message bodies on iMessage/Slack/Discord -- surface a parallel `edits` list on ChatFields).
-78. [ ] Code: vendor-prefix detection for CSS (new `CodeFields.css_vendor_prefixes` list -- `-webkit-` / `-moz-` / `-ms-` / `-o-` / `-khtml-`).
 80. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce).
 81. [ ] Error: Spring Boot WhiteLabel error page parsing (`/error` endpoint HTML that surfaces inside a screenshot -- pull status, timestamp, path, message).
-86. [ ] PII redact: passport-number redaction mode (US 9-digit, UK 9-digit, EU letter+digit shapes -- new `passport` mode).
-88. [ ] Extract: cross-category JWT extractor into `raw["jwts"]` (three-base64url-segment shape with header-payload-signature; decode header to surface alg/typ without verifying signature; payload claim summary kept short to avoid persisting full token contents).
-89. [ ] Code: Markdown code-fence language inference (when a snippet ships inside ```` ```python `` blocks the language tag is reliable signal; surface as `CodeFields.fence_language`).
 90. [ ] Receipt: barcode/QR encoding detection in OCR text (vendors print the encoded payload below the barcode -- track which lines look like the encoded payload vs the human-readable text).
 91. [ ] Error: Datadog / Sentry error-fingerprint extraction (the `[abc123]` short-hash that Sentry prints + the dd.trace_id / dd.span_id pair Datadog injects).
-92. [ ] Code: feature-flag client-call detection (LaunchDarkly / Statsig / Unleash SDK call sites with the flag key -- new `CodeFields.feature_flags`).
+93. [ ] Chat: typing-indicator detection (the bouncing-dots animation OCR may render as `...` or `Alice is typing...`).
+94. [ ] Receipt: tax-jurisdiction breakdown (when a receipt prints multiple tax lines `State Tax 1.50 / County Tax 0.50 / City Tax 0.25` surface as ReceiptFields.tax_lines list of {jurisdiction, amount}).
+95. [ ] Extract: cross-category postal-code extractor into `raw["postal_codes"]` (US 5-digit + 5+4 ZIP, UK postcode SW1A 1AA, Canadian K1A 0B1, German 4-5 digit, French 5 digit etc).
+96. [ ] Error: NestJS exception filter parsing (`ExceptionsHandler` / `HttpException` shape; framework=nestjs).
+97. [ ] Code: regex literal extraction (snippet's regex patterns surfaced; useful for code-review to spot obviously-wrong patterns; new `CodeFields.regexes` list).
 
 ## Tick log
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
@@ -440,6 +448,65 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     [:\\-]? separator class would eat a leading minus
     and emit unsigned; sign captured both before and
     after currency symbol (-$0.02 OR $-0.02).
+
+- 2026-06-22 00:07 PT (tick 14, Cake): 5 features.
+  - 4da8177 feat(extract): cross-category JWT extractor into raw["jwts"]
+  - b814505 feat(extract/code): markdown fence-language detection into CodeFields.fence_language
+  - 4ea78f5 feat(extract/code): feature-flag SDK call detection into CodeFields.feature_flags
+  - f732291 feat(extract/code): CSS vendor-prefix detection into CodeFields.css_vendor_prefixes
+  - 552dc5a feat(redact): passport-number redaction mode
+  - Gate: ruff at baseline 536 (zero new errors, zero
+    fixups needed -- all five files written clean on
+    first pass) + pytest 3200 passed / 3 skipped in
+    124.49s. 212 new tests across the 5 features
+    (30 + 50 + 63 + 39 + 30). New CodeFields shipped:
+    fence_language, feature_flags, css_vendor_prefixes.
+    One new cross-category raw key: raw["jwts"]. One
+    new PII redact mode `passport` added to
+    PII_REDACT_MODES allow-list. LLM wire format in
+    classify/client.py updated for fence_language,
+    feature_flags, and css_vendor_prefixes. Roadmap
+    refilled with 5 new items (93..97 -- chat typing
+    indicator, receipt tax-jurisdiction breakdown,
+    cross-category postal-code extractor, NestJS
+    exception filter, code regex literal extraction).
+    Backlog stays at 24 open. Notable design
+    decisions: JWT extractor's security guarantee --
+    the FULL TOKEN is NEVER stored, signature segment
+    discarded entirely, ONLY the JOSE registered
+    claims (alg/typ/kid + iss/sub/aud/exp/iat/nbf/jti)
+    are surfaced; custom payload claims like email /
+    preferred_username intentionally NOT exposed
+    because tokens carry PII in custom claims; pairs
+    with existing `jwt` redact mode for defence-in-
+    depth. Fence-language detector runs FIRST in
+    enrich_code on the pre-strip body so fence
+    markers survive line-number stripping; we do NOT
+    canonicalise short forms (js stays js, py stays
+    py) because the original tag carries author
+    intent. Feature-flag patterns are vendor-specific
+    so a given call site only matches one vendor (no
+    ambiguity); 8 vendors catalogued -- LaunchDarkly,
+    Statsig, Unleash, Optimizely, Split.io, PostHog,
+    Flagsmith, ConfigCat; distinct from imports
+    (library dep) vs feature_flags (per-call flag-key
+    reference). CSS vendor-prefix detector is
+    language-gated to css-family with a content
+    fallback that fires when both a prefix candidate
+    AND a CSS-like declaration sit within 200 chars
+    of each other -- catches mis-classified CSS
+    bodies (pygments returns gas / text for short
+    CSS) without false-positiving on JS comments
+    that mention -webkit- as a flag name. Passport
+    mode requires the word `passport` before the
+    candidate so bare 9-digit runs don't misfire; the
+    custom `_sub_passport` substitution preserves the
+    `Passport: ` label and replaces only the captured
+    `num` span so the reader knows the field WAS a
+    passport without the number leaking; 11+ digit
+    runs fail the trailing word-boundary and are
+    LEFT UNCHANGED as a safety property (better to
+    skip than partially redact).
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
