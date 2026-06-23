@@ -1976,6 +1976,274 @@ def extract_imports(code: str, language: str | None = None) -> list[str]:
     return out
 
 
+# Pure-data language tags where the "import" concept doesn't apply.
+# extract_unused_imports returns [] for these unconditionally so a
+# JSON manifest containing the word "import" in a string field
+# doesn't tag as having unused imports.
+_NO_IMPORT_LANGUAGES: frozenset[str] = frozenset({
+    "json", "csv", "tsv", "yaml", "yml", "xml", "markdown", "md",
+    "html", "sql", "ini", "toml", "text", "txt", "log",
+    "bash", "shell", "sh", "zsh", "fish", "powershell", "ps1",
+    "dockerfile", "make", "makefile",
+})
+
+
+def _import_check_name(stmt_kind: str, raw_value: str) -> str | None:
+    """Return the identifier name to check for usage given an import.
+
+    For Python ``from X import a, b`` we check the SYMBOLS (a, b).
+    For Python ``import X as Y`` we check the ALIAS Y.
+    For Python ``import X.Y.Z`` we check the TOP-LEVEL name X.
+    For JS ``import X from 'mod'`` we check the default name X.
+    For JS ``import { a, b } from 'mod'`` we check a, b individually.
+    For JS ``import * as ns from 'mod'`` we check ns.
+    For JVM ``import com.foo.Bar`` we check the simple name Bar.
+
+    Returns ``None`` for entries that cannot be safely usage-checked
+    (bare ``require('mod')``, side-effect-only ``import 'mod'``,
+    JVM wildcard ``import com.foo.*``).
+    """
+    raw_value = raw_value.strip()
+    if not raw_value:
+        return None
+    # JVM wildcard.
+    if raw_value.endswith(".*"):
+        return None
+    if stmt_kind == "jvm_class":
+        # Last segment after the final dot is the class name.
+        return raw_value.rsplit(".", 1)[-1]
+    if stmt_kind == "py_module_top":
+        # Top-level module name = first segment.
+        return raw_value.split(".", 1)[0]
+    if stmt_kind == "name":
+        return raw_value
+    return None
+
+
+# Python `from X import a, b` -- need to capture the SYMBOLS not the
+# module. Distinct from the general extractor that takes only the
+# module side.
+_PY_FROM_SYMBOLS_RE = re.compile(
+    r"^\s*from\s+(?:\.+|\.*[A-Za-z_][\w.]*)\s+import\s+(?P<syms>[\w*, \t]+(?:\s+as\s+\w+)?(?:\s*,\s*\w+(?:\s+as\s+\w+)?)*)",
+    re.MULTILINE,
+)
+
+# JS `import DefaultName from 'mod'` -- capture default name only.
+_JS_IMPORT_DEFAULT_RE = re.compile(
+    r"^\s*import\s+(?P<name>\w+)(?:\s*,\s*\{[^}]+\})?\s+from\s+['\"][^'\"]+['\"]\s*;?\s*$",
+    re.MULTILINE,
+)
+# JS `import { a, b as c } from 'mod'` -- capture braced symbol list.
+_JS_IMPORT_BRACED_RE = re.compile(
+    r"^\s*import\s+(?:\w+\s*,\s*)?\{(?P<syms>[^}]+)\}\s+from\s+['\"][^'\"]+['\"]\s*;?\s*$",
+    re.MULTILINE,
+)
+# JS `import * as ns from 'mod'` -- capture namespace alias.
+_JS_IMPORT_NAMESPACE_RE = re.compile(
+    r"^\s*import\s+\*\s+as\s+(?P<ns>\w+)\s+from\s+['\"][^'\"]+['\"]\s*;?\s*$",
+    re.MULTILINE,
+)
+# Python `import X` / `import X as Y` -- capture each segment and any alias.
+_PY_IMPORT_ITEMS_RE = re.compile(
+    r"^\s*import\s+(?P<items>[\w. ,]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)\s*$",
+    re.MULTILINE,
+)
+
+
+def _collect_import_check_names(code: str) -> tuple[list[tuple[str, str]], set[tuple[int, int]]]:
+    """Return list of (display, check_name) pairs + spans-to-skip set.
+
+    ``display`` is the name as it should appear in the unused_imports
+    list (matches what the reader sees in the import statement).
+    ``check_name`` is the identifier we search the body for to decide
+    if the import is used.
+
+    The returned span set covers every import-statement byte range
+    so the usage check skips over import statements themselves
+    (otherwise an import-only snippet would tag every import as
+    used by virtue of the import statement's own text).
+    """
+    pairs: list[tuple[str, str]] = []
+    skip: set[tuple[int, int]] = set()
+
+    # Python from X import a, b
+    for m in _PY_FROM_SYMBOLS_RE.finditer(code):
+        skip.add((m.start(), m.end()))
+        syms = m.group("syms")
+        for raw_sym in syms.split(","):
+            sym = raw_sym.strip()
+            if not sym:
+                continue
+            # ``foo as bar`` -- check bar, display foo (canonical sym)
+            if " as " in sym:
+                display, alias = [s.strip() for s in sym.split(" as ", 1)]
+                check = alias
+            else:
+                display = sym
+                check = sym
+            if display == "*":
+                continue
+            pairs.append((display, check))
+
+    # Python import X / import X as Y / import X.Y.Z
+    for m in _PY_IMPORT_ITEMS_RE.finditer(code):
+        # Skip JVM `import com.foo.Bar;` lines that this Python regex
+        # also matches -- they end with `;`.
+        line_end = code.find("\n", m.start())
+        if line_end == -1:
+            line_end = len(code)
+        line = code[m.start():line_end]
+        if line.rstrip().endswith(";"):
+            continue
+        skip.add((m.start(), m.end()))
+        items = m.group("items").strip()
+        for raw_item in items.split(","):
+            item = raw_item.strip()
+            if not item:
+                continue
+            if " as " in item:
+                mod, alias = [s.strip() for s in item.split(" as ", 1)]
+                display = mod
+                check = alias
+            else:
+                display = item
+                # Top-level module name = first segment.
+                check = item.split(".", 1)[0]
+            pairs.append((display, check))
+
+    # JS default import: `import X from 'mod'`
+    for m in _JS_IMPORT_DEFAULT_RE.finditer(code):
+        skip.add((m.start(), m.end()))
+        name = m.group("name").strip()
+        pairs.append((name, name))
+
+    # JS braced import: `import { a, b as c } from 'mod'`
+    for m in _JS_IMPORT_BRACED_RE.finditer(code):
+        skip.add((m.start(), m.end()))
+        syms = m.group("syms")
+        for raw_sym in syms.split(","):
+            sym = raw_sym.strip()
+            if not sym:
+                continue
+            if " as " in sym:
+                display, alias = [s.strip() for s in sym.split(" as ", 1)]
+                check = alias
+            else:
+                display = sym
+                check = sym
+            pairs.append((display, check))
+
+    # JS namespace import: `import * as ns from 'mod'`
+    for m in _JS_IMPORT_NAMESPACE_RE.finditer(code):
+        skip.add((m.start(), m.end()))
+        ns = m.group("ns").strip()
+        pairs.append((ns, ns))
+
+    # JVM single-class import: `import com.foo.Bar;`
+    for m in _JVM_IMPORT_RE.finditer(code):
+        mod = m.group("mod")
+        if mod.endswith(".*"):
+            # Wildcard imports can't be usage-checked safely (any
+            # downstream identifier could come from the wildcard).
+            continue
+        skip.add((m.start(), m.end()))
+        # Display is the full dotted path; check the simple class
+        # name (last segment).
+        simple = mod.rsplit(".", 1)[-1]
+        pairs.append((mod, simple))
+
+    return pairs, skip
+
+
+# Identifier pattern used for body-scanning. Anchored on word
+# boundaries so partial substrings don't false-positive (a "foo"
+# import is NOT considered used when only "foobar" appears).
+_IDENT_BODY_RE_CACHE: dict[str, re.Pattern] = {}
+
+
+def _identifier_used_in_body(name: str, body: str) -> bool:
+    """Return True if ``name`` appears as a standalone identifier."""
+    if not name or not body:
+        return False
+    pat = _IDENT_BODY_RE_CACHE.get(name)
+    if pat is None:
+        # Don't escape since identifiers are guaranteed safe.
+        pat = re.compile(rf"\b{re.escape(name)}\b")
+        _IDENT_BODY_RE_CACHE[name] = pat
+    return pat.search(body) is not None
+
+
+_MAX_UNUSED_IMPORTS = 50
+
+
+def extract_unused_imports(code: str, language: str | None = None) -> list[str]:
+    """Return imports that appear in the snippet but are never used.
+
+    Lexical detection: for each import found by Python / JS / TS /
+    JVM matchers, derive the identifier the reader would expect to
+    use (the alias for ``import X as Y``, the symbol for
+    ``from X import a``, the top-level name for ``import X.Y.Z``,
+    the class name for ``import com.foo.Bar``) and check whether
+    that identifier appears anywhere in the snippet body AFTER
+    removing the import statements themselves.
+
+    Output is a list of import-display names (matching the
+    ``imports`` slot's format) that have no usage. Order preserves
+    first-seen-in-source. Capped at 50 entries.
+
+    Pure-data languages (json / csv / tsv / yaml / xml / sql) and
+    shell snippets always return ``[]`` because the "import"
+    concept doesn't apply.
+
+    Caveat: this is a LEXICAL check. It does not understand
+    Python's ``if False: import x`` dead-branch import, does not
+    understand TypeScript's type-only imports being erased at
+    runtime, and will report a JVM ``import com.foo.Bar;`` as
+    unused when only the fully-qualified ``com.foo.Bar`` (not the
+    simple ``Bar``) appears in the body. The trade-off is in
+    favour of low false-positives on the obvious cases.
+    """
+    if not code or not code.strip():
+        return []
+    if language and language.lower() in _NO_IMPORT_LANGUAGES:
+        return []
+
+    pairs, skip_spans = _collect_import_check_names(code)
+    if not pairs:
+        return []
+
+    # Build the "body" -- the snippet with all import-statement
+    # spans masked out -- so an import like `import foo` doesn't
+    # count its OWN occurrence as usage.
+    if skip_spans:
+        sorted_spans = sorted(skip_spans)
+        parts: list[str] = []
+        cur = 0
+        for s, e in sorted_spans:
+            if s > cur:
+                parts.append(code[cur:s])
+            cur = max(cur, e)
+        if cur < len(code):
+            parts.append(code[cur:])
+        body = "\n".join(parts)
+    else:
+        body = code
+
+    unused: list[str] = []
+    seen: set[str] = set()
+    for display, check in pairs:
+        if not check:
+            continue
+        if not _identifier_used_in_body(check, body):
+            if display in seen:
+                continue
+            seen.add(display)
+            unused.append(display)
+            if len(unused) >= _MAX_UNUSED_IMPORTS:
+                break
+    return unused
+
+
 # Copyright-holder extraction. We scan the first 30 lines of the
 # snippet for a ``Copyright`` / ``(c)`` / ``(C)`` header and capture
 # each ``{holder, year}`` pair found. The same header window is used
@@ -4652,6 +4920,23 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if type_annotation_density == 0.0:
         type_annotation_density = detect_type_annotation_density(code, language)
+    # Unused / dead imports. Caller-supplied list wins (preserved
+    # verbatim); otherwise scan the snippet for imports that are
+    # never referenced anywhere in the body. The detector is
+    # language-aware (data + shell langs return [] unconditionally
+    # because the "import" concept doesn't apply). Caveat: this is
+    # a LEXICAL check that doesn't understand scope -- a Python
+    # import inside an ``if False:`` branch will be reported as
+    # used. The check operates on the code body with the import
+    # statements themselves masked out so an import isn't its own
+    # usage.
+    unused_imports = (
+        list(existing.unused_imports)
+        if existing and existing.unused_imports
+        else []
+    )
+    if not unused_imports:
+        unused_imports = extract_unused_imports(code, language)
     return CodeFields(
         language=language,
         code=code,
@@ -4679,4 +4964,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         shell_style=shell_style,
         suspected_secrets=suspected_secrets,
         type_annotation_density=type_annotation_density,
+        unused_imports=unused_imports,
     )

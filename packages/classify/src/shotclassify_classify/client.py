@@ -171,6 +171,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             type_annotation_density=float(
                 c.get("type_annotation_density") or 0.0
             ),
+            unused_imports=c.get("unused_imports") or [],
         )
     if e := fields_in.get("error"):
         fields.error = ErrorFields(**{k: e.get(k) for k in ErrorFields.model_fields})

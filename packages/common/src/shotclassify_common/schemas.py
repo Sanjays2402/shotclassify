@@ -1220,6 +1220,44 @@ class CodeFields(BaseModel):
     # Distinct from ``comment_density`` which is about comment
     # coverage. This metric is about TYPE coverage.
     type_annotation_density: float = 0.0
+    # Detected unused / dead imports in the snippet -- modules that
+    # are imported but never referenced anywhere in the rest of the
+    # code body. Each entry is the imported module / symbol name as
+    # it appears in the import statement (matching the ``imports``
+    # slot's format).
+    #
+    # Language coverage: Python (``import X``, ``import X as Y``,
+    # ``from X import a, b``), JavaScript / TypeScript
+    # (``import X from 'mod'``, ``import { a, b } from 'mod'``,
+    # ``const { a } = require('mod')``), and Java / Kotlin / Scala
+    # single-import lines (``import com.foo.Bar;``).
+    #
+    # Detection is lexical -- we scan the snippet body (excluding
+    # the import statements themselves) for any whitespace-/punctuation-
+    # bounded occurrence of the imported name. This catches the
+    # common case of "imported a module, never called it" and the
+    # equally common case of "removed the last usage but forgot to
+    # remove the import". It does NOT understand scope -- a Python
+    # module imported inside a try/except branch is treated as
+    # globally available -- but the goal is "surface obvious dead
+    # imports on a code-review screenshot", not "ship a full lint
+    # pass".
+    #
+    # For ``from X import a, b`` the SYMBOLS (a, b) are checked
+    # individually rather than the module name X, because that's
+    # how readers think about Python "unused import" warnings.
+    # For ``import X as Y`` the ALIAS Y is checked, not X.
+    # For ``import X.Y.Z`` the TOP-LEVEL name X is checked.
+    #
+    # Pure data languages (json / csv / tsv / yaml / xml /
+    # markdown / sql) and shell languages return ``[]`` because
+    # the "import" concept doesn't apply.
+    #
+    # Empty list when no dead imports are detected (or when the
+    # snippet has no imports at all). Dashboards use this to
+    # surface a "code cleanup opportunity" annotation on code
+    # captures.
+    unused_imports: list[str] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):

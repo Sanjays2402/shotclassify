@@ -30,6 +30,7 @@ from .code import (
     extract_suspected_secrets,
     extract_todo_authors,
     extract_todo_tickets,
+    extract_unused_imports,
 )
 from .credit_cards import extract_credit_cards
 from .crypto import extract_crypto
@@ -149,4 +150,5 @@ __all__ = [
     "extract_invoice_ids",
     "extract_emojis",
     "extract_percentages",
+    "extract_unused_imports",
 ]
