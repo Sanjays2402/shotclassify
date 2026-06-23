@@ -2841,6 +2841,207 @@ def _find_next_charge_date(text: str, after_offset: int) -> str | None:
     return None
 
 
+# Warranty / return-period notice patterns. Two semantic flavours:
+#
+#   * ``return``     -- a return-window notice (the most common
+#                        retail footer line: "Returns within 30 days
+#                        / 30-day return policy / Return by 04/15").
+#   * ``warranty``   -- a warranty notice (less common but printed
+#                        on appliance / electronics receipts:
+#                        "1-year warranty / Manufacturer warranty:
+#                        2 years / Limited 90-day warranty").
+#   * ``no_returns`` -- an explicit no-returns notice ("Final sale,
+#                        no refunds / All sales final / No returns
+#                        accepted").
+#
+# Each entry is a (compiled regex, kind tag) tuple. The regex
+# capture group ``notice`` carries the FULL matched phrase. When
+# a numeric duration is present it goes in ``num`` + ``unit``
+# capture groups so the caller can normalise to days.
+#
+# Patterns are ordered most-specific FIRST so the longer / more
+# distinctive phrases win over shorter aliases (``Manufacturer
+# warranty: 2 years`` beats bare ``warranty: 2 years``).
+
+_WARRANTY_NUMERIC_RE = (
+    r"(?P<num>\d{1,3})\s*[-\s]?\s*"
+    r"(?P<unit>day|days|week|weeks|month|months|year|years|yr|yrs)"
+)
+
+_WARRANTY_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
+    # No-returns notices (check FIRST because "no returns" contains
+    # the substring "returns" that the return-window matcher would
+    # otherwise claim).
+    (re.compile(
+        r"(?P<notice>"
+        r"Final\s+sale\s*[,:\-]?\s*no\s+(?:refunds?|returns?|exchanges?)"
+        r"|All\s+sales?\s+(?:are\s+)?final"
+        r"|No\s+returns?\s+accepted"
+        r"|No\s+returns?\s+or\s+exchanges?"
+        r"|No\s+refunds?\s*[,:\-]?\s*no\s+(?:returns?|exchanges?)"
+        r"|Non-?refundable"
+        r"|Final\s+sale\b"
+        r")",
+        re.IGNORECASE,
+    ), "no_returns"),
+    # Warranty notices with numeric duration. ``Manufacturer
+    # warranty: 2 years`` / ``Limited 1-year warranty`` /
+    # ``2-year manufacturer warranty`` etc. The qualifier+num+warranty
+    # form (``Limited 1-year warranty``) runs BEFORE the bare
+    # num+warranty form so the qualifier is preserved in the notice.
+    (re.compile(
+        r"(?P<notice>"
+        r"(?:Manufacturer'?s?|Limited|Standard|Extended)\s+"
+        + _WARRANTY_NUMERIC_RE +
+        r"\s+warranty"
+        r")",
+        re.IGNORECASE,
+    ), "warranty"),
+    (re.compile(
+        r"(?P<notice>"
+        r"(?:Manufacturer'?s?|Limited|Standard|Extended)\s+warranty"
+        r"\s*[:#\-]?\s*" + _WARRANTY_NUMERIC_RE +
+        r")",
+        re.IGNORECASE,
+    ), "warranty"),
+    (re.compile(
+        r"(?P<notice>"
+        + _WARRANTY_NUMERIC_RE +
+        r"\s+(?:manufacturer'?s?|limited|standard|extended)\s+warranty"
+        r")",
+        re.IGNORECASE,
+    ), "warranty"),
+    (re.compile(
+        r"(?P<notice>"
+        + _WARRANTY_NUMERIC_RE +
+        r"\s+warranty"
+        r")",
+        re.IGNORECASE,
+    ), "warranty"),
+    (re.compile(
+        r"(?P<notice>"
+        r"warranty\s*[:#\-]?\s*"
+        + _WARRANTY_NUMERIC_RE +
+        r")",
+        re.IGNORECASE,
+    ), "warranty"),
+    # Return-window notices with numeric duration. ``Returns
+    # accepted within 30 days`` / ``30-day return policy`` /
+    # ``30 day returns``.
+    (re.compile(
+        r"(?P<notice>"
+        r"Returns?\s+(?:accepted|allowed)?\s*(?:within|in)\s+"
+        + _WARRANTY_NUMERIC_RE +
+        r")",
+        re.IGNORECASE,
+    ), "return"),
+    (re.compile(
+        r"(?P<notice>"
+        + _WARRANTY_NUMERIC_RE +
+        r"\s+return\s+(?:policy|window|period)"
+        r")",
+        re.IGNORECASE,
+    ), "return"),
+    (re.compile(
+        r"(?P<notice>"
+        + _WARRANTY_NUMERIC_RE +
+        r"\s+returns?\b"
+        r")",
+        re.IGNORECASE,
+    ), "return"),
+    (re.compile(
+        r"(?P<notice>"
+        r"Return\s+(?:within|in)\s+"
+        + _WARRANTY_NUMERIC_RE +
+        r")",
+        re.IGNORECASE,
+    ), "return"),
+    (re.compile(
+        r"(?P<notice>"
+        r"(?:Returnable|Exchangeable)\s+(?:within|in|for)\s+"
+        + _WARRANTY_NUMERIC_RE +
+        r")",
+        re.IGNORECASE,
+    ), "return"),
+    (re.compile(
+        r"(?P<notice>"
+        r"Return\s+(?:by|before|until)\s+"
+        r"(?P<num>[A-Za-z0-9 ,/\-]{4,20})"
+        r")",
+        re.IGNORECASE,
+    ), "return"),
+)
+
+
+_UNIT_TO_DAYS: dict[str, int] = {
+    "day": 1,
+    "days": 1,
+    "week": 7,
+    "weeks": 7,
+    "month": 30,
+    "months": 30,
+    "year": 365,
+    "years": 365,
+    "yr": 365,
+    "yrs": 365,
+}
+
+
+def _find_warranty(text: str) -> dict[str, str | int | None] | None:
+    """Return warranty / return-period notice dict, or None.
+
+    Walks the warranty-pattern catalogue most-specific-first.
+    Returns a dict with keys ``kind`` (``return`` / ``warranty``
+    / ``no_returns``), ``duration_days`` (normalised duration in
+    days when the notice carries a numeric duration, else None),
+    and ``notice`` (raw matched phrase preserved verbatim).
+
+    Most retail receipts print AT MOST one warranty / return
+    notice in the small-print footer; this returns the FIRST
+    match. Restaurant receipts almost never carry one so this
+    returns None for them.
+
+    Safety:
+
+    * No-returns matchers run FIRST so a footer that prints
+      ``Final sale - no returns`` doesn't get partially claimed
+      by the ``returns`` matcher.
+    * Multi-word ``Manufacturer warranty`` etc forms win over
+      bare ``warranty`` so a "Manufacturer warranty: 2 years"
+      yields kind='warranty' with the explicit qualifier, not
+      a bare anonymous warranty match.
+    * Multi-month durations like "18 months" normalise to 540
+      days; "1 year" normalises to 365 days; "2 weeks" to 14.
+    """
+    if not text:
+        return None
+    for pat, kind in _WARRANTY_PATTERNS:
+        m = pat.search(text)
+        if not m:
+            continue
+        notice = m.group("notice").strip()
+        # Whitespace-normalise for stable storage.
+        notice = re.sub(r"\s+", " ", notice)
+        duration_days: int | None = None
+        try:
+            unit = m.group("unit")
+        except IndexError:
+            unit = None
+        if unit:
+            try:
+                n = int(m.group("num"))
+            except (IndexError, ValueError):
+                n = None
+            if n is not None and 0 < n <= 999:
+                duration_days = n * _UNIT_TO_DAYS[unit.lower()]
+        return {
+            "kind": kind,
+            "duration_days": duration_days,
+            "notice": notice,
+        }
+    return None
+
+
 def _compute_tip_percent(
     tip: float | None, subtotal: float | None, total: float | None
 ) -> float | None:
@@ -2915,6 +3116,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         tip_url=_find_tip_url(text),
         tenders=_find_tenders(text),
         recurring=_find_recurring(text),
+        warranty=_find_warranty(text),
         items=_parse_items(text),
     )
 
@@ -2931,7 +3133,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "register_id", "cashier", "server", "signature",
         "service_charge", "delivery_fee", "tendered", "change",
         "rounding", "gift_card_applied", "promo_code", "points_earned",
-        "tip_url", "recurring",
+        "tip_url", "recurring", "warranty",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
@@ -2958,6 +3160,12 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     # fills it from the printed keyword.
     if merged.recurring is None:
         merged.recurring = parsed.recurring
+    # Backfill warranty / return-period notice when caller
+    # supplied none. The LLM may surface the printed
+    # warranty/return-window phrase; if not, the regex pass
+    # fills it from the printed keyword vocab.
+    if merged.warranty is None:
+        merged.warranty = parsed.warranty
     # Recompute tip_percent against the merged tip + subtotal/total so a
     # caller that only supplied a subtotal still gets a derived percent
     # when the OCR pass discovered the tip.

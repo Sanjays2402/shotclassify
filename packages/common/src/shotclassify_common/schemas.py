@@ -538,6 +538,39 @@ class ReceiptFields(BaseModel):
     # spent $50 of recurring revenue this month" without having
     # to read every receipt.
     recurring: dict[str, str | None] | None = None
+    # Warranty / return-period notice printed in the small-print
+    # footer of most retail receipts. Recognised forms:
+    #
+    #   Returns accepted within 30 days
+    #   30 day return policy
+    #   1-year warranty
+    #   90-day warranty
+    #   No returns
+    #   Final sale - no refunds
+    #   Manufacturer warranty: 2 years
+    #   Limited 1-year warranty
+    #   Return by 04/15/2024
+    #
+    # Stored as a ``{"kind": str, "duration_days": int | None,
+    # "notice": str}`` dict. ``kind`` is one of ``return`` (a
+    # return-period notice, the most common), ``warranty`` (a
+    # manufacturer / limited warranty notice), ``no_returns`` (an
+    # explicit final-sale / no-returns notice). ``duration_days``
+    # is the normalised duration in days when the notice carries a
+    # numeric duration (``30 days`` -> 30, ``1 year`` -> 365,
+    # ``2 weeks`` -> 14, ``18 months`` -> 540); ``None`` for
+    # qualitative notices like ``Final sale`` that carry no
+    # explicit duration. ``notice`` is the raw matched phrase
+    # preserved verbatim so dashboards can surface the original
+    # wording for the customer.
+    #
+    # Dashboards use this to drive a "this receipt's return
+    # window expires in 4 days" reminder workflow and to bucket
+    # purchases by warranty length.
+    #
+    # ``None`` when no warranty / return notice is printed (most
+    # restaurant receipts and small-vendor receipts).
+    warranty: dict[str, str | int | None] | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
