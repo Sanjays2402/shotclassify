@@ -877,6 +877,62 @@ class CodeFields(BaseModel):
     # package.json / Cargo.lock screenshot can legitimately list
     # 50+ dependencies. Empty list when no recognised pin is present.
     dep_pins: list[dict[str, str]] = Field(default_factory=list)
+    # Linter suppression / "dead code" annotation markers detected
+    # in the snippet. Many code captures show ``# noqa``,
+    # ``# type: ignore``, ``// eslint-disable``, ``// nolint``,
+    # ``# pylint: disable=...`` and similar markers that suppress
+    # one specific linter check at one specific call site.
+    # Examples:
+    #
+    #   foo = eval(s)  # noqa: S307
+    #   bar: int = "x"  # type: ignore[assignment]
+    #   const x: any = 1; // eslint-disable-line @typescript-eslint/no-explicit-any
+    #   if cond { ... } // nolint:errcheck
+    #   def f(x): return x  # pylint: disable=missing-docstring
+    #   #pragma warning disable CS0168
+    #   #[allow(dead_code)]
+    #   @SuppressWarnings("unchecked")
+    #   /* tslint:disable:no-any */
+    #
+    # Each entry is a ``{"tool": str, "code": str | None,
+    # "scope": str}`` dict:
+    #
+    #   * ``tool`` is the lowercased name of the linter / analyser
+    #     whose check is being suppressed. Recognised tools:
+    #     ``noqa`` (flake8 / ruff), ``mypy``, ``pyright``,
+    #     ``pylint``, ``eslint``, ``tslint``, ``stylelint``,
+    #     ``prettier``, ``nolint`` (golangci-lint),
+    #     ``rustc``, ``clippy``, ``csharp`` (#pragma warning),
+    #     ``cppcheck``, ``checkstyle``, ``spotbugs``,
+    #     ``suppresswarnings`` (Java), ``swiftlint``, ``ktlint``,
+    #     ``detekt``, ``sonarqube``, ``coverage``,
+    #     ``shellcheck``. The catalogue is permissive -- any
+    #     ``<tool>:disable`` / ``<tool>: ignore`` form catches.
+    #   * ``code`` is the specific check code being suppressed
+    #     when printed (``S307``, ``no-explicit-any``,
+    #     ``CS0168``, ``unchecked``, ``dead_code``,
+    #     ``errcheck``), or ``None`` when the suppression is a
+    #     blanket "ignore everything on this line / block" (a
+    #     bare ``# noqa`` with no code).
+    #   * ``scope`` is the suppression scope keyword captured
+    #     from the marker: ``line`` (per-line marker, the most
+    #     common), ``next-line`` / ``next_line`` (suppresses the
+    #     FOLLOWING line), ``block`` (multi-line ``disable`` /
+    #     ``enable`` pair), ``file`` (file-level suppression),
+    #     or ``unknown`` when the marker doesn't include a
+    #     scope hint.
+    #
+    # Dashboards use this list to surface "this snippet
+    # suppresses 4 linter checks" annotations, detect cargo-
+    # culted blanket ``# noqa`` markers that mask real bugs,
+    # and flag screenshots where multiple checks are
+    # suppressed in the same hunk (often a smell during code
+    # review).
+    #
+    # De-duped on the (tool, code, scope) tuple; first-seen
+    # order preserved. Capped at 50 entries. Empty list when
+    # no recognised marker is present.
+    dead_code: list[dict[str, str | None]] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):

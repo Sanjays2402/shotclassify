@@ -20,6 +20,7 @@ from .code import (
     enrich_code,
     extract_build_commands,
     extract_copyrights,
+    extract_dead_code,
     extract_dep_pins,
     extract_feature_flags,
     extract_imports,
@@ -132,5 +133,6 @@ __all__ = [
     "extract_regex_literals",
     "extract_build_commands",
     "extract_dep_pins",
+    "extract_dead_code",
     "extract_twilio_ids",
 ]

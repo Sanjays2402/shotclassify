@@ -3200,6 +3200,479 @@ def extract_dep_pins(code: str) -> list[dict[str, str]]:
     return out
 
 
+# Linter / static-analyser suppression marker detection. We surface
+# the per-line / next-line / block markers a developer drops into
+# code to silence one specific check at one specific call site so
+# dashboards can flag "this snippet suppresses 4 linter checks"
+# annotations and detect blanket noqa abuse.
+#
+# Each entry is a {"tool", "code", "scope"} dict.
+#
+# Recognised tools / shapes (the catalogue is comprehensive, not
+# exhaustive -- new linters can be added to _DEAD_CODE_PATTERNS):
+#
+# Python ecosystem:
+#   * ``# noqa``                                 -- flake8 / ruff blanket
+#   * ``# noqa: S307``                           -- flake8 / ruff specific
+#   * ``# noqa: E501,F401``                      -- multi-code
+#   * ``# type: ignore``                         -- mypy / pyright blanket
+#   * ``# type: ignore[assignment]``             -- mypy specific
+#   * ``# pyright: ignore``                      -- pyright blanket
+#   * ``# pyright: ignore[reportMissingImports]`` -- pyright specific
+#   * ``# pylint: disable=unused-import``        -- pylint per-block
+#   * ``# pylint: enable=unused-import``         -- pylint re-enable
+#
+# JavaScript / TypeScript:
+#   * ``// eslint-disable``                      -- block start
+#   * ``// eslint-enable``                       -- block end
+#   * ``// eslint-disable-line``                 -- per-line
+#   * ``// eslint-disable-next-line``            -- next-line
+#   * ``// eslint-disable-line no-unused-vars``  -- per-line specific
+#   * ``/* eslint-disable */``                   -- block opener
+#   * ``// tslint:disable:no-any``               -- tslint per-line
+#   * ``// stylelint-disable color-no-hex``      -- stylelint
+#   * ``// prettier-ignore``                     -- prettier (formatter)
+#   * ``// @ts-ignore``                          -- TS compiler blanket
+#   * ``// @ts-expect-error``                    -- TS compiler expect
+#   * ``// @ts-nocheck``                         -- TS file-level
+#
+# Go:
+#   * ``// nolint``                              -- golangci-lint blanket
+#   * ``// nolint:errcheck``                     -- specific
+#   * ``//nolint:errcheck,gosec``                -- multi-code (no space)
+#
+# Rust:
+#   * ``#[allow(dead_code)]``                    -- attribute form
+#   * ``#[allow(clippy::needless_return)]``      -- clippy specific
+#   * ``#[deny(warnings)]``                      -- deny form (also dead-code marker)
+#
+# C / C++:
+#   * ``// NOLINT``                              -- clang-tidy
+#   * ``// NOLINTNEXTLINE``                      -- clang-tidy next-line
+#   * ``// NOLINT(misc-x)``                      -- clang-tidy specific
+#   * ``// cppcheck-suppress unusedFunction``    -- cppcheck
+#
+# C#:
+#   * ``#pragma warning disable CS0168``         -- C# pragma
+#   * ``#pragma warning restore CS0168``         -- C# pragma restore
+#
+# Java / Kotlin:
+#   * ``@SuppressWarnings("unchecked")``         -- Java
+#   * ``@Suppress("UNUSED_PARAMETER")``          -- Kotlin
+#   * ``// CHECKSTYLE.OFF: LineLength``          -- Checkstyle
+#   * ``// CHECKSTYLE:OFF``                      -- Checkstyle blanket
+#
+# Shell:
+#   * ``# shellcheck disable=SC2086``            -- shellcheck specific
+#   * ``# shellcheck disable=SC2086,SC2034``     -- multi-code
+#
+# Sonar / coverage:
+#   * ``// NOSONAR``                             -- SonarQube
+#   * ``// pragma: no cover``                    -- coverage.py (Python)
+#
+# Swift:
+#   * ``// swiftlint:disable line_length``       -- per-line / block
+#   * ``// swiftlint:disable:next line_length``  -- next-line variant
+#
+# Pattern details:
+#
+#   * Tool name extracted is lowercased.
+#   * Code segment is the SPECIFIC check identifier; ``None`` when
+#     blanket (``# noqa`` with nothing after).
+#   * Scope is one of ``line`` (per-line), ``next-line``
+#     (suppresses the FOLLOWING source line), ``block`` (multi-line
+#     ``disable`` opener), ``file`` (file-level), or ``unknown``.
+#   * Multiple codes in one marker (``# noqa: E501,F401``) emit
+#     separate entries, one per code, sharing tool + scope.
+#
+# Cap 50, de-dupe on (tool, code, scope).
+
+# Helper regex pieces.
+#
+# A "code identifier" is the SPECIFIC linter rule being suppressed:
+# alphanumerics + underscore + hyphen + ``::`` (clippy) + ``.``
+# (some shellcheck nested names) + ``@`` (scoped ESLint plugins like
+# ``@typescript-eslint/no-explicit-any``). We accept ``/`` for ESLint
+# plugin-scoped rules and ``-`` for kebab-case ESLint rule names.
+_DEAD_CODE_CODE_CHARS = r"@A-Za-z0-9_\-./:"
+
+# ---- Python: noqa / type: ignore / pyright / pylint / coverage ----
+
+# ``# noqa`` (blanket) or ``# noqa: CODE[,CODE...]``. Case-sensitive
+# `noqa` per flake8/ruff convention. Hyphen-separated rule codes
+# accepted (ruff uses ``E501``, ``PLR1714`` etc).
+_NOQA_RE = re.compile(
+    r"#\s*noqa\b(?:\s*:\s*(?P<codes>[A-Z]+\d+(?:[ ,]+[A-Z]+\d+)*))?"
+)
+
+# ``# type: ignore`` (blanket) or ``# type: ignore[CODE,CODE...]``.
+# Per PEP 484 / mypy / pyright. Codes are alphanumeric + dash.
+_TYPE_IGNORE_RE = re.compile(
+    r"#\s*type:\s*ignore\b(?:\s*\[(?P<codes>[a-z][a-z0-9_\-, ]*)\])?"
+)
+
+# ``# pyright: ignore`` and ``# pyright: ignore[reportMissingImports]``.
+_PYRIGHT_RE = re.compile(
+    r"#\s*pyright:\s*ignore\b(?:\s*\[(?P<codes>[a-zA-Z][a-zA-Z0-9_\-, ]*)\])?"
+)
+
+# ``# pylint: disable=...`` and ``# pylint: enable=...``. Pylint
+# rule codes are dash-separated lowercase identifiers like
+# ``unused-import`` or numeric like ``C0411``. ``scope`` is ``block``
+# because pylint disable lasts until a matching enable (or end of
+# file); ``unknown`` would be more accurate but block conveys intent.
+_PYLINT_RE = re.compile(
+    r"#\s*pylint:\s*(?P<action>disable|enable)\s*=\s*"
+    r"(?P<codes>[A-Za-z][A-Za-z0-9_\-, ]*)"
+)
+
+# Coverage.py: ``# pragma: no cover`` and ``# pragma: no branch``.
+_COVERAGE_RE = re.compile(
+    r"#\s*pragma:\s*(?P<sub>no\s+(?:cover|branch))",
+    re.IGNORECASE,
+)
+
+# ---- JS / TS: eslint / tslint / stylelint / prettier / ts ----
+
+# ``// eslint-disable`` / ``// eslint-enable``: block forms.
+# ``// eslint-disable-line`` / ``// eslint-disable-next-line``:
+# scoped forms. Codes optional. We capture the scope keyword
+# (``-line`` / ``-next-line``) into the scope tag.
+_ESLINT_RE = re.compile(
+    r"(?://|/\*)\s*eslint-(?P<action>disable|enable)"
+    r"(?P<sub>-line|-next-line)?"
+    r"(?:\s+(?P<codes>[" + _DEAD_CODE_CODE_CHARS + r"]+"
+    r"(?:[ ,]+[" + _DEAD_CODE_CODE_CHARS + r"]+)*))?"
+)
+
+# ``// tslint:disable:no-any`` / ``// tslint:enable``. tslint is
+# deprecated but still surfaces in older code captures.
+_TSLINT_RE = re.compile(
+    r"(?://|/\*)\s*tslint:(?P<action>disable|enable)"
+    r"(?:(?P<sub>-line|-next-line))?"
+    r"(?::(?P<codes>[" + _DEAD_CODE_CODE_CHARS + r"]+"
+    r"(?:[ ,]+[" + _DEAD_CODE_CODE_CHARS + r"]+)*))?"
+)
+
+# ``// stylelint-disable color-no-hex``.
+_STYLELINT_RE = re.compile(
+    r"(?://|/\*)\s*stylelint-(?P<action>disable|enable)"
+    r"(?P<sub>-line|-next-line)?"
+    r"(?:\s+(?P<codes>[" + _DEAD_CODE_CODE_CHARS + r"]+"
+    r"(?:[ ,]+[" + _DEAD_CODE_CODE_CHARS + r"]+)*))?"
+)
+
+# ``// prettier-ignore``. Prettier is a formatter not a linter but
+# the marker shape and intent (suppress automated rewrite) are
+# similar enough that dashboards want it surfaced.
+_PRETTIER_RE = re.compile(r"(?://|/\*)\s*prettier-ignore\b")
+
+# ``// @ts-ignore`` / ``// @ts-expect-error`` / ``// @ts-nocheck``.
+# TypeScript compiler-level suppressions.
+_TS_COMPILER_RE = re.compile(
+    r"(?://|/\*)\s*@ts-(?P<sub>ignore|expect-error|nocheck)\b"
+    r"(?:\s+(?P<codes>[^\r\n*/]{1,80}?))?"
+)
+
+# ---- Go: nolint -----------------------------------------------------
+
+# ``// nolint`` and ``// nolint:errcheck`` / ``//nolint:errcheck,gosec``.
+# Allow zero-space form ``//nolint`` per golangci-lint convention.
+_NOLINT_RE = re.compile(
+    r"//\s*nolint\b(?:\s*:\s*(?P<codes>[A-Za-z][A-Za-z0-9_\-, ]*))?"
+)
+
+# ---- Rust: #[allow(...)] / #[deny(...)] -----------------------------
+
+# ``#[allow(dead_code)]`` / ``#[deny(warnings)]`` /
+# ``#[allow(clippy::needless_return)]``. Multiple lints comma-
+# separated. The outer attribute form (``#!``) suppresses at the
+# module / crate level; treat as ``file`` scope.
+_RUST_ALLOW_RE = re.compile(
+    r"#!?\[(?P<action>allow|deny|warn)\s*\("
+    r"(?P<codes>[a-zA-Z][a-zA-Z0-9_\-,:: ]*)"
+    r"\)\s*\]"
+)
+
+# ---- C / C++: clang-tidy NOLINT, cppcheck-suppress ------------------
+
+# ``// NOLINT`` / ``// NOLINTNEXTLINE`` / ``// NOLINTBEGIN`` /
+# ``// NOLINTEND``. Codes in parentheses optional. clang-tidy uses
+# ALL-CAPS marker.
+_NOLINT_CLANG_RE = re.compile(
+    r"//\s*NOLINT(?P<sub>NEXTLINE|BEGIN|END)?\b"
+    r"(?:\s*\((?P<codes>[a-zA-Z][a-zA-Z0-9_\-,*. ]*)\))?"
+)
+
+# ``// cppcheck-suppress unusedFunction``.
+_CPPCHECK_RE = re.compile(
+    r"//\s*cppcheck-suppress\s+(?P<codes>[a-zA-Z][a-zA-Z0-9_]*)"
+)
+
+# ---- C#: #pragma warning disable / restore --------------------------
+
+# ``#pragma warning disable CS0168`` /
+# ``#pragma warning restore CS0168``.
+_CSHARP_PRAGMA_RE = re.compile(
+    r"#\s*pragma\s+warning\s+(?P<action>disable|restore)"
+    r"(?:\s+(?P<codes>[A-Za-z][A-Za-z0-9_, ]*))?"
+)
+
+# ---- Java: @SuppressWarnings ----------------------------------------
+
+# ``@SuppressWarnings("unchecked")`` /
+# ``@SuppressWarnings({"unchecked", "rawtypes"})``.
+_JAVA_SUPPRESS_RE = re.compile(
+    r"@SuppressWarnings\s*\(\s*"
+    r"(?:\{?\s*(?P<codes>(?:\"[a-zA-Z][a-zA-Z0-9_\-]*\""
+    r"(?:\s*,\s*\"[a-zA-Z][a-zA-Z0-9_\-]*\")*))\s*\}?)"
+    r"\s*\)"
+)
+
+# ---- Kotlin: @Suppress ----------------------------------------------
+
+# ``@Suppress("UNUSED_PARAMETER")``.
+_KOTLIN_SUPPRESS_RE = re.compile(
+    r"@Suppress\s*\(\s*"
+    r"(?P<codes>\"[A-Za-z_][A-Za-z0-9_\-]*\""
+    r"(?:\s*,\s*\"[A-Za-z_][A-Za-z0-9_\-]*\")*)"
+    r"\s*\)"
+)
+
+# ---- Checkstyle (Java) ----------------------------------------------
+
+# ``// CHECKSTYLE.OFF: LineLength`` / ``// CHECKSTYLE:OFF``.
+_CHECKSTYLE_RE = re.compile(
+    r"//\s*CHECKSTYLE[.:]\s*(?P<action>ON|OFF)"
+    r"(?:\s*:\s*(?P<codes>[A-Za-z][A-Za-z0-9_, ]*))?"
+)
+
+# ---- Shell: shellcheck ----------------------------------------------
+
+# ``# shellcheck disable=SC2086,SC2034``. Codes are SC-prefixed
+# 4-digit identifiers.
+_SHELLCHECK_RE = re.compile(
+    r"#\s*shellcheck\s+disable\s*=\s*"
+    r"(?P<codes>SC\d+(?:[ ,]+SC\d+)*)"
+)
+
+# ---- SonarQube: NOSONAR ---------------------------------------------
+
+# ``// NOSONAR`` (blanket) -- SonarQube's per-line suppression marker.
+_NOSONAR_RE = re.compile(r"//\s*NOSONAR\b")
+
+# ---- Swift: swiftlint -----------------------------------------------
+
+# ``// swiftlint:disable line_length`` /
+# ``// swiftlint:disable:next line_length`` /
+# ``// swiftlint:enable line_length``.
+_SWIFTLINT_RE = re.compile(
+    r"//\s*swiftlint:(?P<action>disable|enable)"
+    r"(?::(?P<sub>next|previous|this))?"
+    r"(?:\s+(?P<codes>[a-zA-Z_][a-zA-Z0-9_, ]*))?"
+)
+
+
+# Tuples of (pattern, tool-name, scope-deriver). scope-deriver is a
+# callable that accepts the match object and returns the scope tag.
+def _scope_block_or_unknown(action: str | None, sub: str | None) -> str:
+    """Common scope derivation: ``-line`` / ``-next-line`` / explicit
+    action keywords map to ``line`` / ``next-line`` / ``block``."""
+    if sub == "-line":
+        return "line"
+    if sub == "-next-line":
+        return "next-line"
+    if sub in ("next", "previous", "this"):
+        return "next-line" if sub == "next" else "line"
+    if action == "disable":
+        return "block"
+    if action == "enable":
+        return "block"
+    return "unknown"
+
+
+# Maximum dead-code entries surfaced per snippet.
+_MAX_DEAD_CODE = 50
+
+
+def _split_codes(raw: str | None) -> list[str | None]:
+    """Split a codes group into individual code tokens.
+
+    Returns ``[None]`` for a blanket suppression with no codes so
+    the caller can emit a single ``code=None`` entry. Whitespace
+    and commas are accepted as separators.
+    """
+    if not raw or not raw.strip():
+        return [None]
+    parts = [p.strip().strip('"').strip(",") for p in re.split(r"[ ,]+", raw.strip())]
+    out = [p for p in parts if p]
+    return out if out else [None]
+
+
+def extract_dead_code(code: str) -> list[dict[str, str | None]]:
+    """Return linter / static-analyser suppression markers found in ``code``.
+
+    Each entry is a ``{"tool", "code", "scope"}`` dict where:
+    * ``tool`` is the lowercased linter / analyser name
+    * ``code`` is the specific check code (or ``None`` for blanket)
+    * ``scope`` is one of ``line`` / ``next-line`` / ``block`` /
+      ``file`` / ``unknown``
+
+    Multiple codes in one marker emit separate entries. De-duped on
+    the (tool, code, scope) tuple; first-seen order preserved.
+    Capped at 50.
+    """
+    if not code:
+        return []
+    out: list[dict[str, str | None]] = []
+    seen: set[tuple[str, str | None, str]] = set()
+
+    def _add(tool: str, raw_codes: str | None, scope: str) -> bool:
+        """Add per-code entries. Returns False when cap reached."""
+        for cd in _split_codes(raw_codes):
+            key = (tool, cd, scope)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"tool": tool, "code": cd, "scope": scope})
+            if len(out) >= _MAX_DEAD_CODE:
+                return False
+        return True
+
+    # Walk every matcher against the body. Each matcher is independent
+    # so a snippet that mixes Python noqa + JS eslint markers populates
+    # both.
+    matchers: list[tuple[re.Pattern[str], str, str]] = [
+        # (pattern, tool, default_scope)
+        (_NOQA_RE, "noqa", "line"),
+        (_TYPE_IGNORE_RE, "mypy", "line"),
+        (_PYRIGHT_RE, "pyright", "line"),
+        (_COVERAGE_RE, "coverage", "line"),
+        (_PRETTIER_RE, "prettier", "line"),
+        (_NOSONAR_RE, "sonarqube", "line"),
+        (_NOLINT_RE, "nolint", "line"),
+        (_CPPCHECK_RE, "cppcheck", "line"),
+        (_SHELLCHECK_RE, "shellcheck", "line"),
+    ]
+    for pat, tool, default_scope in matchers:
+        for m in pat.finditer(code):
+            if len(out) >= _MAX_DEAD_CODE:
+                return out
+            codes = m.groupdict().get("codes") if m.groupdict() else None
+            # No `sub` group for these simple shapes.
+            if not _add(tool, codes, default_scope):
+                return out
+
+    # Pylint disable/enable are block-scoped.
+    for m in _PYLINT_RE.finditer(code):
+        if len(out) >= _MAX_DEAD_CODE:
+            return out
+        if not _add("pylint", m.group("codes"), "block"):
+            return out
+
+    # ESLint, stylelint -- scope decided by `-line` / `-next-line` suffix.
+    for pat, tool in [
+        (_ESLINT_RE, "eslint"),
+        (_STYLELINT_RE, "stylelint"),
+    ]:
+        for m in pat.finditer(code):
+            if len(out) >= _MAX_DEAD_CODE:
+                return out
+            scope = _scope_block_or_unknown(m.group("action"), m.group("sub"))
+            if not _add(tool, m.group("codes"), scope):
+                return out
+
+    # tslint -- similar scope derivation, also accept ``-line`` /
+    # ``-next-line`` suffix.
+    for m in _TSLINT_RE.finditer(code):
+        if len(out) >= _MAX_DEAD_CODE:
+            return out
+        scope = _scope_block_or_unknown(m.group("action"), m.group("sub"))
+        if not _add("tslint", m.group("codes"), scope):
+            return out
+
+    # TypeScript compiler-level: ``ts-ignore`` / ``ts-expect-error`` are
+    # next-line markers (they affect the NEXT source line); ``ts-nocheck``
+    # is file-scope.
+    for m in _TS_COMPILER_RE.finditer(code):
+        if len(out) >= _MAX_DEAD_CODE:
+            return out
+        sub = m.group("sub")
+        if sub == "nocheck":
+            scope = "file"
+        else:
+            scope = "next-line"
+        if not _add("typescript", m.group("codes"), scope):
+            return out
+
+    # Rust allow / deny / warn attributes. The ``#!`` outer-attribute
+    # form is file-scope; the plain ``#[...]`` form is block-scope
+    # (applies to the next item).
+    for m in _RUST_ALLOW_RE.finditer(code):
+        if len(out) >= _MAX_DEAD_CODE:
+            return out
+        is_outer = code[m.start():m.start() + 2] == "#!"
+        scope = "file" if is_outer else "block"
+        if not _add("rustc", m.group("codes"), scope):
+            return out
+
+    # clang-tidy NOLINT family. ``NOLINTNEXTLINE`` is next-line,
+    # ``NOLINTBEGIN`` / ``NOLINTEND`` are block bounds, bare
+    # ``NOLINT`` is per-line.
+    for m in _NOLINT_CLANG_RE.finditer(code):
+        if len(out) >= _MAX_DEAD_CODE:
+            return out
+        sub = m.group("sub")
+        if sub == "NEXTLINE":
+            scope = "next-line"
+        elif sub in ("BEGIN", "END"):
+            scope = "block"
+        else:
+            scope = "line"
+        if not _add("clang-tidy", m.group("codes"), scope):
+            return out
+
+    # C# #pragma warning disable / restore is block-scope.
+    for m in _CSHARP_PRAGMA_RE.finditer(code):
+        if len(out) >= _MAX_DEAD_CODE:
+            return out
+        if not _add("csharp", m.group("codes"), "block"):
+            return out
+
+    # Java @SuppressWarnings is "method / class / variable scope" --
+    # we report it as ``block`` because dashboards just need to know
+    # the suppression exists.
+    for m in _JAVA_SUPPRESS_RE.finditer(code):
+        if len(out) >= _MAX_DEAD_CODE:
+            return out
+        if not _add("suppresswarnings", m.group("codes"), "block"):
+            return out
+
+    # Kotlin @Suppress.
+    for m in _KOTLIN_SUPPRESS_RE.finditer(code):
+        if len(out) >= _MAX_DEAD_CODE:
+            return out
+        if not _add("kotlin-suppress", m.group("codes"), "block"):
+            return out
+
+    # Checkstyle ON/OFF is block-scope.
+    for m in _CHECKSTYLE_RE.finditer(code):
+        if len(out) >= _MAX_DEAD_CODE:
+            return out
+        if not _add("checkstyle", m.group("codes"), "block"):
+            return out
+
+    # swiftlint disable/enable. ``:next`` modifier makes it next-line.
+    for m in _SWIFTLINT_RE.finditer(code):
+        if len(out) >= _MAX_DEAD_CODE:
+            return out
+        scope = _scope_block_or_unknown(m.group("action"), m.group("sub"))
+        if not _add("swiftlint", m.group("codes"), scope):
+            return out
+
+    return out
+
+
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     code = (existing.code if existing and existing.code else ocr.text or "").strip()
     # Markdown fence-language detection. Runs FIRST on the original
@@ -3409,6 +3882,20 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if not dep_pins:
         dep_pins = extract_dep_pins(code)
+    # Linter / static-analyser suppression markers. Caller-supplied
+    # list wins (preserved verbatim); otherwise scan the snippet for
+    # noqa / type: ignore / eslint-disable / nolint / NOLINT /
+    # #pragma warning / #[allow(...)] / @SuppressWarnings /
+    # shellcheck disable / etc. markers and surface each
+    # {tool, code, scope} dict. Returns an empty list when no
+    # recognised marker is present.
+    dead_code = (
+        list(existing.dead_code)
+        if existing and existing.dead_code
+        else []
+    )
+    if not dead_code:
+        dead_code = extract_dead_code(code)
     return CodeFields(
         language=language,
         code=code,
@@ -3432,4 +3919,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         regexes=regexes,
         build_commands=build_commands,
         dep_pins=dep_pins,
+        dead_code=dead_code,
     )
