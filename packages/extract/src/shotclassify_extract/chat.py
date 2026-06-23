@@ -2100,6 +2100,196 @@ def _extract_threads(text: str) -> list[dict]:
     return out
 
 
+# Bot / app / integration message detection. Each chat platform
+# decorates messages from bots / apps / integrations with a small
+# uppercase badge next to the sender's name:
+#
+#   Slack:       SenderName  APP   10:00 AM      / SenderName BOT
+#   Discord:     SenderName  BOT  — Today at 14:25
+#   Telegram:    SenderName  -  bot  /  ChannelBot - bot
+#   Teams:       SenderName  (Bot) 11:42 AM     / GitHub (App) 14:30
+#
+# We surface these separately from regular chat messages so
+# dashboards can filter "team conversation" from "automated
+# notifications" (CI runs, deploy notifications, monitor alerts,
+# standup bots).
+
+# Slack-style: ``SenderName APP`` / ``SenderName BOT`` /
+# ``SenderName INTEGRATION``. The sender name is constrained to
+# 1..32 word-or-dot-or-dash chars so a typical product name like
+# ``Carl-bot``, ``GitHub``, ``YAGPDB.xyz`` matches without
+# leaking long prose preludes.
+_BOT_BADGE_SLACK_RE = re.compile(
+    r"^(?P<sender>[A-Z][\w.\-]{0,31}(?:\s+[A-Z][\w.\-]{0,31})?)"
+    r"\s+(?P<badge>APP|BOT|INTEGRATION)\b"
+    r"(?P<tail>.*)",
+    re.MULTILINE,
+)
+
+# Teams-style: ``SenderName (Bot) <time>`` / ``GitHub (App) 14:30``.
+# Always lowercase Bot / App inside parens because Teams renders
+# the badge in mixed-case sentence form.
+_BOT_BADGE_TEAMS_RE = re.compile(
+    r"^(?P<sender>[A-Z][\w.\-]{0,31}(?:\s+[A-Z][\w.\-]{0,31})?)"
+    r"\s+\((?P<badge>Bot|App|Integration)\)"
+    r"(?P<tail>.*)",
+    re.MULTILINE,
+)
+
+# Telegram-style: ``SenderBot - bot`` / ``ChannelBot - bot`` /
+# ``ExampleBot bot``. The sender name must end in "Bot" (case-
+# insensitive) because Telegram bot usernames carry the suffix
+# by API requirement.
+_BOT_BADGE_TELEGRAM_RE = re.compile(
+    r"^(?P<sender>[A-Z][\w.]{0,30}[Bb]ot)\s*[-—–]?\s*"
+    r"(?P<badge>bot)\b",
+    re.MULTILINE,
+)
+
+# Discord-style: ``SenderName BOT — Today at 14:25``. We accept
+# bare ``BOT`` (case-sensitive) followed by either a long-dash
+# separator OR a date / time format. This wins over the Slack-
+# style BOT matcher when the long-dash separator is present.
+# The trailing rest-of-line is consumed so the body extraction
+# picks up the next line (the actual message), not the date tail.
+_BOT_BADGE_DISCORD_RE = re.compile(
+    r"^(?P<sender>[A-Z][\w.\-]{0,31})\s+(?P<badge>BOT)\s+[—–-][^\n]*",
+    re.MULTILINE,
+)
+
+
+# Maximum number of bot-message entries we surface from a single
+# screenshot. A typical chat thread shows 1-10 bot messages; the
+# cap is a safety against pathological OCR captures with hundreds
+# of matched lines.
+_MAX_BOT_MESSAGES = 30
+
+# Sender names we reject from the badge-style matchers because
+# they're channel / category headers Slack / Discord prints with
+# the same casing rules as bot names.
+_BOT_SENDER_REJECT = frozenset({
+    "CHANNEL",
+    "DIRECT",
+    "MESSAGES",
+    "MENTIONS",
+    "REACTIONS",
+    "THREADS",
+    "PINNED",
+    "SLACKBOT",  # the system bot exception -- still ID'd but never carries APP/BOT badge
+    "WORKSPACE",
+    "WORKFLOW",
+    "ANNOUNCEMENTS",
+})
+
+
+def _classify_bot_platform(badge_kind: str, source_re: re.Pattern) -> str | None:
+    """Return inferred platform tag based on which matcher fired."""
+    if source_re is _BOT_BADGE_SLACK_RE:
+        return "slack"
+    if source_re is _BOT_BADGE_DISCORD_RE:
+        return "discord"
+    if source_re is _BOT_BADGE_TELEGRAM_RE:
+        return "telegram"
+    if source_re is _BOT_BADGE_TEAMS_RE:
+        return "teams"
+    return None
+
+
+def _extract_bot_messages(text: str) -> list[dict[str, str | None]]:
+    """Return a list of bot / app / integration message entries.
+
+    Walks the OCR text and surfaces every line where a sender name
+    sits next to an APP / BOT / INTEGRATION badge. Each entry is a
+    ``{"sender", "badge", "platform", "text"}`` dict.
+
+    Detection order (most-specific first to avoid double-counting):
+    1. Discord BOT + long-dash separator (consumed via span set).
+    2. Teams parenthesised (Bot) / (App) / (Integration).
+    3. Telegram <Name>Bot - bot suffix.
+    4. Slack-style APP / BOT / INTEGRATION badges.
+
+    Safety:
+    * Sender names limited to 1..32 chars to avoid leaking long
+      prose preludes.
+    * Channel-header words (CHANNEL / WORKFLOW / etc) explicitly
+      rejected from the sender slot.
+    * Telegram matcher requires the sender to END in "Bot" so
+      generic prose mentioning bot doesn't false-positive.
+    * Span-claim defence: lines already matched by a higher-
+      priority matcher are skipped by lower-priority matchers.
+
+    Capped at 30 entries.
+    """
+    if not text:
+        return []
+    out: list[dict[str, str | None]] = []
+    claimed_spans: list[tuple[int, int]] = []
+
+    def _is_claimed(start: int, end: int) -> bool:
+        return any(
+            s_start <= start < s_end or s_start < end <= s_end
+            for s_start, s_end in claimed_spans
+        )
+
+    matchers: list[tuple[re.Pattern, str]] = [
+        (_BOT_BADGE_DISCORD_RE, "bot"),
+        (_BOT_BADGE_TEAMS_RE, ""),  # badge group captured from match
+        (_BOT_BADGE_TELEGRAM_RE, "bot"),
+        (_BOT_BADGE_SLACK_RE, ""),  # badge group captured from match
+    ]
+
+    # Walk each matcher in priority order; collect matches that
+    # don't overlap with already-claimed spans.
+    for pattern, default_badge in matchers:
+        for m in pattern.finditer(text):
+            if _is_claimed(m.start(), m.end()):
+                continue
+            sender = m.group("sender").strip()
+            # Reject channel/category headers.
+            if sender.upper() in _BOT_SENDER_REJECT:
+                continue
+            # Reject lone prose words (single word like "Welcome"
+            # without dot/dash/digit and < 3 chars).
+            if len(sender) < 2:
+                continue
+            badge_raw = m.group("badge") if "badge" in m.groupdict() else default_badge
+            badge = badge_raw.lower() if badge_raw else default_badge
+            # Normalise badge to canonical tag.
+            badge_canon: str
+            if badge in {"app"}:
+                badge_canon = "app"
+            elif badge in {"bot"}:
+                badge_canon = "bot"
+            elif badge in {"integration"}:
+                badge_canon = "integration"
+            else:
+                badge_canon = badge.lower()
+            platform = _classify_bot_platform(badge_canon, pattern)
+            # Text body: the next non-blank line after the badge
+            # line.
+            text_after_match = text[m.end():].lstrip("\n")
+            next_lines = text_after_match.split("\n", 1)
+            body: str | None = None
+            if next_lines:
+                first_body = next_lines[0].strip()
+                if first_body and not first_body.startswith(("[", "(")):
+                    # Strip leading "[Date]" or "(metadata)" headers.
+                    body = first_body[:200] if len(first_body) <= 200 else None
+            claimed_spans.append((m.start(), m.end()))
+            out.append({
+                "sender": sender,
+                "badge": badge_canon,
+                "platform": platform,
+                "text": body,
+            })
+
+    # Stable order by source-text appearance offset (since we
+    # walked matchers in priority order, sort the final list by
+    # the offset of the original match).
+    out.sort(key=lambda e: text.find(e["sender"] or "") if e["sender"] else 0)
+    return out[:_MAX_BOT_MESSAGES]
+
+
 def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
     text = ocr.text or ""
     platform = (existing.platform if existing and existing.platform else None) or _guess_platform(text)
@@ -2382,6 +2572,33 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         seen_threads.add(tk)
         threads.append(t)
 
+    # Bot / app / integration message badges (Slack ``GitHub APP``
+    # / Discord ``MEE6 BOT —`` / Teams ``GitHub (App)`` / Telegram
+    # ``ExampleBot - bot``). De-dupes on the (sender, badge, text)
+    # triple so a duplicated echo collapses. Caller order
+    # preserved first.
+    bot_messages: list[dict[str, str | None]] = (
+        list(existing.bot_messages) if existing else []
+    )
+    seen_bots: set[tuple[str, str, str]] = set()
+    for b in bot_messages:
+        bk = (
+            b.get("sender") or "",
+            b.get("badge") or "",
+            b.get("text") or "",
+        )
+        seen_bots.add(bk)
+    for b in _extract_bot_messages(text):
+        bk = (
+            b.get("sender") or "",
+            b.get("badge") or "",
+            b.get("text") or "",
+        )
+        if bk in seen_bots:
+            continue
+        seen_bots.add(bk)
+        bot_messages.append(b)
+
     return ChatFields(
         platform=platform,
         participants=participants,
@@ -2397,4 +2614,5 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         pins=pins,
         forwards=forwards,
         threads=threads,
+        bot_messages=bot_messages,
     )

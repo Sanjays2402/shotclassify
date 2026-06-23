@@ -1763,6 +1763,71 @@ class ChatFields(BaseModel):
     # detect engagement spikes (a 100-reply thread is a notable
     # discussion).
     threads: list[dict] = Field(default_factory=list)
+    # Bot / app / integration messages detected from the screenshot.
+    # Most chat platforms append a small ``APP`` / ``BOT`` /
+    # ``INTEGRATION`` badge next to the sender's name when the
+    # message comes from a bot, app, or integration rather than a
+    # human user. Surfacing these separately lets dashboards
+    # distinguish "actual conversation" from "automated traffic"
+    # (CI notifications, monitoring alerts, GitHub PR digests,
+    # standup bot reminders, etc).
+    #
+    # Recognised shapes:
+    #
+    #   Slack:
+    #     GitHub APP 9:32 AM
+    #     CircleCI APP 12:14 PM
+    #     Statsig BOT Tuesday at 10:30
+    #     Datadog APP just now
+    #
+    #   Discord:
+    #     MEE6 BOT — Today at 3:14 PM
+    #     Carl-bot BOT 14:25
+    #     YAGPDB.xyz BOT 2024-06-15 10:30
+    #
+    #   Telegram:
+    #     ExampleBot - bot
+    #     Bot - DealsBot
+    #     @ChannelBot
+    #
+    #   Microsoft Teams:
+    #     PagerDuty (Bot) 11:42 AM
+    #     GitHub (App) 14:30
+    #
+    # Each entry is a ``{"sender": str, "badge": str,
+    # "platform": str | None, "text": str | None}`` dict.
+    #
+    # * ``sender`` is the bot / app / integration display name
+    #   (``GitHub`` / ``MEE6`` / ``PagerDuty`` / ``ExampleBot``).
+    # * ``badge`` is the canonical badge tag the platform attached:
+    #     ``app``         -- Slack APP badge / Teams (App)
+    #     ``bot``         -- Slack BOT / Discord BOT / Teams (Bot)
+    #                        / Telegram bot
+    #     ``integration`` -- Slack INTEGRATION / older shapes
+    # * ``platform`` is the inferred chat platform tag (``slack``
+    #   / ``discord`` / ``telegram`` / ``teams``) when the badge
+    #   shape unambiguously identifies one, else ``None``.
+    # * ``text`` is the message body that immediately follows the
+    #   sender line (the first non-blank line after the badge line)
+    #   when extractable, else ``None``.
+    #
+    # Ordering preserves first-seen-in-OCR order. Capped at 30
+    # entries (a single screenshot rarely shows more than a handful
+    # of bot messages). De-duped on the (sender, badge, text)
+    # triple so a transcript that echoes the same bot message twice
+    # collapses.
+    #
+    # Distinct from ``messages`` because messages also contains
+    # human turns; this slot is specifically the automated-traffic
+    # subset. Dashboards use this list to:
+    # * Filter "team conversation" vs "automated notifications"
+    #   on a per-thread basis.
+    # * Spot bot-heavy channels (a #alerts channel with mostly
+    #   bot traffic looks different from a #general with human
+    #   conversation).
+    # * Identify which integrations a workspace uses (GitHub
+    #   appears 5x, CircleCI 3x -> infer CI / VCS stack).
+    bot_messages: list[dict[str, str | None]] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):
