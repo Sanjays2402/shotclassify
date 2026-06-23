@@ -645,6 +645,57 @@ class ReceiptFields(BaseModel):
     # at 20 entries because a single receipt rarely lists more
     # than a handful of tickets.
     lottery: list[dict[str, str | float | None]] = Field(default_factory=list)
+    # Cancellation-policy notice for receipts covering services
+    # / bookings / reservations / subscriptions where the
+    # vendor publishes a cancellation deadline or fee. Common
+    # on hotel / Airbnb / flight / car-rental / event-ticket /
+    # cleaning / spa / restaurant-reservation receipts:
+    #
+    #   Cancellation: Free until 24h before
+    #   Non-refundable after Dec 1
+    #   Cancel before 48 hours for full refund
+    #   Free cancellation until check-in
+    #   Cancellation fee: $50 after 24h
+    #   No cancellations
+    #   Non-refundable
+    #   Free cancellation up to 24 hours before
+    #
+    # Stored as a ``{"kind": str, "deadline_hours": int | None,
+    # "deadline_date": str | None, "fee": float | None,
+    # "notice": str}`` dict.
+    #
+    # * ``kind`` is one of:
+    #     ``free`` -- a free-cancellation window (most common
+    #                 for hotel / Airbnb / flight bookings)
+    #     ``fee``  -- cancellation is allowed but a fee applies
+    #     ``deadline`` -- a hard cancellation deadline after
+    #                     which no cancellation is permitted
+    #                     (``Non-refundable after Dec 1``)
+    #     ``none`` -- explicit no-cancellation / non-refundable
+    #                 booking
+    # * ``deadline_hours`` is the normalised deadline in hours
+    #   when expressed as "X hours / X h before / 24h":
+    #     "24 hours" -> 24, "48h" -> 48, "1 day" -> 24,
+    #     "2 weeks" -> 336. ``None`` for date-based deadlines.
+    # * ``deadline_date`` is the captured deadline date verbatim
+    #   when expressed as "after Dec 1" / "before 04/15/2024" /
+    #   "until 2024-12-31". ``None`` for hour-based deadlines.
+    # * ``fee`` is the cancellation fee (positive float) when
+    #   printed alongside ("Cancellation fee: $50"). ``None``
+    #   when no fee is printed (free cancellation or simple
+    #   deadline notices).
+    # * ``notice`` is the raw matched phrase preserved verbatim
+    #   so dashboards can render the original wording.
+    #
+    # Dashboards use this to drive "this booking is locked in"
+    # / "cancellation window closes in 3 days" / "free
+    # cancellation available" annotations for travel-receipt
+    # cards and to bucket bookings by cancellation flexibility
+    # for revenue forecasting.
+    #
+    # ``None`` for retail / food / fuel receipts that have no
+    # cancellation context (the typical case).
+    cancellation_policy: dict[str, str | int | float | None] | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 

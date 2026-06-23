@@ -3423,6 +3423,270 @@ def _find_lottery(text: str) -> list[dict[str, str | float | None]]:
     return out
 
 
+# Cancellation-policy notice detection. Travel / booking /
+# reservation receipts (hotel / Airbnb / flight / car rental /
+# event ticket / spa / cleaning) publish a cancellation policy
+# in the receipt footer. The detector recognises four flavours
+# of policy notice:
+#
+#   * ``free``     -- "Free cancellation up to 24 hours before",
+#                     "Cancel free until 48h before check-in"
+#   * ``fee``      -- "Cancellation fee: $50 after 24h",
+#                     "$25 cancellation fee applies"
+#   * ``deadline`` -- "Non-refundable after Dec 1",
+#                     "Cancel before 04/15/2024 for full refund"
+#   * ``none``     -- "No cancellations", "Non-refundable",
+#                     "All sales final"
+#
+# Patterns are ordered most-specific FIRST so multi-word
+# qualifier-bearing phrases win over bare aliases (the
+# ``free + fee`` "Free cancellation but $5 processing fee"
+# corner case prefers the fee shape).
+
+# Unit -> hours conversion for hour-normalised deadlines.
+_HOURS_PER_UNIT: dict[str, int] = {
+    "hour": 1,
+    "hours": 1,
+    "hr": 1,
+    "hrs": 1,
+    "h": 1,
+    "day": 24,
+    "days": 24,
+    "d": 24,
+    "week": 168,
+    "weeks": 168,
+    "wk": 168,
+    "wks": 168,
+    "month": 720,  # 30 * 24
+    "months": 720,
+    "mo": 720,
+    "mos": 720,
+}
+
+# Compound numeric duration form (used in multiple places).
+_CANCEL_DURATION_RE = (
+    r"(?P<num>\d{1,3})\s*[-\s]?\s*"
+    r"(?P<unit>hours?|hrs?|h|days?|d|weeks?|wks?|months?|mos?)"
+)
+
+# Date forms commonly printed alongside cancellation deadlines.
+# Two month-name patterns + numeric forms. We capture conservatively
+# (preserve as-printed verbatim).
+_CANCEL_DATE_RE = (
+    r"(?P<date>"
+    r"(?:January|February|March|April|May|June|July|August|September|October|"
+    r"November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+    r"\s+\d{1,2}(?:,?\s*\d{2,4})?"  # Dec 1 / Dec 1, 2024 / Dec 1 2024
+    r"|\d{4}[/\-]\d{1,2}[/\-]\d{1,2}"  # 2024-12-31
+    r"|\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}"  # 04/15/2024 / 15-04-24
+    r"|\bcheck-?in\b"
+    r"|\bcheck-?out\b"
+    r"|\barrival\b"
+    r"|\bdeparture\b"
+    r")"
+)
+
+
+_CANCEL_POLICY_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
+    # NO-CANCELLATIONS family (check first because "Non-refundable
+    # after Dec 1" should land as ``deadline``, not ``none`` -- the
+    # bare-non-refundable matcher REQUIRES end-of-phrase or no date
+    # continuation, otherwise the deadline matcher claims it).
+    (re.compile(
+        r"(?P<notice>"
+        r"No\s+cancellations?"
+        r"|No\s+refunds?\s+or\s+cancellations?"
+        r"|Cancellations?\s+(?:are\s+)?not\s+permitted"
+        r"|Cancellations?\s+(?:are\s+)?not\s+allowed"
+        r"|Non-?cancellable"
+        r")",
+        re.IGNORECASE,
+    ), "none"),
+    # CANCELLATION FEE family with fee amount AND duration.
+    (re.compile(
+        r"(?P<notice>"
+        r"Cancellation\s+fee\s*[:\-]?\s*"
+        r"[$£€¥]?(?P<fee>\d{1,5}(?:[.,]\d{2})?)"
+        r"(?:\s+(?:after|past|beyond)\s+" + _CANCEL_DURATION_RE.replace(
+            "?P<num>", "?P<num2>"
+        ).replace("?P<unit>", "?P<unit2>") + r")?"
+        r")",
+        re.IGNORECASE,
+    ), "fee"),
+    # FEE first form: "$25 cancellation fee" / "$25 cancellation fee applies".
+    (re.compile(
+        r"(?P<notice>"
+        r"[$£€¥](?P<fee>\d{1,5}(?:[.,]\d{2})?)\s*"
+        r"cancellation\s+fee(?:\s+(?:applies|charged))?"
+        r")",
+        re.IGNORECASE,
+    ), "fee"),
+    # FREE cancellation with hour-deadline: "Free cancellation up to
+    # 24 hours before / 48h before check-in / before 24 hours of
+    # arrival".
+    (re.compile(
+        r"(?P<notice>"
+        r"Free\s+cancellation(?:\s+(?:up\s+to|until|within|up))?\s*"
+        + _CANCEL_DURATION_RE +
+        r"(?:\s+(?:before|prior\s+to|in\s+advance(?:\s+of)?))?"
+        r"(?:\s+(?:check-?in|check-?out|arrival|departure|stay))?"
+        r")",
+        re.IGNORECASE,
+    ), "free"),
+    # FREE cancellation with date-deadline: "Free cancellation until
+    # Dec 1 / Free cancellation before 04/15/2024".
+    (re.compile(
+        r"(?P<notice>"
+        r"Free\s+cancellation\s+(?:up\s+to|until|before|by|through)\s+"
+        + _CANCEL_DATE_RE +
+        r")",
+        re.IGNORECASE,
+    ), "free"),
+    # FREE cancellation bare ("Free cancellation" / "Free cancellation
+    # available").
+    (re.compile(
+        r"(?P<notice>"
+        r"Free\s+cancellation(?:\s+(?:available|offered))?"
+        r")",
+        re.IGNORECASE,
+    ), "free"),
+    # CANCEL keyword + duration: "Cancel within 24h" / "Cancel up to
+    # 48 hours before".
+    (re.compile(
+        r"(?P<notice>"
+        r"Cancel(?:lation)?\s+(?:within|up\s+to|until|before|prior\s+to)\s+"
+        + _CANCEL_DURATION_RE +
+        r"(?:\s+(?:before|prior\s+to|in\s+advance(?:\s+of)?))?"
+        r"(?:\s+(?:check-?in|check-?out|arrival|departure|stay))?"
+        r"(?:\s+for\s+(?:full|partial)\s+refund)?"
+        r")",
+        re.IGNORECASE,
+    ), "free"),
+    # CANCEL keyword + date: "Cancel before 04/15/2024 for full refund".
+    (re.compile(
+        r"(?P<notice>"
+        r"Cancel(?:lation)?\s+(?:before|until|by|through)\s+"
+        + _CANCEL_DATE_RE +
+        r"(?:\s+for\s+(?:full|partial)\s+refund)?"
+        r")",
+        re.IGNORECASE,
+    ), "deadline"),
+    # NON-REFUNDABLE / non-changeable with date: deadline.
+    (re.compile(
+        r"(?P<notice>"
+        r"(?:Non-?refundable|Non-?changeable)\s+(?:after|past|beyond|from)\s+"
+        + _CANCEL_DATE_RE +
+        r")",
+        re.IGNORECASE,
+    ), "deadline"),
+    # NON-REFUNDABLE bare (must not be followed by "after Dec 1" --
+    # the deadline matcher above catches that). Negative lookahead
+    # ensures "Non-refundable" alone is captured cleanly.
+    (re.compile(
+        r"(?P<notice>"
+        r"Non-?refundable(?:\s+booking)?"
+        r")"
+        r"(?!\s+(?:after|past|beyond|from))",
+        re.IGNORECASE,
+    ), "none"),
+    # CANCELLATION POLICY: <text> -- we record the rest of the line
+    # as notice, kind=deadline (most receipt cancellation-policy
+    # lines describe a deadline-bearing window).
+    (re.compile(
+        r"(?P<notice>"
+        r"Cancellation\s+policy\s*[:\-]\s*[^\n]{1,80}"
+        r")",
+        re.IGNORECASE,
+    ), "deadline"),
+)
+
+
+def _find_cancellation_policy(
+    text: str,
+) -> dict[str, str | int | float | None] | None:
+    """Return cancellation-policy dict, or None.
+
+    Walks the catalogue most-specific-first. Returns the FIRST
+    match's parsed dict because most receipts print AT MOST one
+    cancellation-policy line in the footer; the most-specific
+    phrasing wins when multiple appear.
+
+    Output schema:
+        {"kind", "deadline_hours", "deadline_date", "fee", "notice"}
+
+    Safety:
+    * Bare ``Non-refundable`` matcher uses negative lookahead so
+      a ``Non-refundable after Dec 1`` line tags as ``deadline``
+      not ``none``.
+    * Fee numeric range bounded by regex (1..5 digits + optional
+      decimals).
+    * Hour-normalised deadlines clamped via _HOURS_PER_UNIT
+      lookup; unknown units leave deadline_hours=None.
+    """
+    if not text:
+        return None
+    for pat, kind in _CANCEL_POLICY_PATTERNS:
+        m = pat.search(text)
+        if not m:
+            continue
+        notice = m.group("notice").strip()
+        notice = re.sub(r"\s+", " ", notice)
+        # Hour-based deadline normalisation.
+        deadline_hours: int | None = None
+        # Some patterns have ``num2/unit2`` capture groups for the
+        # secondary duration tail.
+        try:
+            num = m.group("num")
+            unit = m.group("unit")
+        except IndexError:
+            num = None
+            unit = None
+        if not unit:
+            try:
+                num = m.group("num2")
+                unit = m.group("unit2")
+            except IndexError:
+                num = None
+                unit = None
+        if num and unit:
+            try:
+                n = int(num)
+            except ValueError:
+                n = None
+            unit_key = unit.lower().rstrip(".")
+            if n is not None and 0 < n <= 9999 and unit_key in _HOURS_PER_UNIT:
+                deadline_hours = n * _HOURS_PER_UNIT[unit_key]
+        # Date-based deadline.
+        deadline_date: str | None = None
+        try:
+            date_grp = m.group("date")
+        except IndexError:
+            date_grp = None
+        if date_grp:
+            deadline_date = re.sub(r"\s+", " ", date_grp.strip())
+        # Fee.
+        fee: float | None = None
+        try:
+            fee_grp = m.group("fee")
+        except IndexError:
+            fee_grp = None
+        if fee_grp:
+            try:
+                fee = float(fee_grp.replace(",", "."))
+                if fee <= 0 or fee >= 100_000:
+                    fee = None
+            except ValueError:
+                fee = None
+        return {
+            "kind": kind,
+            "deadline_hours": deadline_hours,
+            "deadline_date": deadline_date,
+            "fee": fee,
+            "notice": notice,
+        }
+    return None
+
+
 def parse_receipt_text(text: str) -> ReceiptFields:
     subtotal = _find_amount_after(text, "subtotal")
     tax = _find_amount_after(text, "tax") or _find_amount_after(text, "vat")
@@ -3467,6 +3731,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         warranty=_find_warranty(text),
         delivery_eta=_find_delivery_eta(text),
         lottery=_find_lottery(text),
+        cancellation_policy=_find_cancellation_policy(text),
         items=_parse_items(text),
     )
 
@@ -3484,6 +3749,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "service_charge", "delivery_fee", "tendered", "change",
         "rounding", "gift_card_applied", "promo_code", "points_earned",
         "tip_url", "recurring", "warranty", "delivery_eta",
+        "cancellation_policy",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
