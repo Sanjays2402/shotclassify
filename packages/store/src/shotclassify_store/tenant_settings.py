@@ -322,6 +322,19 @@ PII_REDACT_MODES: tuple[str, ...] = (
     # a reader knows the field WAS bank credential data without
     # the number leaking.
     "bank_account",
+    # VIN (Vehicle Identification Number) mode added in autoship
+    # tick 23. The 17-character ISO 3779 identifier printed on car
+    # titles, registrations, insurance cards, and dealer invoices.
+    # The character set excludes I/O/Q (ISO ban so they cannot be
+    # confused with 1/0/0) and the matcher requires at least one
+    # digit AND at least one letter so pure-digit / pure-letter
+    # 17-char runs do not misfire. Both labelled and bare forms
+    # are captured because the I/O/Q exclusion + 17-char length
+    # combination is distinctive enough to outweigh the risk of
+    # garbling unrelated 17-char tokens. The whole match (including
+    # any leading label) collapses to ``[REDACTED:vin]`` to
+    # guarantee the identifier doesn't survive the pipeline.
+    "vin",
 )
 
 

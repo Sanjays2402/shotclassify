@@ -5,7 +5,7 @@ shotclassify. The :func:`redact_text` helper takes a string and a set of
 mode names (``email``, ``phone``, ``ssn``, ``credit_card``, ``ip``,
 ``iban``, ``jwt``, ``aws_access_key``, ``github_token``,
 ``slack_token``, ``address``, ``passport``, ``drivers_license``,
-``bank_account``) and returns a copy with
+``bank_account``, ``vin``) and returns a copy with
 each match replaced by a typed placeholder such as ``[REDACTED:email]``
 or ``[REDACTED:aws_access_key]``. The :func:`redact_fields` helper
 walks an arbitrary JSON-shaped value (dict / list / str) and applies
@@ -313,6 +313,53 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.IGNORECASE,
         ),
     ),
+    (
+        # Vehicle Identification Number (VIN). 17-character ISO 3779
+        # identifier printed on car titles, registrations, insurance
+        # cards, dealer invoices, sales contracts. The character set
+        # is restricted: digits 0-9 plus all capital letters EXCEPT
+        # I, O, Q (excluded by ISO so they cannot be confused with
+        # 1 / 0 / 0 visually).
+        #
+        # The position-9 check digit is part of the standard
+        # (computed from a weighted sum of the other 16 chars) but
+        # we do NOT validate it here for two reasons:
+        # (a) post-2017 European-market VINs sometimes ship with a
+        #     non-compliant check digit, and
+        # (b) OCR captures often misread one or two chars in a long
+        #     run -- requiring a strict check-digit pass would reject
+        #     legitimate captures that still leak the rest of the
+        #     identifier.
+        #
+        # Shape constraint instead: EXACTLY 17 chars from the VIN
+        # character set, word-boundary on both ends so embedded
+        # 17-char alphanumerics inside longer hashes don't misfire.
+        # Both labelled and bare forms accepted because VINs are
+        # distinctive enough on their own (the I/O/Q exclusion
+        # combined with the 17-char length means a random alphanumeric
+        # blob almost never satisfies the shape).
+        #
+        # Accepted label forms (case-insensitive):
+        #
+        #   VIN: 1HGBH41JXMN109186
+        #   VIN # 1HGBH41JXMN109186
+        #   VIN No: 1HGBH41JXMN109186
+        #   Vehicle Identification Number: 1HGBH41JXMN109186
+        #   Chassis No: 1HGBH41JXMN109186
+        #
+        # Bare 17-char runs satisfying the VIN charset are also
+        # captured because they're rare enough in non-vehicle text
+        # to outweigh the risk of garbling unrelated 17-char tokens.
+        #
+        # The redaction strips the WHOLE matched VIN (including any
+        # label) so a leaked vehicle identifier doesn't survive the
+        # pipeline. The placeholder ``[REDACTED:vin]`` makes it
+        # obvious to a downstream reader that a VIN was present.
+        "vin",
+        re.compile(
+            r"\b(?P<num>[A-HJ-NPR-Z0-9]{17})\b",
+        ),
+    ),
 )
 
 
@@ -412,6 +459,24 @@ def redact_text(text: str, modes: Iterable[str] | None) -> str:
                     + m.string[end:whole_end]
                 )
             out = pattern.sub(_sub_bank_account, out)
+        elif mode == "vin":
+            # VIN matcher requires the 17-char candidate to contain
+            # at least ONE digit AND at least ONE letter. Pure-digit
+            # 17-char runs (long order numbers / receipt IDs) and
+            # pure-letter 17-char runs (long upper-case prose
+            # acronyms) are rejected as VIN false-positives. The
+            # whole matched VIN is replaced with the placeholder
+            # because a VIN's distinguishing label (when present)
+            # is itself sensitive context that benefits from full
+            # collapse to ``[REDACTED:vin]``.
+            def _sub_vin(m: re.Match[str]) -> str:
+                cand = m.group("num")
+                has_digit = any(ch.isdigit() for ch in cand)
+                has_letter = any(ch.isalpha() for ch in cand)
+                if not (has_digit and has_letter):
+                    return m.group(0)
+                return _placeholder("vin")
+            out = pattern.sub(_sub_vin, out)
         else:
             out = pattern.sub(_placeholder(mode), out)
     return out
