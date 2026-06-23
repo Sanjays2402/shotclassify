@@ -59,6 +59,7 @@ from .jwts import extract_jwts
 from .macs import extract_macs
 from .network import extract_network
 from .paths import extract_paths
+from .percentages import extract_percentages
 from .phones import extract_phones
 from .pipeline import enrich
 from .postal_codes import extract_postal_codes
@@ -141,4 +142,5 @@ __all__ = [
     "extract_twilio_ids",
     "extract_invoice_ids",
     "extract_emojis",
+    "extract_percentages",
 ]

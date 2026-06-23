@@ -23,6 +23,7 @@ from .jwts import extract_jwts
 from .macs import extract_macs
 from .network import extract_network
 from .paths import extract_paths
+from .percentages import extract_percentages
 from .phones import extract_phones
 from .postal_codes import extract_postal_codes
 from .receipt import enrich_receipt
@@ -478,5 +479,31 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if emojis:
         out.raw = dict(out.raw or {})
         out.raw["emojis"] = emojis
+
+    # Cross-category: stash percent values found in the OCR text
+    # under raw["percentages"]. Percentages surface across every
+    # category -- performance dashboards print ``CPU 87%`` /
+    # ``Memory 64%``, sentiment-poll captures show ``Yes 65% No
+    # 35%``, financial captures cite ``+12.5%`` / ``-3.2%`` price
+    # moves, code-review captures show coverage ``Tests passed
+    # 98.5%``, marketing receipts print discount percentages
+    # ``20% off``, and battery / progress indicators all use
+    # percent units.
+    #
+    # Each entry is a {value, label, sign} dict where ``value``
+    # is the numeric percent (negative when ``-`` was printed),
+    # ``label`` is the nearest preceding lowercase context word
+    # from a curated vocabulary (cpu / memory / yes / battery /
+    # discount / etc.), and ``sign`` captures the printed
+    # direction (``+`` / ``-`` / ``±``) so dashboards know an
+    # ``+12%`` is an up-move.
+    #
+    # Range endpoints (``5-10%``) are emitted as two separate
+    # entries so dashboards can sort by either bound. Out-of-
+    # range values (>1000% or <-1000%) are rejected as OCR noise.
+    percentages = extract_percentages(text)
+    if percentages:
+        out.raw = dict(out.raw or {})
+        out.raw["percentages"] = percentages
 
     return out
