@@ -1847,6 +1847,259 @@ def _extract_forwards(text: str) -> list[dict[str, str | None]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Thread-reply marker detection (Slack / Discord / Teams).
+# ---------------------------------------------------------------------------
+
+# Slack/Teams: "5 replies" / "1 reply" footer with optional last-reply tail.
+_THREAD_REPLIES_RE = re.compile(
+    r"^[ \t]*(?P<count>\d{1,4})\s+repl(?:y|ies)\b"
+    r"(?:[ \t,]+(?:and\s+)?last\s+reply\s+(?P<last>[^\n]{1,40}))?"
+    r"[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Discord/Teams: "Thread - 4 replies" / "Thread: 4 replies" tagged form.
+_THREAD_TAGGED_RE = re.compile(
+    r"^[ \t]*Thread\s*[-:\u2014\u2013]\s*"
+    r"(?P<count>\d{1,4})\s+repl(?:y|ies)\b[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Microsoft Teams: "Reply (3)" parenthesised count.
+_THREAD_REPLY_PAREN_RE = re.compile(
+    r"^[ \t]*Reply\s*\((?P<count>\d{1,4})\)[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Discord: "12 messages" (the platform calls them messages not replies).
+_THREAD_MESSAGES_RE = re.compile(
+    r"^[ \t]*(?P<count>\d{1,4})\s+messages?(?:\s*[\u203A>\u2192])?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Slack/Discord: "Last reply 2h ago" standalone line. We capture it
+# so that if it appears NEXT to a count-bearing line we can attach
+# the last_reply tail. Also recognised on its own as a thread marker
+# (count=0) -- a "Last reply" footer always implies a parent thread.
+_LAST_REPLY_RE = re.compile(
+    r"^[ \t]*(?:Last|Latest)\s+repl(?:y|ies)\s+"
+    r"(?P<last>[^\n]{1,40})[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Slack: bare "View thread" footer -- a thread exists but the
+# printed count is missing.
+_VIEW_THREAD_RE = re.compile(
+    r"^[ \t]*View\s+thread[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Discord: "Replying in thread" mid-message marker. Indicates this
+# message is itself in a sub-thread, but for our purposes we record
+# it as a thread marker (count=0) so dashboards see the engagement.
+_REPLYING_IN_THREAD_RE = re.compile(
+    r"^[ \t]*Replying\s+in\s+thread[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+_MAX_THREADS = 20
+
+
+def _clean_last_reply(text: str | None) -> str | None:
+    """Normalise a captured 'last reply' tail to lowercase + stripped."""
+    if not text:
+        return None
+    s = text.strip()
+    s = s.rstrip(".,;:")
+    s = re.sub(r"\s+", " ", s)
+    return s.lower() or None
+
+
+def _extract_threads(text: str) -> list[dict]:
+    """Return thread-reply marker entries found in ``text``.
+
+    Each entry is a ``{"count": int, "last_reply": str | None,
+    "sender": str | None}`` dict. ``count`` is the integer count
+    parsed from the footer (0 when only a bare ``View thread`` /
+    ``Replying in thread`` / ``Last reply`` shape was matched).
+    ``last_reply`` is the optional time tail (``2h ago`` /
+    ``just now``). ``sender`` is the speaker the marker is
+    attached to (nearest preceding ``Sender:`` transcript line).
+
+    Ordering preserves first-seen-in-OCR offset. De-dupes on the
+    (count, last_reply, sender) tuple so a footer printed twice
+    in the same screenshot collapses to one entry. Capped at 20.
+    """
+    if not text:
+        return []
+    # Sender pattern reuses the conventional ``NAME: text`` shape but
+    # ignores transcript-line lookalikes that ARE thread markers
+    # themselves (``Thread: 4 replies``, ``Reply (3)``, ``View thread``,
+    # ``Last reply...``, ``Replying in thread``) so they don't get
+    # mis-attributed as a sender for the NEXT marker.
+    sender_re = re.compile(r"^(?P<sender>[A-Z][A-Za-z0-9 _\-]{1,24}):\s+\S")
+    _skip_sender_lookalikes: tuple[str, ...] = (
+        "thread", "reply", "view", "last", "latest", "replying",
+    )
+
+    line_starts: list[int] = []
+    pos = 0
+    for ln in text.splitlines(keepends=True):
+        line_starts.append(pos)
+        pos += len(ln)
+    sender_at_line: list[str | None] = []
+    current: str | None = None
+    for ln in text.splitlines():
+        sm = sender_re.match(ln)
+        if sm:
+            name = sm.group("sender").strip()
+            # Reject sender candidates that are actually thread-marker
+            # keywords (``Thread: 4 replies``, ``Reply (3)``, etc.).
+            if name.lower() not in _skip_sender_lookalikes:
+                current = name
+        sender_at_line.append(current)
+
+    def _sender_for(offset: int) -> str | None:
+        for k, _start in enumerate(line_starts):
+            if k + 1 == len(line_starts) or line_starts[k + 1] > offset:
+                return sender_at_line[k] if k < len(sender_at_line) else None
+        return None
+
+    candidates: list[tuple[int, dict]] = []
+    consumed_spans: list[tuple[int, int]] = []
+
+    def _overlaps(s: int, e: int) -> bool:
+        for cs, ce in consumed_spans:
+            if s < ce and e > cs:
+                return True
+        return False
+
+    # Pass 1 (most specific): "Thread - 4 replies" tagged form.
+    # Runs before bare "4 replies" so the tag survives.
+    for m in _THREAD_TAGGED_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        count = int(m.group("count"))
+        entry: dict = {"count": count, "last_reply": None}
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    # Pass 2: Teams "Reply (3)" parenthesised count.
+    for m in _THREAD_REPLY_PAREN_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        count = int(m.group("count"))
+        entry = {"count": count, "last_reply": None}
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    # Pass 3: Slack "N replies, last reply ... ago" or just "N replies".
+    # Records the count and (if present) the inline last-reply tail.
+    for m in _THREAD_REPLIES_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        count = int(m.group("count"))
+        last = _clean_last_reply(m.group("last"))
+        entry = {"count": count, "last_reply": last}
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    # Pass 4: Discord "12 messages ›" form. Restricted to messages
+    # followed by an optional chevron / arrow so a chat transcript
+    # line like ``12 messages: hello`` doesn't false-positive
+    # (the pattern requires end-of-line).
+    for m in _THREAD_MESSAGES_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        count = int(m.group("count"))
+        entry = {"count": count, "last_reply": None}
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    # Pass 5: standalone "Last reply X ago" line. Implies a thread
+    # exists but the printed count isn't on this line. Emit count=0
+    # so dashboards know the marker is present without inflating
+    # the actual reply count.
+    for m in _LAST_REPLY_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        last = _clean_last_reply(m.group("last"))
+        # Try to attach this last_reply to a count-bearing entry on
+        # an ADJACENT line (one line above or below). If so, merge.
+        attached = False
+        for offset, ent in candidates:
+            if ent.get("last_reply"):
+                continue
+            # Distance check: same offset or +/- ~80 chars (one line).
+            if abs(offset - m.start()) <= 120:
+                ent["last_reply"] = last
+                attached = True
+                break
+        if attached:
+            consumed_spans.append((m.start(), m.end()))
+            continue
+        # Standalone -- emit count=0 entry.
+        entry = {"count": 0, "last_reply": last}
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    # Pass 6: bare "View thread" footer. Lowest-priority because
+    # the count-bearing footers above carry more info.
+    for m in _VIEW_THREAD_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        entry = {"count": 0, "last_reply": None}
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    # Pass 7: bare "Replying in thread" marker.
+    for m in _REPLYING_IN_THREAD_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        entry = {"count": 0, "last_reply": None}
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    candidates.sort(key=lambda x: x[0])
+    out: list[dict] = []
+    seen: set[tuple[int, str, str]] = set()
+    for _off, entry in candidates:
+        key = (
+            int(entry.get("count") or 0),
+            entry.get("last_reply") or "",
+            entry.get("sender") or "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(entry)
+        if len(out) >= _MAX_THREADS:
+            break
+    return out
+
+
 def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
     text = ocr.text or ""
     platform = (existing.platform if existing and existing.platform else None) or _guess_platform(text)
@@ -2105,6 +2358,30 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         seen_forwards.add(fk)
         forwards.append(f)
 
+    # Thread-reply marker footers (5 replies / Thread - 4 replies /
+    # Reply (3) / View thread / Last reply 2h ago). De-dupes on the
+    # (count, last_reply, sender) tuple. Caller order preserved
+    # first.
+    threads: list[dict] = list(existing.threads) if existing else []
+    seen_threads: set[tuple[int, str, str]] = set()
+    for t in threads:
+        tk = (
+            int(t.get("count") or 0),
+            t.get("last_reply") or "",
+            t.get("sender") or "",
+        )
+        seen_threads.add(tk)
+    for t in _extract_threads(text):
+        tk = (
+            int(t.get("count") or 0),
+            t.get("last_reply") or "",
+            t.get("sender") or "",
+        )
+        if tk in seen_threads:
+            continue
+        seen_threads.add(tk)
+        threads.append(t)
+
     return ChatFields(
         platform=platform,
         participants=participants,
@@ -2119,4 +2396,5 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         polls=polls,
         pins=pins,
         forwards=forwards,
+        threads=threads,
     )

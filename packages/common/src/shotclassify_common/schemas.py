@@ -1351,6 +1351,48 @@ class ChatFields(BaseModel):
     # message propagation chains (a high-forward-count thread is
     # often misinformation in real-world Telegram / WhatsApp).
     forwards: list[dict[str, str | None]] = Field(default_factory=list)
+    # Thread-reply marker detection. Slack, Discord, Microsoft Teams,
+    # and some chat clients render a small footer beneath messages
+    # that received sub-thread replies, surfacing the count of
+    # replies and (optionally) the time of the most recent reply:
+    #
+    #   Slack:
+    #     2 replies
+    #     Last reply 2h ago
+    #     5 replies   Last reply 3m ago
+    #     View thread
+    #     1 reply
+    #
+    #   Discord:
+    #     12 messages ›
+    #     Thread - 4 replies
+    #     Replying in thread
+    #
+    #   Teams:
+    #     Reply (3)
+    #     3 replies
+    #
+    # Each entry is a ``{"count": int, "last_reply": str | None,
+    # "sender": str | None}`` dict.
+    #
+    # * ``count`` is the number of replies the thread contains
+    #   (parsed from the integer in the footer). For ``View thread``
+    #   bare footers without a count, this is ``0`` because the
+    #   thread exists but the printed count is unknown.
+    # * ``last_reply`` is the elapsed-time tail ``2h ago`` /
+    #   ``3m ago`` / ``just now`` when printed, or ``None`` when
+    #   the platform doesn't surface one.
+    # * ``sender`` is the speaker the thread-marker is attached to
+    #   (the nearest preceding ``Sender:`` line) when extractable,
+    #   or ``None`` for floating footers.
+    #
+    # Ordering preserves first-seen-in-OCR order. Capped at 20
+    # entries because a single screenshot rarely shows more than
+    # a handful of thread footers. Dashboards use this list to
+    # surface "this thread has 4 sub-replies" annotations and to
+    # detect engagement spikes (a 100-reply thread is a notable
+    # discussion).
+    threads: list[dict] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):
