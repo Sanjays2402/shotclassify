@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (132 features tracked, 115 complete)
+## Roadmap (132 features tracked, 120 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -194,6 +194,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 138. [x] Code: function-complexity heuristic (new `CodeFields.complexity` list of `{name, complexity}` dicts; McCabe-style cyclomatic complexity per function; base 1 + 1 per decision point: if/elif/else if, for/while, case/when, catch/except, boolean operators and/or/&&/||, ternary ? :; `else` does NOT add 1 because it has no condition (only `elif`/`else if` do); language coverage Python def/async def (indentation-delimited body) + JS/TS function/arrow (brace-delimited) + Java/Kotlin/Scala/C# methods + Go func + Rust fn; function-body extraction is language-aware with brace-matching for C-family that's string-literal-aware so `{`/`}` inside strings don't confuse the matcher; `else if` lookbehind on bare `\bif\b` matcher prevents double-counting in C-family; Java method matcher uses keyword guard rejecting if/for/while/switch/catch/else/do/try/synchronized name false-positives; pure-data + shell langs return []; anonymous arrows tag as `<anonymous>`; documented trade-offs: lexical scan counts keyword occurrences inside comments + strings, nested functions reported separately AND contribute to outer's count; LLM wire format updated).
 
 
+### Done in tick 24 (5 features)
+143. [x] Error: Vue.js component error parsing (new framework='vue'; detection requires literal `[Vue warn]:` prefix combined with one of: Error in v-on handler / Error in render / Error in <lifecycle> hook / Error in callback for watcher / Error in setup function / Error in directive <name> hook / Unhandled error during execution / Hydration <kind> mismatch; placed BEFORE generic Node branch because Vue runs on JS runtime and bare _JS_AT pattern would steal a Vue capture's JS stack tail; exception slot prefers quoted inner exception ("TypeError: x") when present, otherwise slot name itself becomes exception class (HydrationNodeMismatch / VueUnhandledError(<slot>) / Vue<Slot>Error); quoted-error regex makes exception prefix optional so bare "Error: msg" lands as exc="Error"; file slot is innermost .vue file from `found in` tree (---> <Foo> at src/Foo.vue) with fallback to <ComponentTag> for either arrow-prefixed OR `at <Tag>` bare Vue3 unhandled-handler shape; line always None because Vue warn handler doesn't print per-frame line numbers; 20-cause _vue_likely_cause catalogue with TYPED-exception hints checked BEFORE slot hints so TypeError+undefined surfaces "optional chaining" hint instead of generic "mounted hook" hint; Vue 2 (Error in v-on handler shape) + Vue 3 (Unhandled error / Hydration mismatch shapes) covered; case-insensitive throughout; exposed via public parse_vue_error() alias mirroring parse_swift_crash convention).
+137. [x] Document: heading-hierarchy detection into `DocumentFields.headings` (list of `{level, text}` dicts; 3 recognised shape families: Markdown ATX `# h1` to `###### h6` with 7+ hashes rejected and optional trailing closing-hash-run stripped, Markdown setext text-line + `===`/`---` divider with `\1{2,}` backreference enforcing same-character runs so mixed `=-=-=` rejects + blank-above-divider rejects + list-item-above-divider rejects, Numbered `1. Chapter` -> h1 / `1.1 Section` -> h2 / depth capped at 6 to mirror HTML h6 max; per-line claim-set so `## 1.1 Section` doesn't double-count; numbered safety rejects body starting with digit (pure-numeric quantities), >80 chars body (long prose), body starting with `#` (avoids ATX-inside-numbered double-counting); text normalisation collapses internal whitespace + strips trailing colon/period; sorted by source-text appearance offset; cap 100 entries; enrich_document plumbing: caller's non-empty headings preserved, empty backfilled from regex; LLM wire format uses DocumentFields.model_fields kwargs splat so headings passes through automatically).
+146. [x] Extract: cross-category color-value extractor into `raw["colors"]` (list of `{model, value}` dicts; 9 recognised models: hex (#FF5733 / #fa3 short / #FF5733AA alpha / 0xFF5733 Android/Java literal), rgb (comma OR space CSS-4 OR slash-alpha forms), hsl (with deg/rad/turn/grad units on hue + negative hue), hsv (non-CSS but common in design tools), oklch / oklab / lab / lch (CSS-4 perceptual spaces preserved verbatim), named (~100 curated CSS names); SAFETY PROPERTY: common dictionary words red/blue/green/black/white/yellow/grey/gray are INTENTIONALLY EXCLUDED from named catalogue because they appear far too often in prose; hex matcher requires #/0x prefix combined with word-boundary so bare FF5733 in OAuth state/session ID/UUID rejects; function-form matchers require function name + ( so prose word "rgb" without parens doesn't fire; RGB channel validation 0..255 with rgb(256,...) rejecting; named-catalogue uses longest-first ordering so mediumaquamarine beats aquamarine; span-claim defence so hex inside function calls doesn't double-count; dedup on (model, value) pair preserving first-seen-order; cap 100).
+145. [x] Receipt: delivery / arrival ETA extraction (new `ReceiptFields.delivery_eta` string; 6 recognised pattern families ordered most-specific-first: compound multi-word `Estimated/Expected delivery/arrival [time]: <eta>` (Amazon/Shopify/DoorDash/UberEats), Out-for-delivery `Out for delivery, arrives/arriving/ETA <time>` (USPS/FedEx), Arriving/Arrives with preposition `Arriving by/in/on/at/between <eta>` capturing preposition in value, Arriving/Arrives without preposition `Arriving 8:00 PM`, ETA bare keyword `ETA: 15 min`, Delivery bare keyword fallback `Delivery: Today 6PM` with negative-lookahead on currency amounts so `Delivery: $4.99` (delivery FEE) doesn't misfire; value cleaning: leading separator residue stripped, trailing punctuation trimmed, internal whitespace collapsed, >120 char rejected as OCR noise; LLM wire format updated; enrich_receipt backfill list updated -- caller's non-empty value preserved; distinct from delivery_fee/date slots).
+100. [x] Extract: cross-category emoji-density tally into `raw["emoji_density"]` (single float in [0.0, 1.0] representing share of non-whitespace chars participating in emoji codepoint sequence; numerator counts every base emoji codepoint PLUS modifier glue (skin-tone/variation-selector/ZWJ+next-base) so ZWJ family contributes 7 codepoints not 1; denominator excludes whitespace because OCR captures vary wildly in whitespace preservation; returns None for empty/non-string text (no signal), 0.0 for non-emoji content (legitimate "no emoji" signal distinct from None), float >0.0 when at least one emoji codepoint appears, clipped to [0.0, 1.0] defensively, rounded to 3 decimal places for stable storage; pipeline writes density even when raw["emojis"] empty because density=0.0 lets dashboards filter "emoji-free vs emoji-heavy" consistently; reuses _is_base_emoji / _is_skin_tone / _VARIATION_SELECTORS / _ZWJ from extract_emojis so codepoint-detection logic stays in one place).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -207,7 +215,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 80. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce).
 90. [ ] Receipt: barcode/QR encoding detection in OCR text (vendors print the encoded payload below the barcode -- track which lines look like the encoded payload vs the human-readable text).
 93. [ ] Chat: typing-indicator detection (the bouncing-dots animation OCR may render as `...` or `Alice is typing...`).
-100. [ ] Extract: cross-category emoji-density tally into `raw["emoji_density"]` (a single float fraction of chars that are emoji -- a quick "this capture is meme-heavy" signal).
+100. [x] Extract: cross-category emoji-density tally into `raw["emoji_density"]` (a single float fraction of chars that are emoji -- a quick "this capture is meme-heavy" signal). Shipped in tick 24.
 102. [ ] Chart: data-table fallback extraction from a chart screenshot's accompanying legend table (the small `x / y` paired columns that often sit beside the chart).
 104. [ ] Chat: voice-call / video-call duration markers (`Audio call · 1m 23s` / `Missed video call`).
 108. [ ] Code: license-header attribution chain detection (multi-license dual-licensed files that print BOTH `Licensed under MIT or Apache 2.0` shapes; expand `license` slot into a list when 2+ licenses signal).
@@ -220,15 +228,20 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 131. [ ] Receipt: lottery / scratch-card draw line detection into `ReceiptFields.lottery` (US convenience-store receipts often print `LOTTO #4231 Powerball 12345 Draw 11/04/24` lines as separate items).
 132. [ ] Chart: legend-color-to-series mapping into `ChartFields.legend_map` (legends often print `■ Q1 ■ Q2 ■ Q3 ■ Q4` with coloured swatches -- surface a list of `{color, series}` dicts).
 135. [ ] Chat: bot vs human message detection into `ChatFields.bot_messages` (Slack/Discord bot integrations are tagged with `APP` / `BOT` badges that should be surfaced separately so dashboards can filter automated vs human messages).
-137. [ ] Document: heading-hierarchy detection into `DocumentFields.headings` (list of `{level, text}` dicts from H1/H2/H3 style headings in document captures -- useful for outlining slide decks / docs / wiki pages).
+137. [x] Document: heading-hierarchy detection into `DocumentFields.headings` (list of `{level, text}` dicts from H1/H2/H3 style headings in document captures -- useful for outlining slide decks / docs / wiki pages). Shipped in tick 24.
 139. [ ] Chart: error-bar / confidence-interval detection into `ChartFields.has_error_bars` (bool flag indicating the chart shows uncertainty intervals).
 142. [ ] Chat: reply-with-photo / reply-with-video marker into `ChatFields.media_replies` (Slack/Discord rendering of attachment-in-reply differs from regular attachment block).
-143. [ ] Error: Vue.js component error parsing (new framework='vue'; `Error in v-on handler` / `Error in callback for watcher` / `Error in render function` / `Error in mounted hook` patterns with component-path tail).
-145. [ ] Receipt: estimated-arrival / delivery-eta extraction into `ReceiptFields.delivery_eta` (DoorDash / Uber Eats / Amazon receipts print `Arriving by 8:45 PM` / `Delivery: Today 6-7 PM` / `Estimated arrival: Wed Jun 10`; useful for "this purchase arrived late" analytics).
-146. [ ] Extract: cross-category color-hex extractor into `raw["colors"]` (CSS / Tailwind / Figma screenshots reference `#FF5733` / `rgb(255,87,51)` / `hsl(11, 100%, 60%)` / `oklch(0.8 0.1 30)` -- surface as list of `{model, value}` dicts for design-system tooling).
+143. [x] Error: Vue.js component error parsing (new framework='vue'; `Error in v-on handler` / `Error in callback for watcher` / `Error in render function` / `Error in mounted hook` patterns with component-path tail). Shipped in tick 24.
+145. [x] Receipt: estimated-arrival / delivery-eta extraction into `ReceiptFields.delivery_eta` (DoorDash / Uber Eats / Amazon receipts print `Arriving by 8:45 PM` / `Delivery: Today 6-7 PM` / `Estimated arrival: Wed Jun 10`; useful for "this purchase arrived late" analytics). Shipped in tick 24.
+146. [x] Extract: cross-category color-hex extractor into `raw["colors"]` (CSS / Tailwind / Figma screenshots reference `#FF5733` / `rgb(255,87,51)` / `hsl(11, 100%, 60%)` / `oklch(0.8 0.1 30)` -- surface as list of `{model, value}` dicts for design-system tooling). Shipped in tick 24.
 147. [ ] Chat: link-preview block detection into `ChatFields.link_previews` (Slack/Discord/Teams render OG-card previews below shared URLs with title + description + thumbnail thumbprint -- surface as list of `{title, description, source_url}` dicts).
 148. [ ] Code: cyclomatic-complexity outlier flag in CodeFields.complexity (when a snippet has multiple functions, flag the function with the highest complexity as `outlier: true` to highlight refactor candidates; pairs with #138).
 149. [ ] PII redact: phone-number redaction mode upgrade (existing `phone` regex uses `[REDACTED:phone]` placeholder; refine to the `<PHONE>` stub form for consistency with #56 design notes).
+150. [ ] Error: React error boundary parsing (new framework='react'; recognise `componentDidCatch` / `getDerivedStateFromError` / `The above error occurred in the <App> component` / `Consider adding an error boundary` patterns with component-path tail; React 16+ error-boundary console output).
+151. [ ] Receipt: cancellation-policy notice extraction (new `ReceiptFields.cancellation_policy` -- hotel / Airbnb / flight receipts often print `Cancellation: Free until 24h before` / `Non-refundable after Dec 1` / `Cancel before 48h for full refund` policy footers; useful for "this trip is locked in" analytics).
+152. [ ] Chart: legend swatch color mapping into `ChartFields.legend_map` (legends print `■ Q1 ■ Q2 ■ Q3 ■ Q4` with coloured square swatches that OCR captures preserve as `■`/`◆`/`●` glyphs -- pair colour to series label).
+153. [ ] Code: SQL injection / unsafe query detection into `CodeFields.unsafe_queries` (recognise `cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")` f-string concatenation + `"SELECT * FROM users WHERE id = " + str(uid)` string concat + `query = "..."; cursor.execute(query)` after-the-fact concatenation; surface line offset + flagged pattern; pairs with existing dialect detection).
+154. [ ] Chat: app-integration card detection into `ChatFields.app_cards` (Slack-style rendered cards from GitHub / Linear / Jira / Figma / Asana integrations with `<App>` author + title + footer link; surface as list of `{app, title, link}` dicts; distinct from raw["urls"] because it carries the structured card context).
 
 
 ## Tick log
@@ -1440,6 +1453,83 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
       4 to lowercase form. Confirms the "letters look like
       digits" naming choice was right for the test description
       but wrong for Python identifier convention.
+
+- 2026-06-23 12:40 PT (tick 24, Cake): 5 features.
+  - 5cf837c feat(extract/error): Vue.js component error parsing (framework='vue')
+  - da83251 feat(extract/document): heading-hierarchy detection into DocumentFields.headings
+  - 4a63c82 feat(extract): cross-category color-value extractor into raw["colors"]
+  - bbbfe91 feat(extract/receipt): delivery / arrival ETA extraction into ReceiptFields.delivery_eta
+  - f52de90 feat(extract): cross-category emoji-density tally into raw["emoji_density"]
+  - Gate: ruff at baseline 536 (zero new errors, zero fixups
+    needed -- all five files written clean on first pass) +
+    pytest 5809 passed / 3 skipped in 126.55s. 223 new tests
+    across the 5 features (38 + 51 + 61 + 41 + 31 with one
+    extra test refactor for str() cast on Pyright union type).
+    New framework tag in error extractor: vue. New
+    DocumentFields shipped: headings (list[{level, text}]).
+    New ReceiptFields shipped: delivery_eta (str). Two new
+    cross-category raw keys: raw["colors"], raw["emoji_density"].
+    LLM wire format in classify/client.py updated for
+    delivery_eta; headings flows through automatic
+    model_fields kwargs splat. Roadmap refilled with 5 new
+    items (150..154 -- React error boundary, receipt
+    cancellation-policy, chart legend swatch mapping, code
+    SQL injection detection, chat app-integration cards) so
+    backlog stays at 23 open.
+    Notable design decisions:
+    * Vue branch placement: BEFORE Node branch because Vue
+      runs on JS runtime and bare _JS_AT pattern would steal
+      a Vue capture's JS stack tail. Discriminator is the
+      literal [Vue warn]: prefix combined with a recognised
+      slot (Error in v-on handler / mounted hook / render /
+      callback for watcher / Unhandled error / Hydration
+      mismatch). Vue 2 + Vue 3 shapes both supported.
+    * Quoted-error regex was tightened to make the exception
+      class prefix optional so bare ``"Error: msg"`` lands
+      as exc="Error" instead of rejecting. This caught
+      test_vue_created_hook failing on first run.
+    * Vue likely-cause checks TYPED-exception hints BEFORE
+      slot hints so TypeError+undefined/null surfaces the
+      "optional chaining" hint instead of generic "mounted
+      hook" hint. The typed hint is more actionable for
+      triage.
+    * Vue component-tag fallback regex expanded to match
+      both ``---> <Tag>`` (arrow-prefixed found-in tree)
+      AND bare ``at <Tag>`` (Vue 3 unhandled-handler shape)
+      so the file slot still populates when no .vue path
+      is printed. This caught test_vue3_unhandled_error_*
+      failing on first run.
+    * Document headings setext-divider regex needed
+      backreference ``\\1{2,}`` to enforce SAME-character
+      runs because the original ``(=|-){3,}`` alternation
+      matched each char independently and ``=-=-=`` would
+      have qualified. Caught by test_setext_mixed_chars_not_setext.
+    * Document numbered-heading regex expanded from
+      ``{0,5}`` to ``{0,9}`` segments accepted then capped
+      at level 6 downstream. Caught by
+      test_numbered_h5_h6_caps_at_6 which exercised 7-segment
+      ``1.1.1.1.1.1.1`` form -- the regex's 5-segment cap
+      was too tight even though the level was always capped
+      at 6 in _level_for_numbered.
+    * Color named catalogue intentionally EXCLUDES common
+      prose words (red / blue / green / black / white /
+      yellow / grey / gray) because they appear far too
+      often in prose to be safe matchers. Only visually-AND-
+      lexically distinctive names (rebeccapurple / coral /
+      mediumaquamarine etc) land in the catalogue.
+    * Receipt delivery_eta bare ``Delivery:`` matcher uses
+      a negative-lookahead on currency amounts so a
+      delivery FEE line ``Delivery: $4.99`` (handled by
+      delivery_fee slot) never misfires as an ETA.
+    * Emoji density pipeline writes the slot even when
+      raw["emojis"] is empty because density=0.0 is a
+      legitimate "no emoji content" signal distinct from
+      None (which means "couldn't compute"). Non-whitespace
+      denominator chosen so OCR captures with varying
+      whitespace preservation compare on the same scale.
+    * Pyright caught one ``str | int`` union type issue on
+      ``"Hello" in out[0]["text"]`` -- wrapped in ``str()``
+      cast for type-narrowing. No runtime change.
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
