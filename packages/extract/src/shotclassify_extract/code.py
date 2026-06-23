@@ -4789,11 +4789,12 @@ _JAVA_KEYWORD_NAMES: frozenset[str] = frozenset({
 
 def extract_complexity(
     code: str, language: str | None = None
-) -> list[dict[str, int | str]]:
+) -> list[dict[str, int | str | bool]]:
     """Return per-function cyclomatic complexity scores.
 
-    The output is a list of ``{"name", "complexity"}`` dicts, one
-    per detected function. Order preserves first-seen-in-source.
+    The output is a list of ``{"name", "complexity", "outlier"}``
+    dicts, one per detected function. Order preserves first-seen-
+    in-source.
 
     Detection is per-language:
       * Python: ``def`` / ``async def`` bodies (indentation).
@@ -4805,6 +4806,21 @@ def extract_complexity(
     For anonymous arrow functions where the name cannot be derived,
     the entry name is ``<anonymous>``.
 
+    The ``outlier`` flag is set to ``True`` for the SINGLE highest-
+    complexity function when:
+      * Two or more functions are detected, AND
+      * That function's complexity is >= 10 (the standard McCabe
+        threshold for "high complexity"), AND
+      * That function's complexity is STRICTLY greater than every
+        other function's complexity (no tie).
+
+    The 10-floor avoids flagging "highest-of-trivially-low" cases
+    (a function with complexity 3 in a snippet where the next is 2
+    isn't a refactor candidate). The strict-greater rule avoids
+    arbitrary tie-breaking when two functions share the same
+    high score. ``outlier`` is ``False`` for every other function
+    and for every function when no outlier criteria are met.
+
     Pure-data and shell languages return ``[]`` because the
     "function" concept doesn't apply uniformly.
     """
@@ -4814,7 +4830,7 @@ def extract_complexity(
     if lang in _NO_IMPORT_LANGUAGES:
         return []
 
-    results: list[dict[str, int | str]] = []
+    results: list[dict[str, int | str | bool]] = []
 
     # Python: def / async def
     if lang in {"python", "py", ""} or "def " in code:
@@ -4822,7 +4838,7 @@ def extract_complexity(
             name = m.group("name")
             body = _python_function_body(code, m)
             score = _count_complexity_in_body(body, _COMPLEXITY_KEYWORDS_PY)
-            results.append({"name": name, "complexity": score})
+            results.append({"name": name, "complexity": score, "outlier": False})
 
     # JS / TS
     js_active = lang in {"javascript", "typescript", "ts", "tsx", "jsx", "js"} or (
@@ -4837,7 +4853,7 @@ def extract_complexity(
             close_brace = _find_matching_brace(code, open_brace)
             body = code[open_brace + 1:close_brace]
             score = _count_complexity_in_body(body, _COMPLEXITY_KEYWORDS_JS)
-            results.append({"name": name, "complexity": score})
+            results.append({"name": name, "complexity": score, "outlier": False})
 
     # Java / Scala / C#
     if lang in {"java", "scala", "csharp", "c#"}:
@@ -4851,7 +4867,7 @@ def extract_complexity(
             close_brace = _find_matching_brace(code, open_brace)
             body = code[open_brace + 1:close_brace]
             score = _count_complexity_in_body(body, _COMPLEXITY_KEYWORDS_JAVA)
-            results.append({"name": name, "complexity": score})
+            results.append({"name": name, "complexity": score, "outlier": False})
 
     # Kotlin
     if lang == "kotlin":
@@ -4863,7 +4879,7 @@ def extract_complexity(
             close_brace = _find_matching_brace(code, open_brace)
             body = code[open_brace + 1:close_brace]
             score = _count_complexity_in_body(body, _COMPLEXITY_KEYWORDS_KOTLIN)
-            results.append({"name": name, "complexity": score})
+            results.append({"name": name, "complexity": score, "outlier": False})
 
     # Go
     if lang in {"go", "golang"}:
@@ -4875,7 +4891,7 @@ def extract_complexity(
             close_brace = _find_matching_brace(code, open_brace)
             body = code[open_brace + 1:close_brace]
             score = _count_complexity_in_body(body, _COMPLEXITY_KEYWORDS_GO)
-            results.append({"name": name, "complexity": score})
+            results.append({"name": name, "complexity": score, "outlier": False})
 
     # Rust
     if lang in {"rust", "rs"}:
@@ -4887,7 +4903,31 @@ def extract_complexity(
             close_brace = _find_matching_brace(code, open_brace)
             body = code[open_brace + 1:close_brace]
             score = _count_complexity_in_body(body, _COMPLEXITY_KEYWORDS_RUST)
-            results.append({"name": name, "complexity": score})
+            results.append({"name": name, "complexity": score, "outlier": False})
+
+    # Outlier flagging: identify the single highest-complexity
+    # function and mark it as outlier=True when criteria are met.
+    # Criteria:
+    #   1. At least 2 functions detected.
+    #   2. Top function's complexity >= 10 (McCabe high-complexity
+    #      threshold).
+    #   3. Top function's complexity is STRICTLY greater than the
+    #      next-highest (no tie -- avoid arbitrary picks when two
+    #      functions both have complexity 12).
+    if len(results) >= 2:
+        sorted_scores = sorted(
+            (int(r["complexity"]) for r in results), reverse=True
+        )
+        top = sorted_scores[0]
+        next_ = sorted_scores[1]
+        if top >= 10 and top > next_:
+            # Find the FIRST function with the top score (preserves
+            # first-seen order when there's a deterministic single
+            # winner).
+            for r in results:
+                if int(r["complexity"]) == top:
+                    r["outlier"] = True
+                    break
 
     return results
 

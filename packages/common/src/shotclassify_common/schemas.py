@@ -1385,7 +1385,7 @@ class CodeFields(BaseModel):
     unused_imports: list[str] = Field(default_factory=list)
     # Per-function cyclomatic-complexity-like score for each
     # function definition detected in the snippet. Each entry is a
-    # ``{"name": str, "complexity": int}`` dict.
+    # ``{"name": str, "complexity": int, "outlier": bool}`` dict.
     #
     # The score approximates McCabe's cyclomatic complexity by
     # counting decision points inside the function body:
@@ -1400,6 +1400,21 @@ class CodeFields(BaseModel):
     # The base value is 1 (a function with no branches has
     # complexity 1) plus one for each decision point inside the
     # body. A function with 12 branches yields complexity 13.
+    #
+    # The ``outlier`` flag is set to ``True`` for the SINGLE
+    # highest-complexity function in the snippet when:
+    #
+    #   * Two or more functions are detected, AND
+    #   * That function's complexity is >= 10 (the standard McCabe
+    #     "high complexity" threshold), AND
+    #   * That function's complexity is STRICTLY greater than every
+    #     other function's complexity (no tie).
+    #
+    # Dashboards use this flag to highlight refactor candidates in
+    # multi-function snippets without forcing a per-function rank
+    # calculation. Single-function snippets and trivially-simple
+    # snippets never set the flag because there's no useful
+    # outlier-vs-baseline contrast.
     #
     # Language coverage: Python (``def`` / ``async def`` bodies
     # delimited by indentation), JavaScript / TypeScript
@@ -1422,7 +1437,7 @@ class CodeFields(BaseModel):
     # this to flag "this function has 12 branches" on code-review
     # screenshots, surfacing potentially overcomplicated
     # functions for refactoring attention.
-    complexity: list[dict[str, int | str]] = Field(default_factory=list)
+    complexity: list[dict[str, int | str | bool]] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):

@@ -18,13 +18,13 @@ from shotclassify_extract.code import enrich_code, extract_complexity
 def test_python_no_branches_returns_1():
     code = "def f():\n    return 1\n"
     out = extract_complexity(code, "python")
-    assert out == [{"name": "f", "complexity": 1}]
+    assert out == [{"name": "f", "complexity": 1, "outlier": False}]
 
 
 def test_python_one_if_returns_2():
     code = "def f(x):\n    if x:\n        return 1\n    return 0\n"
     out = extract_complexity(code, "python")
-    assert out == [{"name": "f", "complexity": 2}]
+    assert out == [{"name": "f", "complexity": 2, "outlier": False}]
 
 
 def test_python_if_elif_else_returns_3():
@@ -39,32 +39,32 @@ def test_python_if_elif_else_returns_3():
         "        return 3\n"
     )
     out = extract_complexity(code, "python")
-    assert out == [{"name": "f", "complexity": 3}]
+    assert out == [{"name": "f", "complexity": 3, "outlier": False}]
 
 
 def test_python_for_loop_returns_2():
     code = "def f():\n    for i in range(10):\n        print(i)\n"
     out = extract_complexity(code, "python")
-    assert out == [{"name": "f", "complexity": 2}]
+    assert out == [{"name": "f", "complexity": 2, "outlier": False}]
 
 
 def test_python_while_loop_returns_2():
     code = "def f():\n    while True:\n        break\n"
     out = extract_complexity(code, "python")
-    assert out == [{"name": "f", "complexity": 2}]
+    assert out == [{"name": "f", "complexity": 2, "outlier": False}]
 
 
 def test_python_try_except_returns_2():
     code = "def f():\n    try:\n        x = 1\n    except ValueError:\n        x = 2\n"
     out = extract_complexity(code, "python")
-    assert out == [{"name": "f", "complexity": 2}]
+    assert out == [{"name": "f", "complexity": 2, "outlier": False}]
 
 
 def test_python_and_or_in_condition():
     """``if a and b or c`` -> 1 base + if + and + or = 4."""
     code = "def f(a, b, c):\n    if a and b or c:\n        return 1\n    return 0\n"
     out = extract_complexity(code, "python")
-    assert out == [{"name": "f", "complexity": 4}]
+    assert out == [{"name": "f", "complexity": 4, "outlier": False}]
 
 
 def test_python_match_case_returns_3():
@@ -78,13 +78,13 @@ def test_python_match_case_returns_3():
         "            return 'two'\n"
     )
     out = extract_complexity(code, "python")
-    assert out == [{"name": "f", "complexity": 3}]
+    assert out == [{"name": "f", "complexity": 3, "outlier": False}]
 
 
 def test_python_async_def():
     code = "async def f():\n    if True:\n        return 1\n"
     out = extract_complexity(code, "python")
-    assert out == [{"name": "f", "complexity": 2}]
+    assert out == [{"name": "f", "complexity": 2, "outlier": False}]
 
 
 def test_python_multiple_functions():
@@ -100,8 +100,8 @@ def test_python_multiple_functions():
         "    return 3\n"
     )
     out = extract_complexity(code, "python")
-    assert {"name": "simple", "complexity": 1} in out
-    assert {"name": "branchy", "complexity": 3} in out
+    assert {"name": "simple", "complexity": 1, "outlier": False} in out
+    assert {"name": "branchy", "complexity": 3, "outlier": False} in out
 
 
 def test_python_nested_function():
@@ -144,40 +144,40 @@ def test_python_high_complexity_function():
 def test_js_function_no_branches():
     code = "function f() { return 1; }"
     out = extract_complexity(code, "javascript")
-    assert out == [{"name": "f", "complexity": 1}]
+    assert out == [{"name": "f", "complexity": 1, "outlier": False}]
 
 
 def test_js_function_with_if():
     code = "function f(x) { if (x) { return 1; } return 0; }"
     out = extract_complexity(code, "javascript")
-    assert out == [{"name": "f", "complexity": 2}]
+    assert out == [{"name": "f", "complexity": 2, "outlier": False}]
 
 
 def test_js_function_with_else_if():
     code = "function f(x) { if (x) {} else if (x == 0) {} else {} }"
     out = extract_complexity(code, "javascript")
     # 1 base + if + else if = 3
-    assert out == [{"name": "f", "complexity": 3}]
+    assert out == [{"name": "f", "complexity": 3, "outlier": False}]
 
 
 def test_js_function_with_logical_and_or():
     code = "function f(a, b, c) { if (a && b || c) return 1; }"
     out = extract_complexity(code, "javascript")
     # 1 base + if + && + || = 4
-    assert out == [{"name": "f", "complexity": 4}]
+    assert out == [{"name": "f", "complexity": 4, "outlier": False}]
 
 
 def test_js_arrow_function():
     code = "const f = (x) => { if (x) return 1; return 0; };"
     out = extract_complexity(code, "javascript")
-    assert out == [{"name": "f", "complexity": 2}]
+    assert out == [{"name": "f", "complexity": 2, "outlier": False}]
 
 
 def test_js_try_catch():
     code = "function f() { try { x(); } catch (e) { y(); } }"
     out = extract_complexity(code, "javascript")
     # 1 base + catch = 2
-    assert out == [{"name": "f", "complexity": 2}]
+    assert out == [{"name": "f", "complexity": 2, "outlier": False}]
 
 
 def test_js_switch_case():
@@ -221,7 +221,7 @@ def test_js_multiple_functions():
 def test_java_method_no_branches():
     code = "public void f() { return; }"
     out = extract_complexity(code, "java")
-    assert out == [{"name": "f", "complexity": 1}]
+    assert out == [{"name": "f", "complexity": 1, "outlier": False}]
 
 
 def test_java_method_with_if():
@@ -250,7 +250,7 @@ def test_java_method_with_switch():
 def test_go_func_no_branches():
     code = "func f() int { return 1 }"
     out = extract_complexity(code, "go")
-    assert out == [{"name": "f", "complexity": 1}]
+    assert out == [{"name": "f", "complexity": 1, "outlier": False}]
 
 
 def test_go_func_with_if():
@@ -278,7 +278,7 @@ def test_go_method_with_receiver():
 def test_rust_fn_no_branches():
     code = "fn f() -> i32 { 1 }"
     out = extract_complexity(code, "rust")
-    assert out == [{"name": "f", "complexity": 1}]
+    assert out == [{"name": "f", "complexity": 1, "outlier": False}]
 
 
 def test_rust_fn_with_if():
@@ -308,7 +308,7 @@ def test_rust_fn_with_match():
 def test_kotlin_fun_no_branches():
     code = "fun f(): Int { return 1 }"
     out = extract_complexity(code, "kotlin")
-    assert out == [{"name": "f", "complexity": 1}]
+    assert out == [{"name": "f", "complexity": 1, "outlier": False}]
 
 
 def test_kotlin_fun_with_when():
@@ -400,7 +400,7 @@ def test_enrich_backfills_complexity():
     code = "def f(x):\n    if x:\n        return 1\n    return 0\n"
     ocr = OCRResult(text=code, word_count=10, mean_confidence=0.9)
     out = enrich_code(None, ocr)
-    assert out.complexity == [{"name": "f", "complexity": 2}]
+    assert out.complexity == [{"name": "f", "complexity": 2, "outlier": False}]
 
 
 def test_enrich_preserves_caller_complexity():
@@ -410,11 +410,11 @@ def test_enrich_preserves_caller_complexity():
     caller = CodeFields(
         language="python",
         code="def f(): pass\n",
-        complexity=[{"name": "llm_provided", "complexity": 99}],
+        complexity=[{"name": "llm_provided", "complexity": 99, "outlier": False}],
     )
     ocr = OCRResult(text="def f(): pass\n", word_count=3, mean_confidence=0.9)
     out = enrich_code(caller, ocr)
-    assert out.complexity == [{"name": "llm_provided", "complexity": 99}]
+    assert out.complexity == [{"name": "llm_provided", "complexity": 99, "outlier": False}]
 
 
 def test_enrich_no_functions_returns_empty():
