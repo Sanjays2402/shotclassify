@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (112 features tracked, 90 complete)
+## Roadmap (117 features tracked, 95 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -154,6 +154,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 111. [x] Code: TODO ticket-link extraction into `CodeFields.todo_tickets` (list of `{marker, ticket}` dicts; three ticket-reference shapes in priority order: JIRA-style PROJECT-NUMBER (2-10 ALL-CAPS letters + hyphen + 1-6 digits), hash-slug `#identifier-NUMBER` (2-20 lowercase letters + hyphen + 1-6 digits), GitHub hash-number `#NUMBER` (1-6 digits with trailing word-boundary); per-line span-claim discipline so JIRA-1234 isn't mis-tagged as slug or its trailing digits as hash-num; marker discipline mirrors detect_todo_count + extract_todo_authors -- ALL-CAPS spelling required, must be inside a comment body, trailing-alphanum defence rejects TODOIST/XXXX/BUGGY; ticket can sit BEFORE or AFTER the marker on same line; last-marker-wins attribution on multi-marker lines; pure data languages (json/csv/tsv) return [] unconditionally; cap 50; dedupe intentionally NOT done; LLM wire-format updated; can coexist with todo_authors so TODO(alice): #1234 populates both slots).
 
 
+### Done in tick 19 (5 features)
+106. [x] Error: Apollo Client / Apollo Server GraphQL error parsing (new framework='apollo'; placed AFTER GraphQL JSON branch so real `errors[]` responses still tag as 'graphql', BEFORE python/node/framework branches so bare `ApolloError: Network error:` doesn't mis-tag as 'node'; three recognised shapes: bracketed `[GraphQLError: msg]` / `[ApolloError: msg]` for stringified array entries from JS array of error objects, top-level `ApolloError: msg` for Apollo Client wrapper, typed Apollo Server exception classes AuthenticationError/ForbiddenError/UserInputError/ValidationError/PersistedQueryNotFoundError/PersistedQueryNotSupportedError/MissingFieldError/ApolloServerError/ApolloError/SyntaxError; safety property: typed-server-exception shapes ONLY count as Apollo when Apollo-vocabulary anchor (Apollo/GraphQLError/gql`/useQuery/useMutation/@apollo/*/apolloServer/apolloClient/apollo-server/apollo-client/resolveType/graphql) sits in same text -- without anchor names like SyntaxError/ValidationError collide with built-in JS classes from form-libraries; exception priority bracket > toplevel > typed; file/line from innermost JS `at file.ts:N:M` frame using existing _JS_AT pattern; 20+ cause hints covering both Apollo Client wrappers (Network error subclassifiers: fetch-failed/timeout/abort, GraphQL error subclassifiers: syntax/cannot-query-field) AND server typed exception classes).
+115. [x] Extract: cross-category currency-pair extractor into `raw["fx_pairs"]` (list of `{base, quote, rate}` dicts; recognises slash-separated USD/EUR / BTC/USDT, dash-separated BTC-USDT (Coinbase/Kraken), with rate forms EUR/JPY @ 158.40 / BTC/USD: 67000.00 / BTC/USDT 67000, spaces-around-slash BTC / USD, thousands grouping 67,234.50 normalised; safety: BOTH sides MUST be in curated catalogue (40 ISO 4217 fiat codes + ~60 top-by-market-cap crypto tickers including stablecoins USDT/USDC/DAI/BUSD/TUSD/FRAX/GUSD/USDD/USDP/PYUSD and wrapped variants WETH/WBTC/WSOL/STETH/WSTETH); identical base+quote (USD/USD) rejected; filesystem paths (/usr/bin/env), date ranges (2024/01/15), generic ratios (5/10), English prose uppercase (THE/AND) all rejected by catalogue gating; word-boundary defence on both ends; rate alternation orders comma-grouped form FIRST with + quantifier so plain integer 67000 falls through to plain-integer alternative rather than chopped to 670; trailing [A-Za-z\d] negative-lookahead blocks rate-stealing; RMB canonicalised to CNY; dedupe on (base, quote) with first-seen rate winning; cap 50; pipeline writes raw["fx_pairs"] for every category).
+116. [x] Code: dependency version-pin extraction into `CodeFields.dep_pins` (list of `{ecosystem, package, version}` dicts; 8 recognised ecosystems: npm (`"react": "^18.2.0"` package.json including @scoped/name), pip (`requests==2.31.0` / `flask>=2.0,<3.0` / `requests[socks]==2.31.0` requirements.txt with extras stripping + range specs + inline #comment stripping), cargo (`serde = "1.0"` simple form + `tokio = { version = "1.0", features = [...] }` table-form with span-claim defence so simple-form doesn't double-count), gem (`gem 'rails', '~> 7.0'` Gemfile single+double quote), composer (`"monolog/monolog": "^2.5"` mandatory vendor/package shape, runs BEFORE npm), go (`require github.com/x/y v1.2.3` + bare-in-require-block, module path MUST contain dot/hostname so `require module v1` rejected), maven (`<groupId>foo</groupId><artifactId>bar</artifactId><version>1.0</version>` inline XML), gradle (`implementation 'com.example:lib:1.0'` + testImplementation/api/runtimeOnly/compileOnly/annotationProcessor/kapt/ksp); ecosystem detection uses per-SHAPE pattern matching NOT surrounding language tag so mixed-manifest snippets tag each line independently; blocklist on generic header words (package/name/version/library/dependency/deps/section) prevents JSON header keys from registering as fake npm deps; dedupe on (ecosystem, package, version) triple; cap 100; LLM wire-format updated).
+109. [x] Receipt: refund-reason extraction (new `ReceiptFields.refund_reason` str; freeform reason text captured verbatim case-preserved; three recognised shapes in priority order: compound keyword form `Refund Reason:` / `Void Reason:` / `Return Reason:` / `Cancellation Reason:` / `Reversal Reason:` (fires unconditionally because keyword itself is anchor), bare `Reason:` keyword (ONLY when refund_amount also detected to provide anchor context, prevents `Reason: subscription renewal` on normal sales from misfiring), inline `Refund - <reason>` / `Refund: <reason>` / `Void - ...` / `Return: ...` / `Cancelled: ...` / `Voided: ...` / `Returned: ...` (same-line refund keyword + separator + reason); safety property: _clean_reason rejects pure numbers, currency amounts ($12.50/-25.00), status words alone (transaction/sale/payment/amount/total which follow Void/Cancel on totals lines), captures >120 chars (OCR noise); trailing .,;: punctuation stripped; last-match-wins within each priority tier; LLM wire-format updated; enrich_receipt backfill list updated).
+98. [x] Receipt: line-item modifier / customisation detection (new `ReceiptLine.modifiers` list of `{kind, text, price}` dicts; 4 kinds: add (+ Add bacon, + Extra cheese, sigil OR word-prefix Add/Extra/With/w/), remove (- No onions, - Hold the mayo, sigil OR word-prefix No/Without/w/o/Hold/Omit/Skip/Less), sub (* Substitute fries, * Swap fries, sigil OR word-prefix Sub/Substitute/Swap/Replace), note (bare indented freeform text); indentation detected BEFORE strip() so we route indented lines to modifier parser; sigil-prefix forms fire whether line indented or not (sigil is distinctive signal), word-prefix forms REQUIRE indentation (otherwise legitimate item `Add Pizza Special` would mis-tag); note kind only fires for bare indented short text (1..60 chars) with NO trailing price tail; remove sigil `-` explicitly excludes following digit so `- 5.00` not mis-tagged; modifier-with-price-tail detection: when line matches BOTH modifier sigil AND bare desc+price shape, modifier interpretation wins because sigil is stronger signal; attachment to MOST RECENT item; per-item cap 10 modifiers; modifier-shaped line at top with no preceding item silently dropped; LLM wire-format updated).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -167,21 +175,21 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 80. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce).
 90. [ ] Receipt: barcode/QR encoding detection in OCR text (vendors print the encoded payload below the barcode -- track which lines look like the encoded payload vs the human-readable text).
 93. [ ] Chat: typing-indicator detection (the bouncing-dots animation OCR may render as `...` or `Alice is typing...`).
-98. [ ] Receipt: line-item modifier / customisation detection (the indented `+ Add bacon` / `- No onions` / `Extra cheese` sublines beneath an item).
 99. [ ] Code: secret/key-literal sniffing into `CodeFields.suspected_secrets` (literal strings that look like API keys / DB credentials / OAuth secrets even when not detected by the typed redact modes).
 100. [ ] Extract: cross-category emoji-density tally into `raw["emoji_density"]` (a single float fraction of chars that are emoji -- a quick "this capture is meme-heavy" signal).
 102. [ ] Chart: data-table fallback extraction from a chart screenshot's accompanying legend table (the small `x / y` paired columns that often sit beside the chart).
 104. [ ] Chat: voice-call / video-call duration markers (`Audio call · 1m 23s` / `Missed video call`).
-106. [ ] Error: Apollo Client / Apollo Server GraphQL error parsing (the `ApolloError: ...` shape with `extensions.code`).
 108. [ ] Code: license-header attribution chain detection (multi-license dual-licensed files that print BOTH `Licensed under MIT or Apache 2.0` shapes; expand `license` slot into a list when 2+ licenses signal).
-109. [ ] Receipt: refund-reason extraction (the freeform reason text printed alongside a refund line: `Refund - damaged goods` / `Refund: customer changed mind`).
 110. [ ] Chat: pin / star / favorite marker detection (the small `📌 Pinned` / `⭐ Starred` / `Pinned by Alice` indicators on Slack / iMessage / WhatsApp).
 112. [ ] Error: Sentry breadcrumb trail extraction (the `Breadcrumbs` block above the stacktrace listing user actions and HTTP calls).
 113. [ ] Receipt: tip-jar QR/web URL extraction (Square / Stripe-Terminal print `Tip QR: tip.example.com/abc` line; pair with `raw["urls"]` extractor).
 114. [ ] Chart: axis-tick numeric range inference (parse the min..max tick labels into `ChartFields.axes` numeric range for sparkline-like analysis).
-115. [ ] Extract: cross-category currency-pair extractor into `raw["fx_pairs"]` (forex / crypto pair format `USD/EUR` / `BTC-USDT` / `EUR/JPY @ 158.40` typically appearing in trading screenshots).
-116. [ ] Code: dependency-version-pin extraction into `CodeFields.dep_pins` (parse `package@1.2.3` / `package==1.2.3` / `package^1.2.0` ranges from snippets that show package.json / requirements.txt / Cargo.toml content).
 117. [ ] Chat: read-receipt avatar-row detection (the row of small reactor avatars iMessage / Telegram shows below a popular message).
+118. [ ] Extract: cross-category Twilio SID extractor into `raw["twilio_ids"]` (typed prefix + 32 hex shape: AC<32hex> account, SM<32hex> sms message, MM<32hex> mms, CA<32hex> call, RE<32hex> recording, WA<32hex> whatsapp, etc).
+119. [ ] Chat: poll / survey detection (Telegram / Slack / Discord render polls with `📊 Poll: <question>` headers and `Option N: 0 votes` body lines into new `ChatFields.polls`).
+120. [ ] Receipt: customer-name / address-block extraction for shipping receipts (e-commerce captures include `Ship To: Alice Smith / 123 Main St / Springfield, IL 62704` blocks into new `ReceiptFields.ship_to`).
+121. [ ] Code: dead-code marker detection into `CodeFields.dead_code` (eslint-disable / pylint-disable / # noqa / // nolint annotations into list of `{tool, code}` dicts).
+122. [ ] Extract: cross-category trading-strategy/position notation into `raw["positions"]` (`5 ETH @ $3500 long`, `+0.5 BTC short @ 67000`, `100 AAPL @ 175 call $200 strike` from trading-app screenshots).
 
 
 ## Tick log
@@ -891,6 +899,122 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
       marker lines for deterministic behaviour.
       Coexists with todo_authors so TODO(alice): #1234
       populates both slots without overlap.
+
+- 2026-06-22 17:43 PT (tick 19, Cake): 5 features.
+  - f4661f4 feat(extract/error): Apollo Client / Apollo Server error parsing (framework='apollo')
+  - bb6c60a feat(extract): cross-category currency-pair extractor into raw["fx_pairs"]
+  - c45a1bd feat(extract/code): dependency version-pin extraction into CodeFields.dep_pins
+  - 8fba774 feat(extract/receipt): refund-reason extraction into ReceiptFields.refund_reason
+  - 0bdcbba feat(extract/receipt): line-item modifier / customisation extraction into ReceiptLine.modifiers
+  - Gate: ruff at baseline 536 (two fixups folded via
+    --fixup + --autosquash before push -- one E501 line-
+    too-long fixup in code.py wrapping the maven dep
+    catalogue comment across multiple lines, plus one
+    N802 fixup on the test_typed_error_with_useQuery_anchor
+    test renaming the camelCase 'useQuery' fragment to
+    lowercase 'usequery' so ruff's lowercase-test-name
+    enforcement passes) + pytest 4495 passed / 3 skipped
+    in 154.80s. 267 new tests across the 5 features
+    (39 + 63 + 66 + 52 + 47). New ReceiptFields shipped:
+    refund_reason (str). New ReceiptLine field shipped:
+    modifiers (list of {kind, text, price} dicts). New
+    CodeFields shipped: dep_pins (list of {ecosystem,
+    package, version} dicts). One new error framework:
+    'apollo' (placed AFTER GraphQL JSON branch so real
+    errors[] responses still tag as 'graphql', BEFORE
+    python/node/framework branches so bare ApolloError
+    text doesn't mis-tag as 'node'). One new
+    cross-category raw key: raw["fx_pairs"]. LLM wire
+    format in classify/client.py updated for
+    refund_reason, modifiers, dep_pins. Roadmap refilled
+    with 5 new items (118..122 -- Twilio SID extractor,
+    chat polls, receipt ship_to address block, code
+    dead-code markers, trading positions notation) so
+    backlog stays at 23 open. Notable design decisions:
+    * Apollo: anchor-required defence is the key safety
+      property -- the typed-server-exception classes
+      (AuthenticationError / ForbiddenError /
+      UserInputError / ValidationError /
+      PersistedQueryNotFoundError) ONLY count as Apollo
+      when an Apollo-vocabulary anchor (Apollo /
+      GraphQLError / gql` / useQuery / useMutation /
+      @apollo/* / apolloServer / apolloClient /
+      apollo-server / apollo-client / resolveType /
+      graphql) sits in same text. Without the anchor
+      check, names like ValidationError from form-
+      libraries (joi/yup/zod/class-validator/express-
+      validator) would mis-tag innocent JS captures as
+      Apollo. The bracketed [GraphQLError: ...] and
+      top-level ApolloError: shapes fire unconditionally
+      because they're sufficiently distinctive on their
+      own. Priority: bracket > toplevel > typed.
+    * fx_pairs: BOTH-sides-in-catalogue gating is the
+      key safety property -- a half-validated pair like
+      USD/RED would be almost certainly noise (an
+      off-by-one slash in a sentence). The 100-token
+      curated catalogue covers 40 fiat ISO 4217 codes +
+      ~60 top-by-market-cap crypto tickers including
+      stablecoins (USDT/USDC/DAI/BUSD/TUSD/FRAX/GUSD/
+      USDD/USDP/PYUSD) and wrapped variants
+      (WETH/WBTC/WSOL/STETH/WSTETH). Rate alternation
+      orders the comma-grouped form FIRST with the `+`
+      quantifier so a plain integer (67000) falls
+      through to the second alternative rather than
+      being chopped to 670. RMB canonicalises to CNY
+      for stable dedupe.
+    * dep_pins: ecosystem detection uses per-SHAPE
+      pattern matching NOT the surrounding language
+      tag because OCR captures often mix multiple
+      manifest formats (a blog post quoting both a
+      requirements.txt and a package.json fragment).
+      Composer's mandatory vendor/package shape runs
+      BEFORE generic npm so composer's
+      "vendor/package": "1.0" lines don't mis-tag as
+      npm. Cargo table-form runs FIRST with span-claim
+      defence so the simple-form pass doesn't
+      double-count the tokio = { version = "1.0" } line.
+      Go module-name MUST contain a dot (real go paths
+      are registry-hostname-prefixed) so 'require module
+      v1' prose mention rejected. Blocklist on generic
+      header words (package/name/version/library/
+      dependency/deps/section) prevents JSON header
+      keys '"name": "my-app"' from registering as
+      fake npm deps.
+    * refund_reason: bare 'Reason:' keyword ONLY
+      counts when refund_amount also detected -- the
+      anchor-required defence prevents a normal-sale
+      receipt with 'Reason: subscription renewal' from
+      misfiring as a refund. Compound forms (Refund
+      Reason: / Void Reason: / Return Reason:) fire
+      unconditionally because the keyword itself is the
+      anchor. The _clean_reason helper rejects pure
+      numbers, currency amounts, status words alone
+      (transaction/sale/payment/amount/total which
+      follow Void/Cancel on totals lines), captures
+      >120 chars (OCR noise). Last-match-wins within
+      each priority tier.
+    * modifiers: indentation detected BEFORE strip()
+      so we can route indented lines to the modifier
+      parser when no item-shape matches. Sigil-prefix
+      forms (+/-/* ) fire whether the source line is
+      indented OR not because the sigil itself is the
+      distinctive signal. Word-prefix forms (Add /
+      Extra / No / Without / Hold / Sub / Substitute /
+      etc) ONLY fire when the source line is INDENTED
+      -- without that defence, a legitimate item like
+      'Add Pizza Special' on a non-indented line would
+      mis-tag as an add-modifier of the previous item.
+      Note kind only fires for bare indented short text
+      (1..60 chars) with NO trailing price tail (a
+      price would make it a regular item, not a note).
+      Remove sigil '-' explicitly excludes a following
+      digit so '- 5.00' (negative number) isn't
+      mis-tagged. Modifier-with-price-tail
+      detection: when a line matches BOTH the modifier
+      sigil AND the bare desc+price shape (e.g.
+      '+ Add bacon 2.00'), the modifier
+      interpretation wins because the sigil is the
+      stronger signal.
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
