@@ -499,6 +499,45 @@ class ReceiptFields(BaseModel):
     # case). Capped at 10 entries because real-world split-bill
     # receipts rarely exceed 4-6 components.
     tenders: list[dict[str, str | float]] = Field(default_factory=list)
+    # Recurring / subscription charge marker. SaaS invoices and
+    # subscription-billing receipts (Netflix, Spotify, Adobe, AWS,
+    # Stripe-issued, monthly meal-kits) print a distinctive marker
+    # to tell the customer this is an automatic recurring charge,
+    # not a one-off purchase:
+    #
+    #   Recurring monthly
+    #   Auto-renew
+    #   Subscription
+    #   Auto-renews on 2024-03-15
+    #   Next charge: 2024-03-15
+    #   Renews on April 1, 2024
+    #   Monthly subscription
+    #   Annual subscription
+    #   Billed monthly
+    #   This is a recurring charge
+    #
+    # Each entry is a ``{"interval": str | None, "next_charge": str
+    # | None, "keyword": str}`` dict.
+    #
+    # * ``interval`` is the canonical billing cadence tag inferred
+    #   from the keyword: ``monthly`` / ``annual`` / ``weekly`` /
+    #   ``quarterly`` / ``daily`` / ``yearly`` (alias for annual) /
+    #   ``biweekly`` / ``semiannual`` / ``trial`` / ``None`` when
+    #   the receipt only said "recurring" / "subscription" without
+    #   the cadence.
+    # * ``next_charge`` is the captured next-billing-date as a
+    #   string (preserved verbatim from the receipt, format varies
+    #   by merchant) when printed alongside the marker, or
+    #   ``None``.
+    # * ``keyword`` is the literal marker phrase that fired so
+    #   dashboards can render "recognised as: Auto-renew on
+    #   2024-03-15" without recomputing.
+    #
+    # ``None`` when the receipt is a one-off purchase (most
+    # receipts). Dashboards use this to surface "this customer
+    # spent $50 of recurring revenue this month" without having
+    # to read every receipt.
+    recurring: dict[str, str | None] | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 

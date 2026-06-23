@@ -137,6 +137,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             points_earned=r.get("points_earned"),
             tip_url=r.get("tip_url"),
             tenders=r.get("tenders") or [],
+            recurring=r.get("recurring"),
             items=items,
         )
     if c := fields_in.get("code"):

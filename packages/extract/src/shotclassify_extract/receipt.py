@@ -2590,6 +2590,257 @@ def _parse_items(text: str) -> list[ReceiptLine]:
     return items[:30]
 
 
+def _find_recurring(text: str) -> dict[str, str | None] | None:
+    """Return recurring / subscription marker dict, or None.
+
+    Returns a dict with keys ``interval`` (canonical cadence tag
+    or None), ``next_charge`` (next-billing date verbatim or None),
+    and ``keyword`` (the literal phrase that fired the matcher).
+
+    Recognised markers fall into three families:
+
+    1. **Cadence-bearing keywords** (most specific): ``Monthly
+       subscription``, ``Annual subscription``, ``Recurring
+       monthly``, ``Billed monthly``, ``Renews monthly``, ``Charged
+       weekly``, ``Quarterly subscription``, etc.
+    2. **Auto-renew keywords**: ``Auto-renew``, ``Auto renews``,
+       ``Automatic renewal``, ``Renews on <date>``.
+    3. **Subscription / recurring keywords** (least specific):
+       ``Subscription``, ``Recurring charge``, ``Recurring
+       payment``, ``This is a recurring charge``.
+
+    Distinct from a one-off charge: a regular retail / restaurant
+    receipt has NO recurring keyword, so this returns None for
+    99% of receipts.
+
+    Side-effect: if a ``Next charge: <date>`` or ``Renews on
+    <date>`` is printed on the SAME line or one of the next 2
+    lines after the recurring keyword, the date is captured into
+    ``next_charge``.
+
+    Trial-period markers (``Free trial``, ``Trial ends on X``,
+    ``Trial expires``) are tagged as ``interval='trial'`` because
+    a trial that ends triggers a real subscription charge -- the
+    dashboard surfaces these so the user can audit upcoming
+    automatic conversions.
+
+    Safety:
+    * Bare ``subscribe`` / ``subscription`` matchers require
+      the keyword to be standalone or preceded by a structural
+      character (line-start, colon, period, space) so prose
+      like ``Subscriber count`` doesn't false-positive.
+    * Bare ``Monthly`` alone (without subscription / charge /
+      bill context) does NOT fire because plain ``Monthly``
+      sometimes appears in newsletter footers.
+    """
+    if not text:
+        return None
+    # Map of keyword -> canonical interval tag. Order MATTERS --
+    # longest / most-specific patterns first so the multi-word
+    # forms beat the bare aliases.
+    candidates: list[tuple[re.Pattern, str | None]] = [
+        # Cadence-bearing multi-word forms. Longer / more-specific
+        # patterns come FIRST so "Semi-annual subscription" beats
+        # "Annual subscription" and "Biweekly subscription" beats
+        # "Weekly subscription".
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Semi-annual subscription)",
+            re.IGNORECASE,
+        ), "semiannual"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Biweekly subscription)",
+            re.IGNORECASE,
+        ), "biweekly"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Monthly subscription)",
+            re.IGNORECASE,
+        ), "monthly"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Annual subscription)",
+            re.IGNORECASE,
+        ), "annual"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Yearly subscription)",
+            re.IGNORECASE,
+        ), "annual"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Weekly subscription)",
+            re.IGNORECASE,
+        ), "weekly"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Quarterly subscription)",
+            re.IGNORECASE,
+        ), "quarterly"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Daily subscription)",
+            re.IGNORECASE,
+        ), "daily"),
+        # Billed / charged + cadence.
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Billed monthly)",
+            re.IGNORECASE,
+        ), "monthly"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Billed annually)",
+            re.IGNORECASE,
+        ), "annual"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Billed weekly)",
+            re.IGNORECASE,
+        ), "weekly"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Billed quarterly)",
+            re.IGNORECASE,
+        ), "quarterly"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Charged monthly)",
+            re.IGNORECASE,
+        ), "monthly"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Charged annually)",
+            re.IGNORECASE,
+        ), "annual"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Recurring monthly)",
+            re.IGNORECASE,
+        ), "monthly"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Recurring annually)",
+            re.IGNORECASE,
+        ), "annual"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Recurring weekly)",
+            re.IGNORECASE,
+        ), "weekly"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Renews monthly)",
+            re.IGNORECASE,
+        ), "monthly"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Renews annually)",
+            re.IGNORECASE,
+        ), "annual"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Renews weekly)",
+            re.IGNORECASE,
+        ), "weekly"),
+        # Trial markers.
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Free trial)",
+            re.IGNORECASE,
+        ), "trial"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Trial period)",
+            re.IGNORECASE,
+        ), "trial"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Trial ends)",
+            re.IGNORECASE,
+        ), "trial"),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Trial expires)",
+            re.IGNORECASE,
+        ), "trial"),
+        # Auto-renew family.
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Auto[\- ]renews)",
+            re.IGNORECASE,
+        ), None),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Auto[\- ]renew)",
+            re.IGNORECASE,
+        ), None),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Automatic renewal)",
+            re.IGNORECASE,
+        ), None),
+        # Recurring family.
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Recurring charge)",
+            re.IGNORECASE,
+        ), None),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Recurring payment)",
+            re.IGNORECASE,
+        ), None),
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Recurring billing)",
+            re.IGNORECASE,
+        ), None),
+        # Bare subscription.
+        (re.compile(
+            r"(?:(?<=\n)|(?<=^)|(?<=[^a-z]))(Subscription)\b",
+            re.IGNORECASE,
+        ), None),
+    ]
+    for pat, interval in candidates:
+        m = pat.search(text)
+        if not m:
+            continue
+        keyword = m.group(1).strip()
+        # Look for a next-charge / renewal date on the same or next
+        # 2 lines.
+        next_charge = _find_next_charge_date(text, m.end())
+        return {
+            "interval": interval,
+            "next_charge": next_charge,
+            "keyword": keyword,
+        }
+    return None
+
+
+# Next-charge date patterns: ``Next charge: 2024-03-15`` /
+# ``Renews on April 1, 2024`` / ``Renewal: 2024-03-15`` etc.
+_NEXT_CHARGE_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(
+        r"(?:Next charge|Next billing|Next payment)"
+        r"[\s:#\-]+(?P<date>[A-Za-z0-9 ,/\-:.]{4,40})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:Renews on|Renewal date|Renewal on|Renews)"
+        r"[\s:#\-]+(?P<date>[A-Za-z0-9 ,/\-:.]{4,40})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:Auto[\- ]renews on)"
+        r"[\s:#\-]+(?P<date>[A-Za-z0-9 ,/\-:.]{4,40})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:Trial ends on|Trial expires on)"
+        r"[\s:#\-]+(?P<date>[A-Za-z0-9 ,/\-:.]{4,40})",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _find_next_charge_date(text: str, after_offset: int) -> str | None:
+    """Find a next-charge date within ~3 lines of ``after_offset``.
+
+    We search the WHOLE remaining text rather than just the
+    adjacent lines because a Stripe-issued receipt often prints
+    the recurring keyword in the header and the next-charge date
+    in the body. Returns ``None`` when no recognised date pattern
+    fires.
+    """
+    if not text:
+        return None
+    # Search both BEFORE and AFTER the marker because some
+    # receipts print the renewal date in the header (above the
+    # keyword) and others print it below.
+    for pat in _NEXT_CHARGE_PATTERNS:
+        for m in pat.finditer(text):
+            date = m.group("date").strip()
+            # Strip trailing punctuation / phrases.
+            date = re.sub(r"\s+(at|in|until|by|via|to)\s+.*$", "", date, flags=re.IGNORECASE)
+            date = date.rstrip(",.;:")
+            date = date.strip()
+            if date and len(date) >= 4:
+                return date
+    return None
+
+
 def _compute_tip_percent(
     tip: float | None, subtotal: float | None, total: float | None
 ) -> float | None:
@@ -2663,6 +2914,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         points_earned=_find_points_earned(text),
         tip_url=_find_tip_url(text),
         tenders=_find_tenders(text),
+        recurring=_find_recurring(text),
         items=_parse_items(text),
     )
 
@@ -2679,7 +2931,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "register_id", "cashier", "server", "signature",
         "service_charge", "delivery_fee", "tendered", "change",
         "rounding", "gift_card_applied", "promo_code", "points_earned",
-        "tip_url",
+        "tip_url", "recurring",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
@@ -2701,6 +2953,11 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     # printed lines.
     if not merged.tenders:
         merged.tenders = parsed.tenders
+    # Backfill recurring marker when caller supplied none. The LLM
+    # may surface the subscription marker; if not, the regex pass
+    # fills it from the printed keyword.
+    if merged.recurring is None:
+        merged.recurring = parsed.recurring
     # Recompute tip_percent against the merged tip + subtotal/total so a
     # caller that only supplied a subtotal still gets a derived percent
     # when the OCR pass discovered the tip.
