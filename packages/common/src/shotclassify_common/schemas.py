@@ -1069,6 +1069,61 @@ class ChatFields(BaseModel):
     # notes" annotations and to bias OCR rescans toward the
     # photo / video frames.
     attachments: list[dict[str, str | None]] = Field(default_factory=list)
+    # Poll / survey blocks detected in the screenshot. Telegram,
+    # Slack, Discord, Teams, and WhatsApp all support inline polls
+    # rendered as a header line + per-option vote-count rows:
+    #
+    #   Telegram:
+    #     📊 Poll: What's for lunch?
+    #     Option 1: Pizza - 5 votes
+    #     Option 2: Sushi - 3 votes
+    #     Option 3: Tacos - 8 votes
+    #     16 voters
+    #
+    #   Slack:
+    #     :bar_chart: Poll: Friday demo time?
+    #     1. 10am  ▓▓▓▓▓ 5
+    #     2. 2pm   ▓▓▓ 3
+    #     3. 4pm   ▓▓ 2
+    #
+    #   Discord:
+    #     📊 What's the best deploy strategy?
+    #     • Rolling: 12 votes
+    #     • Blue/green: 8 votes
+    #     • Canary: 4 votes
+    #
+    # Each entry is a ``{"question": str, "options": list[dict]}``
+    # dict where ``question`` is the poll prompt (with the ``Poll:``
+    # / emoji prefix stripped) and ``options`` is a list of
+    # ``{"label": str, "votes": int}`` dicts -- one per choice.
+    #
+    # Recognised header shapes:
+    # * Emoji-prefixed: 📊 / 📈 / 📉 / :bar_chart: / :poll:
+    # * Keyword-prefixed: ``Poll:`` / ``Survey:`` / ``Vote:`` /
+    #   ``Question:``
+    # * Mixed: ``📊 Poll: <question>`` / ``Poll: <question>`` /
+    #   ``📊 <question>``
+    #
+    # Recognised option shapes:
+    # * Numbered: ``1. Pizza - 5 votes`` / ``1) Pizza 5`` /
+    #   ``Option 1: Pizza - 5 votes``
+    # * Bulleted: ``• Pizza: 5 votes`` / ``- Pizza - 5 votes`` /
+    #   ``* Pizza (5)``
+    # * Progress-bar: ``Pizza ▓▓▓▓▓ 5`` (Slack-style bar form)
+    #
+    # Each option line MUST contain BOTH a label and a vote count
+    # to register; bare numbered lists without counts don't qualify
+    # as poll options (they'd false-positive on every numbered prose
+    # list in a chat).
+    #
+    # Ordering preserves first-seen-in-OCR order (across polls in
+    # the same screenshot). Capped at 10 polls per screenshot, each
+    # with up to 20 options. Distinct from ``messages`` because
+    # polls have structured option arrays. Dashboards use this list
+    # to surface poll results without an LLM round trip and to
+    # detect engagement spikes (a poll with >50 votes is a notable
+    # thread).
+    polls: list[dict] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):

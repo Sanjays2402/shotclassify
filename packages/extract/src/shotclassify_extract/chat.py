@@ -1107,6 +1107,222 @@ def _guess_platform(text: str) -> str | None:
     return None
 
 
+# Poll / survey block detection. Modern chat platforms (Telegram,
+# Slack, Discord, Teams, WhatsApp) render an inline poll as a
+# header line introducing the poll question followed by per-option
+# vote-count rows. The exact format varies:
+#
+#   Telegram (most common shape):
+#     📊 Poll: What's for lunch?
+#     Option 1: Pizza - 5 votes
+#     Option 2: Sushi - 3 votes
+#
+#   Slack (with bar chart):
+#     :bar_chart: Poll: Friday demo time?
+#     1. 10am  ▓▓▓▓▓ 5
+#     2. 2pm   ▓▓▓ 3
+#
+#   Discord (bullets):
+#     📊 What's the best deploy strategy?
+#     • Rolling: 12 votes
+#     • Blue/green: 8 votes
+#
+# Output is a list of {"question", "options": [{label, votes}, ...]}
+# dicts. We surface the QUESTION header text and the per-option
+# label + vote count.
+
+# Header regex: matches a line that introduces a poll. Accepts
+# emoji-prefixed (📊 / 📈 / 📉 / 📋), Slack shortcode (:bar_chart: /
+# :chart_with_upwards_trend: / :poll:), or keyword-prefixed
+# (Poll: / Survey: / Vote: / Question:) variants. The question
+# text follows; for the keyword form a trailing ``?`` is optional
+# (Telegram's poll prompts always end in ``?`` but other platforms
+# allow declarative prompts).
+_POLL_HEADER_RE = re.compile(
+    r"^\s*"
+    # Optional emoji or shortcode prefix
+    r"(?:"
+    r"(?P<emoji>[\U0001F300-\U0001F9FF]|:bar_chart:|:chart_with_upwards_trend:"
+    r"|:chart_with_downwards_trend:|:poll:|:question:|:clipboard:)"
+    r"\s*"
+    r")?"
+    # Optional keyword prefix (one of: Poll, Survey, Vote, Question, Quiz)
+    r"(?:(?P<keyword>Poll|Survey|Vote|Question|Quiz)\s*:\s*)?"
+    # The actual question text. We require either:
+    # (a) a keyword OR emoji prefix was matched, AND there's at
+    #     least one word of question text, OR
+    # (b) bare prose ending in ``?`` after the emoji prefix.
+    r"(?P<question>\S.*\S|\S)\s*$",
+)
+
+
+# Option line regex: numbered / bulleted / progress-bar shape with
+# vote count. The vote count is the LAST integer on the line OR
+# the integer immediately before/after a ``vote(s)`` keyword.
+#
+# Recognised shapes:
+#   1. Pizza - 5 votes
+#   1) Pizza 5
+#   Option 1: Pizza - 5 votes
+#   • Pizza: 5 votes
+#   - Pizza - 5 votes
+#   * Pizza (5)
+#   Pizza ▓▓▓▓▓ 5
+#   Pizza: 5 votes
+#   Pizza - 5 votes (50%)
+#
+# We split into two patterns:
+#  (1) explicit "N votes" / "N vote" trailing form
+#  (2) any structured prefix (number/bullet) with a trailing integer
+_POLL_OPTION_WITH_KEYWORD_RE = re.compile(
+    r"^\s*"
+    # Optional bullet / number prefix
+    r"(?:"
+    r"(?:[\u2022\u25CF\u25E6*\-+])\s+"   # bullet
+    r"|(?:Option\s+\d+|\d+)[.):\s]\s*"   # "Option 1:" or "1." or "1)"
+    r")?"
+    # Label: anything reasonable up to the vote count.
+    # We grab a non-greedy chunk, then require an integer + ``vote(s)``.
+    r"(?P<label>\S.{0,80}?)"
+    r"\s*(?:[\-:\u2014\u2013\u2192]|(?:\s+))\s*"
+    r"(?:\u25b3\u25b3\u25b3|[\u2588\u2589\u258A\u258B\u258C\u258D\u258E\u258F\u2592\u2593]*\s*)?"
+    r"(?P<votes>\d{1,5})\s*"
+    r"(?:votes?)\b"
+    r".*$",
+    re.IGNORECASE,
+)
+
+_POLL_OPTION_BARE_NUMBER_RE = re.compile(
+    r"^\s*"
+    # Required structured prefix: bullet, number-with-separator, or "Option N:"
+    r"(?:"
+    r"(?:[\u2022\u25CF\u25E6*])\s+"
+    r"|(?:Option\s+\d+)\s*[:.\)]\s*"
+    r"|\d+\s*[.\)]\s+"
+    r"|[\-+]\s+"
+    r")"
+    # Label
+    r"(?P<label>\S.{0,80}?)"
+    r"\s*[\-:\u2014\u2013\u2192]?\s*"
+    # Optional progress-bar visual
+    r"(?:[\u2588\u2589\u258A\u258B\u258C\u258D\u258E\u258F\u2592\u2593]+\s*)?"
+    # Trailing integer (the vote count)
+    r"(?P<votes>\d{1,5})\s*"
+    # Optional percent suffix
+    r"(?:\(\s*\d{1,3}%?\s*\))?"
+    r"\s*$"
+)
+
+
+_MAX_POLLS = 10
+_MAX_POLL_OPTIONS = 20
+
+
+def _clean_poll_question(raw: str, keyword: str | None) -> str:
+    """Strip trailing punctuation noise and normalise whitespace."""
+    text = re.sub(r"\s+", " ", raw.strip())
+    # If a keyword was already matched, the regex stripped it. Otherwise
+    # the question may still carry a leading "Poll:" / "Survey:" that
+    # our emoji-only branch left in.
+    if not keyword:
+        for kw in ("Poll:", "Survey:", "Vote:", "Question:", "Quiz:"):
+            if text.lower().startswith(kw.lower()):
+                text = text[len(kw):].strip()
+                break
+    return text
+
+
+def _clean_option_label(raw: str) -> str:
+    """Strip trailing dash/colon/whitespace from an option label."""
+    text = re.sub(r"\s+", " ", raw.strip())
+    # Strip trailing punctuation that belongs to the separator, not the label.
+    text = text.rstrip(":-\u2014\u2013\u2192 ")
+    return text
+
+
+def _extract_polls(text: str) -> list[dict]:
+    """Return poll / survey blocks found in ``text``.
+
+    Each entry is a ``{"question": str, "options": list[dict]}`` dict
+    where each option is a ``{"label": str, "votes": int}`` dict.
+
+    Detection requires BOTH a recognised header (emoji-prefixed or
+    keyword-prefixed) AND at least 2 option lines that include vote
+    counts. A header with no following options is rejected as just
+    a regular message; a numbered list with no header is rejected
+    as a regular list.
+
+    Order preserves first-seen-in-OCR-text order. Capped at 10
+    polls per screenshot; each poll capped at 20 options.
+    """
+    if not text:
+        return []
+    lines = text.splitlines()
+    n = len(lines)
+    out: list[dict] = []
+    i = 0
+    while i < n and len(out) < _MAX_POLLS:
+        ln = lines[i]
+        hm = _POLL_HEADER_RE.match(ln)
+        # Header requires either an emoji prefix OR a keyword prefix
+        # to qualify -- bare prose lines shouldn't false-positive.
+        if not hm or (not hm.group("emoji") and not hm.group("keyword")):
+            i += 1
+            continue
+        question = _clean_poll_question(hm.group("question"), hm.group("keyword"))
+        if not question:
+            i += 1
+            continue
+        # Walk forward collecting option lines. We stop at the first
+        # blank line, the first line that doesn't look like an option,
+        # or after we've collected 20 options.
+        options: list[dict] = []
+        j = i + 1
+        while j < n and len(options) < _MAX_POLL_OPTIONS:
+            opt_line = lines[j]
+            stripped = opt_line.strip()
+            if not stripped:
+                # Allow one blank line inside the poll; bail if two in a row.
+                if j + 1 < n and not lines[j + 1].strip():
+                    break
+                j += 1
+                continue
+            # Skip footer lines like "16 voters" / "Final results" etc.
+            if re.match(
+                r"^\s*(?:\d+\s+voters?|Final\s+results?|Total\s+votes?\s*:|"
+                r"Anonymous\s+poll|Poll\s+closed)\b",
+                stripped,
+                re.IGNORECASE,
+            ):
+                j += 1
+                continue
+            # Try keyword form first (more reliable when "votes" is present).
+            om = _POLL_OPTION_WITH_KEYWORD_RE.match(stripped)
+            if not om:
+                # Try bare-number form (requires structured prefix).
+                om = _POLL_OPTION_BARE_NUMBER_RE.match(stripped)
+            if not om:
+                # Not an option line -- end of this poll's options.
+                break
+            label = _clean_option_label(om.group("label"))
+            try:
+                votes = int(om.group("votes"))
+            except (ValueError, TypeError):
+                break
+            if not label:
+                break
+            options.append({"label": label, "votes": votes})
+            j += 1
+        # Require at least 2 options to register as a real poll;
+        # a single option is just a regular message about voting.
+        if len(options) >= 2:
+            out.append({"question": question, "options": options})
+            i = j  # Skip past the options we consumed.
+        else:
+            i += 1
+    return out
+
+
 def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
     text = ocr.text or ""
     platform = (existing.platform if existing and existing.platform else None) or _guess_platform(text)
@@ -1283,6 +1499,34 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         seen_attach.add(ak)
         attachments.append(a)
 
+    # Poll / survey blocks merged with any caller-supplied polls.
+    # De-dupes on the (question, tuple-of-(label, votes)) key so an
+    # LLM-supplied poll plus the OCR-parsed identical poll collapses
+    # to one entry. Caller order preserved first.
+    polls: list[dict] = list(existing.polls) if existing else []
+    seen_polls: set[tuple[str, tuple]] = set()
+    for p in polls:
+        pk = (
+            p.get("question", "") or "",
+            tuple(
+                (o.get("label", ""), o.get("votes", 0))
+                for o in p.get("options", [])
+            ),
+        )
+        seen_polls.add(pk)
+    for p in _extract_polls(text):
+        pk = (
+            p.get("question", "") or "",
+            tuple(
+                (o.get("label", ""), o.get("votes", 0))
+                for o in p.get("options", [])
+            ),
+        )
+        if pk in seen_polls:
+            continue
+        seen_polls.add(pk)
+        polls.append(p)
+
     return ChatFields(
         platform=platform,
         participants=participants,
@@ -1294,4 +1538,5 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         reactions=reactions,
         quotes=quotes,
         attachments=attachments,
+        polls=polls,
     )
