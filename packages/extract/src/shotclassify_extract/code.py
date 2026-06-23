@@ -4176,6 +4176,220 @@ def extract_suspected_secrets(code: str) -> list[dict[str, str]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Type-annotation density detection.
+# ---------------------------------------------------------------------------
+
+# Python function definitions.
+_PY_DEF_RE = re.compile(
+    r"^\s*(?:async\s+)?def\s+\w+\s*"
+    r"\((?P<args>[^)]*)\)\s*"
+    r"(?:->\s*(?P<ret>[^\n:#]+?))?"
+    r"\s*:",
+    re.MULTILINE,
+)
+
+# TypeScript / JS arrow function declarations:
+#   const foo = (x: T, y): R => {}
+#   const foo: (x: T) => R = ...
+_TS_ARROW_RE = re.compile(
+    r"(?:const|let|var)\s+\w+\s*=\s*\("
+    r"(?P<args>[^)]*)\)\s*"
+    r"(?::\s*(?P<ret>[^={\n]+?))?"
+    r"\s*=>",
+)
+
+# TypeScript / JS function declarations:
+#   function foo(x: T, y): R {}
+_TS_FUNC_RE = re.compile(
+    r"function\s+\w+\s*\("
+    r"(?P<args>[^)]*)\)\s*"
+    r"(?::\s*(?P<ret>[^{\n]+?))?"
+    r"\s*\{",
+)
+
+# Languages where type annotations are MANDATORY (Java / Kotlin /
+# Scala / Go / Rust / C# / Swift). For these we return 1.0 if any
+# function-def shape is detected, 0.0 otherwise.
+_STRICTLY_TYPED_LANGUAGES: frozenset[str] = frozenset({
+    "java", "kotlin", "scala", "go", "rust", "c#", "csharp",
+    "swift", "haskell", "ocaml", "fsharp", "f#",
+})
+
+# Loose function-def heuristic for strictly-typed languages (just
+# enough to determine "snippet contains at least one func def").
+# Java / C# patterns include access modifier + return type + name(
+# so we allow an optional word (the return type) between the
+# keyword family and the function name. Go/Rust/Kotlin have
+# func / fn / fun keywords directly.
+_FUNC_LIKE_RE = re.compile(
+    r"\b(?:func|fn|fun|def|function|public|private|protected|static|internal|"
+    r"override|virtual|abstract|sealed|partial)\s+"
+    r"(?:[\w<>\[\],\s]+\s+)?"  # optional return type / modifiers
+    r"\w+\s*\(",
+)
+
+# Generic param-with-type detector used inside Python/TS arg lists.
+# Matches ``name: type`` patterns where ``type`` can be any
+# non-comma, non-equals sequence. The ``?`` is included in the name
+# class so TS optional args like ``y?: string`` qualify as typed.
+_TYPED_ARG_RE = re.compile(r"^\s*([\w\*\?]+)\s*:\s*[^,=]+")
+
+
+def _split_args(arg_str: str) -> list[str]:
+    """Split a function-arg-list string on commas at depth-0.
+
+    Respects nested brackets / parens / braces so a complex
+    ``x: dict[str, int]`` annotation stays intact.
+    """
+    out: list[str] = []
+    depth = 0
+    buf: list[str] = []
+    for ch in arg_str:
+        if ch in "([{<":
+            depth += 1
+            buf.append(ch)
+        elif ch in ")]}>":
+            depth = max(0, depth - 1)
+            buf.append(ch)
+        elif ch == "," and depth == 0:
+            out.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        out.append("".join(buf).strip())
+    return [a for a in out if a]
+
+
+def _count_python_slots(args: str, ret: str | None) -> tuple[int, int]:
+    """Count (typed, total) slots for a Python function arg list + ret.
+
+    Excludes ``self`` and ``cls`` from both numerator and denominator.
+    """
+    typed = 0
+    total = 0
+    for arg in _split_args(args):
+        # Strip default value if present.
+        if "=" in arg:
+            arg = arg.split("=", 1)[0].strip()
+        # Strip *args / **kwargs prefix for self-exclusion check.
+        stripped = arg.lstrip("*").strip()
+        if not stripped:
+            continue
+        if stripped in ("self", "cls"):
+            continue
+        total += 1
+        # Typed if it contains a colon (Python type annotation).
+        if _TYPED_ARG_RE.match(arg):
+            typed += 1
+    # Return type slot. Counted only when the function has at least
+    # one arg slot (an empty-arg function with `-> None` is still 1/1).
+    if ret is not None and ret.strip():
+        total += 1
+        typed += 1
+    elif args.strip():
+        # Has args but no return type -- count an untyped return slot
+        # so dashboards see that the function is partially typed.
+        total += 1
+    return typed, total
+
+
+def _count_ts_slots(args: str, ret: str | None) -> tuple[int, int]:
+    """Count (typed, total) slots for a TS function arg list + ret.
+
+    Excludes ``this`` from both numerator and denominator.
+    """
+    typed = 0
+    total = 0
+    for arg in _split_args(args):
+        # Strip default value if present.
+        if "=" in arg:
+            arg = arg.split("=", 1)[0].strip()
+        # Strip optional ? suffix on TS args.
+        bare = arg.rstrip("?").strip()
+        if not bare:
+            continue
+        if bare in ("this",):
+            continue
+        # Strip destructuring / spread prefix (each char). We use a
+        # while-loop so combinations like ``...{`` also get stripped.
+        name_part = bare
+        while name_part and name_part[0] in (".", "{", "["):
+            name_part = name_part[1:]
+        if not name_part:
+            continue
+        total += 1
+        # Typed if it contains a colon.
+        if _TYPED_ARG_RE.match(arg):
+            typed += 1
+    if ret is not None and ret.strip():
+        total += 1
+        typed += 1
+    elif args.strip():
+        # Has args but no return type -- count an untyped return slot.
+        total += 1
+    return typed, total
+
+
+def detect_type_annotation_density(
+    code: str, language: str | None = None
+) -> float:
+    """Return the share of function slots that carry a type annotation.
+
+    Returns 0.0 when:
+    * The snippet is empty.
+    * The snippet contains no function definitions of the detected
+      shape (Python `def`, TS `function` / arrow).
+    * Every slot is untyped.
+
+    Returns 1.0 when every detected slot is typed (or the language
+    is strictly-typed AND at least one function-def shape is
+    detected -- e.g. Java / Kotlin / Go / Rust).
+
+    Excludes ``self`` / ``cls`` / ``this`` from both numerator and
+    denominator because they're idiomatically untyped.
+
+    The detector is language-aware: Python `def` shapes detected
+    in any snippet, TS arrow / function shapes detected when the
+    language tag is JS/TS family, strictly-typed languages return
+    1.0 when any function-def shape is present.
+    """
+    if not code or not isinstance(code, str):
+        return 0.0
+    lang = (language or "").lower()
+
+    # Strictly-typed language shortcut.
+    if lang in _STRICTLY_TYPED_LANGUAGES:
+        if _FUNC_LIKE_RE.search(code):
+            return 1.0
+        return 0.0
+
+    total_typed = 0
+    total_slots = 0
+
+    # Pass 1: Python def shapes.
+    for m in _PY_DEF_RE.finditer(code):
+        typed, total = _count_python_slots(m.group("args"), m.group("ret"))
+        total_typed += typed
+        total_slots += total
+
+    # Pass 2: TS arrow + function shapes (only when language is JS/TS family).
+    if lang in {"javascript", "typescript", "ts", "tsx", "jsx", "js"}:
+        for m in _TS_ARROW_RE.finditer(code):
+            typed, total = _count_ts_slots(m.group("args"), m.group("ret"))
+            total_typed += typed
+            total_slots += total
+        for m in _TS_FUNC_RE.finditer(code):
+            typed, total = _count_ts_slots(m.group("args"), m.group("ret"))
+            total_typed += typed
+            total_slots += total
+
+    if total_slots == 0:
+        return 0.0
+    return round(total_typed / total_slots, 2)
+
+
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     code = (existing.code if existing and existing.code else ocr.text or "").strip()
     # Markdown fence-language detection. Runs FIRST on the original
@@ -4425,6 +4639,19 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if not suspected_secrets:
         suspected_secrets = extract_suspected_secrets(code)
+    # Type-annotation density. Caller-supplied positive value wins;
+    # otherwise compute from the code body. The detector is
+    # language-aware (Python def shapes always count, TS / JS
+    # function + arrow shapes count when language is js/ts family,
+    # strictly-typed languages (Java / Go / Rust / etc) return 1.0
+    # when any function-def shape is present).
+    type_annotation_density = (
+        existing.type_annotation_density
+        if existing and existing.type_annotation_density
+        else 0.0
+    )
+    if type_annotation_density == 0.0:
+        type_annotation_density = detect_type_annotation_density(code, language)
     return CodeFields(
         language=language,
         code=code,
@@ -4451,4 +4678,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         dead_code=dead_code,
         shell_style=shell_style,
         suspected_secrets=suspected_secrets,
+        type_annotation_density=type_annotation_density,
     )

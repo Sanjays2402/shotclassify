@@ -1148,6 +1148,45 @@ class CodeFields(BaseModel):
     # 20 entries because a single snippet rarely contains more
     # than a handful of secret-shaped literals.
     suspected_secrets: list[dict[str, str]] = Field(default_factory=list)
+    # Type-annotation density of the snippet as a fraction in [0.0, 1.0]:
+    # the share of function-arg / variable / return slots that carry a
+    # type annotation. Useful for surfacing "this Python is fully
+    # typed" / "this Java has missing generics" annotations on
+    # code-review screenshots without an LLM round trip.
+    #
+    # Counts the following slots PER FUNCTION DEFINITION:
+    #
+    #   Python:
+    #     def foo(x: int, y, z: str) -> bool:    # 3 slots, 2 typed -> 0.67
+    #     def bar(x, y, z):                      # 3 slots, 0 typed -> 0.0
+    #     def baz(x: int) -> None:               # 1 slot + return -> 1.0
+    #
+    #   TypeScript:
+    #     function f(x: number, y): string {}    # 2 slots + return -> 0.67
+    #     const g = (x: T): void => {}           # 1 slot + return -> 1.0
+    #
+    #   Java / Kotlin / Scala / Go / Rust / C# / Swift:
+    #     Generally always typed (the language requires annotations
+    #     on every function arg) so this metric is less useful.
+    #     The detector returns 1.0 for these languages when at least
+    #     one function definition is detected.
+    #
+    # The denominator is total slots (args + returns) across all
+    # function definitions in the snippet. The numerator is the
+    # subset that carry a type annotation. ``self`` / ``cls`` / ``this``
+    # are excluded from both counts because they're not annotated
+    # in idiomatic code.
+    #
+    # 0.0 means "no slots are typed" (untyped Python, dynamic
+    # JavaScript). 1.0 means "every slot is typed" (a fully-typed
+    # snippet). The default 0.0 also covers snippets with NO
+    # function definitions (which dashboards interpret as "not
+    # applicable" rather than "untyped" -- check ``line_count`` to
+    # distinguish).
+    #
+    # Distinct from ``comment_density`` which is about comment
+    # coverage. This metric is about TYPE coverage.
+    type_annotation_density: float = 0.0
 
 
 class ErrorFields(BaseModel):
