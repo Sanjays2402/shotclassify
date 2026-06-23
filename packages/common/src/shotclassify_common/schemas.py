@@ -291,6 +291,35 @@ class ReceiptFields(BaseModel):
     # reduction the merchant chose) and ``change`` (the bills /
     # coins handed back); rounding is a regulatory adjustment.
     rounding: float | None = None
+    # Estimated delivery / arrival time for receipts from delivery-
+    # aggregator services (DoorDash / Uber Eats / Deliveroo / Amazon
+    # / Instacart / Shopify / Lyft / Caviar / Grubhub) and on-demand
+    # courier captures. The printer renders the ETA in one of many
+    # forms:
+    #
+    #   Arriving by 8:45 PM
+    #   Estimated delivery: Today 6-7 PM
+    #   Estimated arrival: Wed Jun 10
+    #   ETA: 12-15 min
+    #   Out for delivery, arrives 2:30 PM
+    #   Delivery: Today 6:00 PM - 7:00 PM
+    #   Expected: tomorrow by noon
+    #
+    # Stored as the cleaned ETA string verbatim (case-preserved
+    # because OCR captures often mix capitalisation in delivery
+    # apps). ``None`` for in-person retail / dine-in restaurant
+    # receipts that have no future-delivery context.
+    #
+    # Dashboards use this to compute "delivered on time" / "late"
+    # / "early" metrics by joining against actual delivery
+    # timestamps from the courier app.
+    #
+    # The detector preserves the most-specific recognisable
+    # phrasing -- when both ``Estimated delivery:`` and ``ETA:``
+    # appear on the same receipt, the explicit-keyword form
+    # wins. The bare ``Arriving by`` matcher captures the time
+    # portion only.
+    delivery_eta: str | None = None
     # Tax-jurisdiction breakdown. When a receipt prints MORE than one
     # tax line (``State Tax 1.50 / County Tax 0.50 / City Tax 0.25``,
     # ``VAT 2.00 / GST 0.50``, ``HST 1.30 / PST 0.40``, etc.) each

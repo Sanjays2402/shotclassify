@@ -3075,6 +3075,120 @@ def _compute_tip_percent(
     return round(pct, 1)
 
 
+# Delivery / arrival ETA detection. Delivery-aggregator receipts
+# (DoorDash / Uber Eats / Deliveroo / Amazon / Instacart / Lyft /
+# Caviar / Grubhub) print an estimated arrival time the customer
+# can use to plan. The detector recognises a wide vocabulary of
+# delivery-app phrasings and captures the trailing time / window
+# expression verbatim.
+#
+# Recognised compound keywords (most-specific first because
+# Python's first-match-wins ordering means a multi-word phrase
+# should beat its single-word substring):
+#
+#   Estimated delivery [time]    -- Amazon / Shopify / Instacart
+#   Estimated arrival [time]     -- DoorDash / Uber Eats
+#   Expected delivery [time]     -- Amazon
+#   Expected arrival [time]      -- generic
+#   Out for delivery, arrives    -- USPS / FedEx
+#   Arriving [by/in/on/at]       -- DoorDash status update
+#   Arrives [by/in/on/at]        -- DoorDash status
+#   ETA                          -- generic abbreviation
+#   Delivery [date/time]         -- bare keyword fallback
+#
+# The captured value is the trailing text after the keyword and
+# separator, with leading punctuation stripped and trailing
+# punctuation trimmed. Multi-line values are NOT supported (the
+# matcher anchors on the rest-of-line).
+_DELIVERY_ETA_PATTERNS: tuple[re.Pattern, ...] = (
+    # Multi-word compound forms FIRST so they beat bare aliases.
+    re.compile(
+        r"(?i)\b(?:Estimated|Expected)\s+(?:delivery|arrival)"
+        r"(?:\s+time)?\s*[:\-]\s*(?P<eta>[^\n]+?)\s*$",
+        re.MULTILINE,
+    ),
+    re.compile(
+        r"(?i)\bOut\s+for\s+delivery\s*[,\-]\s*"
+        r"(?:arriv(?:es|ing)|expected|eta)\s*[:\-]?\s*(?P<eta>[^\n]+?)\s*$",
+        re.MULTILINE,
+    ),
+    # ``Arriving by`` / ``Arriving in`` / ``Arriving at`` -- the
+    # preposition gets included in the captured value because
+    # ``Arriving 8:45 PM`` and ``Arriving by 8:45 PM`` are
+    # both legitimate phrasings.
+    re.compile(
+        r"(?i)\b(?:Arriving|Arrives)\s+(?:by|in|on|at|between)\s+"
+        r"(?P<eta>[^\n]+?)\s*$",
+        re.MULTILINE,
+    ),
+    re.compile(
+        r"(?i)\b(?:Arriving|Arrives)\s+(?P<eta>[^\n]+?)\s*$",
+        re.MULTILINE,
+    ),
+    # ``ETA:`` bare keyword form (very common in courier apps).
+    re.compile(
+        r"(?i)\bETA\s*[:\-]\s*(?P<eta>[^\n]+?)\s*$",
+        re.MULTILINE,
+    ),
+    # ``Delivery:`` bare keyword fallback -- requires explicit
+    # colon/dash separator so a line like ``Delivery $4.99`` (the
+    # delivery FEE) doesn't misfire as an ETA.
+    re.compile(
+        r"(?i)\bDelivery\s*[:\-]\s*(?P<eta>(?!\$|\d+\.\d{2})[^\n]+?)\s*$",
+        re.MULTILINE,
+    ),
+)
+
+
+def _clean_eta(value: str) -> str | None:
+    """Clean a captured ETA value: trim, strip outer punctuation."""
+    cleaned = (value or "").strip()
+    # Strip leading separator residue.
+    cleaned = cleaned.lstrip(":-,. ").rstrip(".,;: ")
+    # Reject values that look like currency amounts (the bare
+    # ``Delivery: $4.99`` form -- a delivery fee, not an ETA).
+    if re.match(r"^\$?\d+\.\d{2}$", cleaned):
+        return None
+    # Reject empty.
+    if not cleaned:
+        return None
+    # Reject very long values (>120 chars are OCR noise).
+    if len(cleaned) > 120:
+        return None
+    # Collapse internal whitespace runs.
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned
+
+
+def _find_delivery_eta(text: str) -> str | None:
+    """Return cleaned delivery ETA string, or None when no ETA marker.
+
+    Walks the ETA-pattern catalogue most-specific-first. Returns the
+    FIRST match's cleaned value because most delivery receipts print
+    AT MOST one ETA line; the most-specific phrasing wins when
+    multiple appear (compound keywords like ``Estimated delivery:``
+    beat bare ``Delivery:``).
+
+    Safety:
+    * Bare ``Delivery:`` matcher rejects when the trailing value is
+      a currency amount (``Delivery: $4.99`` -- that's a delivery
+      FEE line, not an ETA).
+    * Values >120 chars rejected as OCR noise.
+    * Multi-line values not supported -- the matchers anchor on
+      end-of-line.
+    """
+    if not text:
+        return None
+    for pat in _DELIVERY_ETA_PATTERNS:
+        m = pat.search(text)
+        if not m:
+            continue
+        eta = _clean_eta(m.group("eta"))
+        if eta:
+            return eta
+    return None
+
+
 def parse_receipt_text(text: str) -> ReceiptFields:
     subtotal = _find_amount_after(text, "subtotal")
     tax = _find_amount_after(text, "tax") or _find_amount_after(text, "vat")
@@ -3117,6 +3231,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         tenders=_find_tenders(text),
         recurring=_find_recurring(text),
         warranty=_find_warranty(text),
+        delivery_eta=_find_delivery_eta(text),
         items=_parse_items(text),
     )
 
@@ -3133,7 +3248,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "register_id", "cashier", "server", "signature",
         "service_charge", "delivery_fee", "tendered", "change",
         "rounding", "gift_card_applied", "promo_code", "points_earned",
-        "tip_url", "recurring", "warranty",
+        "tip_url", "recurring", "warranty", "delivery_eta",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
