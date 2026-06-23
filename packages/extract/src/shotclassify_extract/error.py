@@ -532,6 +532,46 @@ def parse_vue_error(text: str) -> tuple[str, str, str | None, int | None] | None
     return _parse_vue_error(text)
 
 
+def parse_react_error_boundary(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    """Return ``(exception, message, file or None, line or None)`` for
+    a React error-boundary console dump, or ``None`` when no React
+    signature is present.
+
+    React 16+ prints a distinctive error-boundary console output with
+    one of these signatures:
+
+      * ``The above error occurred in the <Component> component`` --
+        the canonical React 16+ wrapper that React Dev prepends to
+        every unhandled error inside a rendered subtree.
+      * ``React will try to recreate this component tree`` -- the
+        legacy React 15 boundary message.
+      * ``Consider adding an error boundary to your tree`` -- the
+        suggestion footer React appends when no boundary catches
+        the error.
+      * ``componentDidCatch`` / ``getDerivedStateFromError`` mentions
+        with surrounding React context (component tree, key prop
+        warning, render method) -- typed lifecycle method names.
+
+    The exception slot prefers the quoted inner exception (``Error:
+    Cannot read property...``) when present in the trace; otherwise
+    falls back to the component-name tag (``ReactRenderError(App)``).
+    The file slot is the innermost component name from the React
+    component-tree dump (``in App (at src/App.tsx:42)``), falling
+    back to ``<Component>`` form when no file is printed. The line
+    slot is captured from the same component-tree entry when
+    present.
+
+    Detection is placed BEFORE the generic Node branch because the
+    React error often includes a JS stack tail that the bare
+    _JS_AT pattern would otherwise steal as framework='node',
+    losing the React-specific signal (boundary-status, component
+    name, lifecycle method).
+    """
+    return _parse_react_error_boundary(text)
+
+
 def parse_kotlin_coroutine(
     text: str,
 ) -> tuple[str | None, str | None, str | None, int | None] | None:
@@ -2410,6 +2450,253 @@ def _vue_likely_cause(exception: str | None, message: str | None) -> str | None:
     return "Vue component error; inspect the component tree and the failing lifecycle hook."
 
 
+# React error boundary detection. React 16+ prints a distinctive
+# console output when an error bubbles up to an error boundary OR
+# when no boundary catches the error and the whole tree unmounts.
+# The output has a recognisable signature combining one of these
+# wrappers:
+#
+#   * ``The above error occurred in the <Component> component`` --
+#     the canonical React 16+ message prepended to every render-
+#     phase error not caught by an error boundary.
+#   * ``React will try to recreate this component tree`` -- the
+#     React 15 / pre-boundary legacy wrapper.
+#   * ``Consider adding an error boundary to your tree`` -- the
+#     suggestion footer React appends.
+#   * ``componentDidCatch`` / ``getDerivedStateFromError`` --
+#     typed lifecycle method names that appear in console traces
+#     when an error boundary's own handler throws.
+#
+# Plus the React component-tree dump that follows the wrapper:
+#
+#   in App (at src/App.tsx:42)
+#       in ErrorBoundary
+#       in StrictMode
+#       in Root (at src/index.tsx:18)
+_REACT_BOUNDARY_PRELUDE = re.compile(
+    r"The above error occurred in the\s*<(?P<comp>\w+)>\s*component"
+    r"|React will try to recreate this component tree"
+    r"|Consider adding an error boundary",
+    re.IGNORECASE,
+)
+# Typed lifecycle method markers (used to detect React contexts
+# where the prelude wasn't printed but the trace is clearly a
+# boundary method failure).
+_REACT_LIFECYCLE = re.compile(
+    r"\b(componentDidCatch|getDerivedStateFromError)\b"
+)
+# React component-tree entry: ``in App (at src/App.tsx:42)`` or bare
+# ``in App``. The innermost (first-printed in the tree) is the leaf
+# component where the error originated.
+_REACT_TREE_ENTRY = re.compile(
+    r"\bin\s+(?P<name>[A-Z][\w$]+)"
+    r"(?:\s*\(at\s+(?P<file>[\w./\-]+):(?P<line>\d+)\))?",
+)
+# React quoted inner exception inside the trace (Error: x is not a
+# function). React surfaces the original error class verbatim in
+# the console wrapper, prefixed before the "The above error
+# occurred" line. Reuses the standard JS exception shape with
+# optional ``Uncaught`` / ``Unhandled`` / ``Warning:`` prefix.
+_REACT_INNER_EXC = re.compile(
+    r"^(?:Uncaught\s+|Unhandled\s+)?"
+    r"(?P<exc>\w*(?:Error|Exception|Warning))\s*:\s*(?P<msg>.+?)$",
+    re.MULTILINE,
+)
+# React-specific anchor vocabulary used to discriminate the typed
+# lifecycle catch from other JS / TS code that happens to mention
+# componentDidCatch (which is React-API-specific so seldom prose).
+_REACT_VOCAB = re.compile(
+    r"(?:\b(?:React|JSX|ReactDOM|useState|useEffect|hooks?"
+    r"|component tree|boundary|StrictMode|ErrorBoundary)\b"
+    r"|render\(\))",
+    re.IGNORECASE,
+)
+
+
+def _parse_react_error_boundary(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    """Return (exception, message, file, line) for a React error, or None.
+
+    Detection requires EITHER:
+    * The ``The above error occurred in the <Comp> component`` /
+      ``React will try to recreate this component tree`` /
+      ``Consider adding an error boundary`` wrapper, OR
+    * A ``componentDidCatch`` / ``getDerivedStateFromError`` lifecycle
+      method name with React-vocabulary anchor on the same text
+      (so a generic JS string mentioning componentDidCatch in
+      prose doesn't false-positive).
+
+    The exception slot prefers a typed inner exception
+    (``Error: x is not defined``) when present in the trace;
+    otherwise composes ``ReactRenderError(<Component>)``.
+
+    The file slot is the innermost component-tree entry's ``(at
+    file:line)`` location, falling back to ``<Component>`` form
+    when no file path is printed.
+
+    Returns None when no React signature is present so the caller
+    can fall through to the generic Node branch.
+    """
+    if not text:
+        return None
+    prelude = _REACT_BOUNDARY_PRELUDE.search(text)
+    lifecycle = _REACT_LIFECYCLE.search(text)
+    # Lifecycle-only detection requires a React-vocabulary anchor
+    # for safety (componentDidCatch in prose without React context
+    # shouldn't fire).
+    if prelude is None and lifecycle is None:
+        return None
+    if prelude is None and lifecycle is not None:
+        if _REACT_VOCAB.search(text) is None:
+            return None
+
+    # Determine exception + message.
+    exc: str
+    msg: str | None = None
+
+    # Inner exception search (the typed Error / TypeError /
+    # ReferenceError line printed BEFORE the wrapper).
+    inner = _REACT_INNER_EXC.search(text)
+    if inner is not None:
+        exc = inner.group("exc").strip()
+        msg = inner.group("msg").strip()
+    else:
+        # Fallback to ``ReactRenderError(<comp>)`` when prelude
+        # carries a component name OR ``ReactBoundaryError`` for
+        # the lifecycle-only branch.
+        comp_name = None
+        if prelude is not None:
+            try:
+                comp_name = prelude.group("comp")
+            except IndexError:
+                comp_name = None
+        if comp_name:
+            exc = f"ReactRenderError({comp_name})"
+        elif lifecycle is not None:
+            method = lifecycle.group(1)
+            exc = f"ReactBoundaryError({method})"
+        else:
+            exc = "ReactBoundaryError"
+        msg = ""
+
+    # Find the innermost component-tree entry (the FIRST one
+    # printed -- React lists the leaf-most component first).
+    file_: str | None = None
+    line_: int | None = None
+    tree_match = _REACT_TREE_ENTRY.search(text)
+    if tree_match is not None:
+        file_grp = tree_match.group("file")
+        line_grp = tree_match.group("line")
+        if file_grp:
+            file_ = file_grp.strip()
+            try:
+                line_ = int(line_grp) if line_grp else None
+            except (ValueError, TypeError):
+                line_ = None
+        else:
+            # Bare ``in App`` form -- emit <Name> as the file
+            # anchor so dashboards still have a triage tag.
+            name = tree_match.group("name")
+            if name:
+                file_ = f"<{name}>"
+
+    # File slot fallback to the prelude's <Component> when no
+    # tree entry was printed.
+    if file_ is None and prelude is not None:
+        try:
+            comp = prelude.group("comp")
+            if comp:
+                file_ = f"<{comp}>"
+        except IndexError:
+            pass
+
+    return exc, msg or "", file_, line_
+
+
+def _react_likely_cause(
+    exception: str | None, message: str | None, text: str | None = None
+) -> str | None:
+    """Return operator-friendly hints for common React errors."""
+    exc = (exception or "").lower()
+    msg = (message or "").lower()
+    body = (text or "").lower()
+
+    # Typed inner exceptions checked FIRST so they win over
+    # generic React-lifecycle hints when an inner exception is
+    # detected.
+    if "typeerror" in exc:
+        if "undefined" in msg or "null" in msg:
+            return (
+                "Property access on undefined / null state or props; "
+                "check optional chaining and default values."
+            )
+        if "is not a function" in msg:
+            return (
+                "Calling a non-function value; check destructured handler "
+                "props are correctly bound."
+            )
+        return "Type mismatch in render path; check prop types and state shape."
+    if "referenceerror" in exc:
+        return (
+            "Variable not defined in render scope; check imports / hooks order."
+        )
+    if "rangeerror" in exc:
+        if "maximum update depth" in msg or "depth exceeded" in body:
+            return (
+                "Infinite render loop; setState was called inside render or "
+                "useEffect without proper deps."
+            )
+        return "Range / iteration error; check array bounds and recursion."
+    if "syntaxerror" in exc:
+        return "JSX syntax error; check unclosed tags and missing braces."
+
+    # React-specific message hints from the text body.
+    if "minified react error" in body:
+        return (
+            "Minified React error from production build; look up the error "
+            "code at reactjs.org/docs/error-decoder.html."
+        )
+    if "maximum update depth" in body or "too many re-renders" in body:
+        return (
+            "Infinite render loop; setState inside render or useEffect "
+            "without correct deps."
+        )
+    if "rendered fewer hooks than expected" in body or "rendered more hooks" in body:
+        return "Hook rules violated; hooks called conditionally or in loops."
+    if "invalid hook call" in body:
+        return "Invalid hook call; hooks only callable inside function components."
+    if "cannot update a component while rendering" in body:
+        return (
+            "setState called during render of another component; defer to "
+            "useEffect."
+        )
+    if "objects are not valid as a react child" in body:
+        return "Rendering a plain object directly; wrap it in a serialiser."
+    if "each child in a list should have a unique" in body:
+        return "Missing key prop on list items; add a stable unique key."
+    if "react.children.only expected" in body:
+        return "React.Children.only requires exactly one child element."
+    if "context.consumer requires a function" in body:
+        return "Context.Consumer expects a render-prop function as child."
+    if "componentdidcatch" in exc or "componentdidcatch" in body:
+        return (
+            "Error boundary's componentDidCatch handler itself threw; "
+            "check the boundary's recovery logic."
+        )
+    if "getderivedstatefromerror" in exc or "getderivedstatefromerror" in body:
+        return (
+            "Error boundary's getDerivedStateFromError handler threw; "
+            "ensure it returns a plain state object."
+        )
+    if "boundary" in body and "consider adding" in body:
+        return (
+            "No error boundary caught the error; wrap the failing subtree "
+            "in an <ErrorBoundary> component."
+        )
+    return "React component error; check the component tree and inspect props/state."
+
+
 # AWS Lambda / boto3 client error shapes. The botocore library is
 # the standard AWS Python SDK and prints errors using a distinctive
 # message format that embeds both the AWS error code AND the API
@@ -2778,6 +3065,32 @@ def parse_error_text(text: str) -> ErrorFields:
             exception=exc,
             message=msg,
             likely_cause=_vue_likely_cause(exc, msg),
+            file=file_,
+            line=line_,
+        )
+    elif _parse_react_error_boundary(text) is not None:
+        # React error-boundary console dump. Placed BEFORE the
+        # generic Node branch because React runs on the JS runtime
+        # and a React error often includes a JS stack tail that
+        # the bare _JS_AT would steal as framework='node', losing
+        # the React-specific signal (component name, boundary
+        # status, lifecycle method). Placed AFTER Vue because Vue
+        # uses an even more specific ``[Vue warn]:`` prefix.
+        #
+        # Discriminator: one of ``The above error occurred in the
+        # <Comp> component`` / ``Consider adding an error
+        # boundary`` / ``React will try to recreate this component
+        # tree`` wrappers, OR a typed lifecycle method
+        # (``componentDidCatch`` / ``getDerivedStateFromError``)
+        # combined with React-vocabulary anchor on the same text.
+        react_hit = _parse_react_error_boundary(text)
+        assert react_hit is not None  # narrowed by the elif guard
+        exc, msg, file_, line_ = react_hit
+        return ErrorFields(
+            framework="react",
+            exception=exc,
+            message=msg,
+            likely_cause=_react_likely_cause(exc, msg, text),
             file=file_,
             line=line_,
         )
