@@ -412,6 +412,42 @@ class ReceiptFields(BaseModel):
     # didn't credit), and benchmark per-transaction earn rates across
     # merchants.
     points_earned: int | None = None
+    # Tip-jar / digital-tip URL printed at the bottom of restaurant /
+    # cafe / service-industry receipts. Modern POS terminals (Square,
+    # Stripe Terminal, Toast, Clover, etc.) now print a short URL or
+    # QR-code target so the customer can leave a digital tip via
+    # phone instead of writing one on the printed slip. Examples:
+    #
+    #   Tip QR: tip.example.com/abc123
+    #   Scan to tip: https://tipme.app/jane
+    #   Leave a tip: tip.toasttab.com/r/123abc
+    #   Add a tip online: square.link/tip/xy7
+    #   Tip your server: https://venmo.com/u/jane
+    #   Cash App: $jane (cash app tag form)
+    #
+    # Stored as the URL string verbatim (with the ``https://`` /
+    # ``http://`` scheme preserved when printed; bare hostnames are
+    # also accepted because most printers omit the scheme to save
+    # ink). ``None`` when the receipt doesn't print a tip URL.
+    #
+    # Recognised keyword shapes (most-specific-first ordering):
+    # * ``Tip QR:`` / ``Tip URL:`` / ``Tip Link:``
+    # * ``Scan to tip`` / ``Scan to leave a tip``
+    # * ``Leave a tip`` / ``Leave a tip online`` / ``Add a tip``
+    # * ``Tip your server`` / ``Tip your driver``
+    # * ``Digital tip`` / ``Online tip``
+    # * Bare URL containing ``tip`` in the path / host
+    #
+    # Cash App tags (``$jane``) and Venmo tags (``@jane``) are
+    # captured when paired with a Cash App / Venmo keyword on the
+    # same line, but only stored as the tag (``$jane``) -- not a
+    # URL -- because the apps prefer the tag handle for routing.
+    #
+    # Distinct from ``raw["urls"]`` which captures every URL in the
+    # receipt; ``tip_url`` is the SPECIFIC tip-target URL, useful
+    # for dashboards that want to surface "this merchant has a
+    # digital tipping rate of X%" analytics.
+    tip_url: str | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 

@@ -857,6 +857,128 @@ def _find_points_earned(text: str) -> int | None:
     return None
 
 
+# Tip-jar / digital-tip URL extraction. POS terminals (Square,
+# Stripe Terminal, Toast, Clover) print a short URL or QR-code
+# target at the bottom of restaurant / cafe receipts so the
+# customer can tip via phone. Examples:
+#
+#   Tip QR: tip.example.com/abc123
+#   Scan to tip: https://tipme.app/jane
+#   Leave a tip online: tip.toasttab.com/r/123abc
+#   Add a tip: square.link/tip/xy7
+#   Tip your server: https://venmo.com/u/jane
+#   Cash App: $jane
+#
+# We surface the URL (or Cash App / Venmo tag) for dashboards that
+# want to track which merchants offer digital tipping.
+
+# Keyword catalogue, ordered most-specific-first. Each entry is a
+# (keyword-regex-fragment, vocabulary-needed) tuple where the
+# vocabulary-needed flag is True when the URL on the same line
+# must also contain "tip"-style vocabulary as a defence (the bare
+# "Scan to" / "Scan code" form would otherwise misfire on a
+# loyalty signup QR or marketing URL).
+_TIP_URL_KEYWORDS: tuple[tuple[str, bool], ...] = (
+    # Most specific: explicit "Tip URL" / "Tip QR" labels
+    (r"tip\s*(?:qr|url|link|code)", False),
+    # "Scan to tip" / "Scan to leave a tip"
+    (r"scan\s+to\s+(?:tip|leave\s+a\s+tip|leave\s+tip)", False),
+    # "Leave a tip" / "Leave a tip online" / "Add a tip"
+    (r"(?:leave|add)\s+a\s+tip(?:\s+online)?", False),
+    # "Tip your server" / "Tip your driver" / "Tip your barista"
+    (r"tip\s+your\s+(?:server|driver|barista|courier|host|stylist|guide)", False),
+    # "Digital tip" / "Online tip" / "Mobile tip"
+    (r"(?:digital|online|mobile)\s+tip", False),
+    # Bare "Tip:" followed by a URL on same line
+    (r"tip", True),
+)
+
+
+# URL pattern for the captured value. We accept both http(s):// and
+# bare hostnames because most printers omit the scheme to save ink.
+# The hostname must contain at least one dot. Path / query / fragment
+# accepted with conservative URL chars.
+_TIP_URL_VALUE = (
+    r"(?:https?://)?"
+    r"(?:[a-zA-Z0-9][a-zA-Z0-9\-]{0,62}\.)+"
+    r"[a-zA-Z]{2,24}"
+    r"(?:/[A-Za-z0-9._~\-/?#&=+%@$()*]*)?"
+)
+
+
+# Compile the URL-based keyword matchers. The ``url`` group captures
+# the URL itself.
+_TIP_URL_REGEXES: list[tuple[re.Pattern[str], bool]] = []
+for _kw, _needs_tip_in_url in _TIP_URL_KEYWORDS:
+    _pat = re.compile(
+        rf"(?<![A-Za-z])(?:{_kw})\s*[:#\-]?\s+(?P<url>{_TIP_URL_VALUE})",
+        re.IGNORECASE,
+    )
+    _TIP_URL_REGEXES.append((_pat, _needs_tip_in_url))
+
+
+# Cash App tag form: ``Cash App: $jane`` / ``$Cashtag: jane``.
+# Cash App tags are case-insensitive and 1..20 alphanumeric chars.
+_CASHAPP_TAG_RE = re.compile(
+    r"(?<![A-Za-z])(?:cash\s*app|cash\s*tag|cashapp)\s*[:#\-]?\s*"
+    r"(?P<tag>\$[A-Za-z][A-Za-z0-9_]{1,19})",
+    re.IGNORECASE,
+)
+
+# Venmo tag form: ``Venmo: @jane`` -- Venmo handles use @ prefix.
+_VENMO_TAG_RE = re.compile(
+    r"(?<![A-Za-z])(?:venmo)\s*[:#\-]?\s*"
+    r"(?P<tag>@[A-Za-z][A-Za-z0-9_\-\.]{1,29})",
+    re.IGNORECASE,
+)
+
+
+def _find_tip_url(text: str) -> str | None:
+    """Return the tip-jar URL / Cash App / Venmo tag printed on the
+    receipt, or None.
+
+    Tries each keyword catalogue entry in order (most-specific first).
+    Returns the first match. The keyword + URL must sit on the same
+    OCR line so a tipping URL doesn't accidentally pick up a
+    randomly-placed merchant URL elsewhere in the receipt.
+
+    The ``raw["urls"]`` cross-category extractor captures every URL
+    in the receipt regardless of context; this helper specifically
+    identifies the TIP URL so dashboards can surface "digital tip
+    adoption" analytics per merchant.
+
+    Cash App ``$tag`` and Venmo ``@handle`` shapes also qualify --
+    a receipt that prints ``Cash App: $jane`` returns ``$jane`` as
+    the captured value.
+    """
+    if not text:
+        return None
+    # First, try the URL-keyword matchers in priority order. We
+    # search line by line so the keyword and URL must sit on the
+    # SAME line (a tipping URL deeper in the receipt body that's not
+    # paired with a keyword is just a regular URL).
+    for line in text.splitlines():
+        for pat, needs_tip_in_url in _TIP_URL_REGEXES:
+            m = pat.search(line)
+            if not m:
+                continue
+            url = m.group("url").strip().rstrip(",.;:")
+            if needs_tip_in_url:
+                # For the bare-"tip" keyword pattern, the URL itself
+                # must contain "tip" (in host or path) as a defence.
+                if "tip" not in url.lower():
+                    continue
+            return url
+    # Fall back to Cash App / Venmo tag forms.
+    cm = _CASHAPP_TAG_RE.search(text)
+    if cm:
+        return cm.group("tag")
+    vm = _VENMO_TAG_RE.search(text)
+    if vm:
+        return vm.group("tag")
+    return None
+
+
 def _find_promo_code(text: str) -> str | None:
     """Return the promo / discount / coupon code applied, or None.
 
@@ -2340,6 +2462,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         promo_code=_find_promo_code(text),
         suggested_tips=_find_suggested_tips(text),
         points_earned=_find_points_earned(text),
+        tip_url=_find_tip_url(text),
         items=_parse_items(text),
     )
 
@@ -2356,6 +2479,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "register_id", "cashier", "server", "signature",
         "service_charge", "delivery_fee", "tendered", "change",
         "rounding", "gift_card_applied", "promo_code", "points_earned",
+        "tip_url",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
