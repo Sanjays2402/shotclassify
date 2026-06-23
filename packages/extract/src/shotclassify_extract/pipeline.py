@@ -8,6 +8,7 @@ from .amounts import extract_amounts
 from .arns import extract_arns
 from .chat import enrich_chat
 from .code import enrich_code
+from .colors import extract_colors
 from .credit_cards import extract_credit_cards
 from .crypto import extract_crypto
 from .discord_ids import extract_discord_ids
@@ -508,5 +509,35 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if percentages:
         out.raw = dict(out.raw or {})
         out.raw["percentages"] = percentages
+
+    # Cross-category: stash colour values found in the OCR text
+    # under raw["colors"]. Colours surface on every design /
+    # frontend / brand capture -- Figma / Sketch screenshots cite
+    # the colour picker's hex / rgb / hsl values, CSS / SCSS /
+    # Tailwind code declares them per-rule, design-system docs
+    # list the brand palette in named or hex form, accessibility
+    # audits annotate contrast pairs as hex codes.
+    #
+    # Each entry is a {model, value} dict where ``model`` is one
+    # of: hex / rgb / hsl / hsv / oklch / oklab / lab / lch /
+    # named. ``value`` is the canonical string form (hex
+    # lowercased + expanded from short form, function-form
+    # re-rendered with comma separators, named colour
+    # lowercased from the curated catalogue).
+    #
+    # Safety: hex requires a # or 0x prefix so bare hex blobs
+    # don't misfire. Named colours use a CURATED ~100-entry
+    # catalogue that EXCLUDES common prose words (red / blue /
+    # green / black / white / yellow / grey) so a sentence
+    # containing those words doesn't false-positive.
+    #
+    # Useful for design-system tooling (extract a theme palette
+    # from a Figma screenshot), accessibility audits (find all
+    # contrast pairs), and brand-consistency dashboards (group
+    # captures by dominant colour scheme).
+    colors = extract_colors(text)
+    if colors:
+        out.raw = dict(out.raw or {})
+        out.raw["colors"] = colors
 
     return out

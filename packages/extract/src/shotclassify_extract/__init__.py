@@ -33,6 +33,7 @@ from .code import (
     extract_todo_tickets,
     extract_unused_imports,
 )
+from .colors import extract_colors
 from .credit_cards import extract_credit_cards
 from .crypto import extract_crypto
 from .discord_ids import extract_discord_ids
@@ -156,4 +157,5 @@ __all__ = [
     "extract_percentages",
     "extract_unused_imports",
     "extract_complexity",
+    "extract_colors",
 ]
