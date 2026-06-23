@@ -1258,6 +1258,46 @@ class CodeFields(BaseModel):
     # surface a "code cleanup opportunity" annotation on code
     # captures.
     unused_imports: list[str] = Field(default_factory=list)
+    # Per-function cyclomatic-complexity-like score for each
+    # function definition detected in the snippet. Each entry is a
+    # ``{"name": str, "complexity": int}`` dict.
+    #
+    # The score approximates McCabe's cyclomatic complexity by
+    # counting decision points inside the function body:
+    #
+    #   * ``if`` / ``elif`` / ``else if``
+    #   * ``for`` / ``while``
+    #   * ``case`` / ``when`` (switch-like branches)
+    #   * ``catch`` / ``except``
+    #   * boolean operators ``and`` / ``or`` / ``&&`` / ``||``
+    #   * ternary ``? :`` (JS / C-family)
+    #
+    # The base value is 1 (a function with no branches has
+    # complexity 1) plus one for each decision point inside the
+    # body. A function with 12 branches yields complexity 13.
+    #
+    # Language coverage: Python (``def`` / ``async def`` bodies
+    # delimited by indentation), JavaScript / TypeScript
+    # (``function`` / arrow / class methods delimited by braces),
+    # Java / Kotlin / Scala / C# (method declarations delimited by
+    # braces), Go (``func`` declarations delimited by braces),
+    # Rust (``fn`` declarations delimited by braces).
+    #
+    # Functions are identified by name (the simple identifier
+    # after ``def`` / ``function`` / ``fn`` / ``func``). For
+    # anonymous arrow functions in JS / TS, the entry name is
+    # ``<anonymous>`` so dashboards can distinguish them from
+    # named functions.
+    #
+    # Pure data languages (json / csv / tsv / yaml / xml / sql)
+    # and shell languages return ``[]`` because the "function"
+    # concept doesn't apply uniformly.
+    #
+    # Empty list when no functions are detected. Dashboards use
+    # this to flag "this function has 12 branches" on code-review
+    # screenshots, surfacing potentially overcomplicated
+    # functions for refactoring attention.
+    complexity: list[dict[str, int | str]] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):

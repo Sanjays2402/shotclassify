@@ -2024,7 +2024,8 @@ def _import_check_name(stmt_kind: str, raw_value: str) -> str | None:
 # module. Distinct from the general extractor that takes only the
 # module side.
 _PY_FROM_SYMBOLS_RE = re.compile(
-    r"^\s*from\s+(?:\.+|\.*[A-Za-z_][\w.]*)\s+import\s+(?P<syms>[\w*, \t]+(?:\s+as\s+\w+)?(?:\s*,\s*\w+(?:\s+as\s+\w+)?)*)",
+    r"^\s*from\s+(?:\.+|\.*[A-Za-z_][\w.]*)\s+import\s+"
+    r"(?P<syms>[\w*, \t]+(?:\s+as\s+\w+)?(?:\s*,\s*\w+(?:\s+as\s+\w+)?)*)",
     re.MULTILINE,
 )
 
@@ -4600,6 +4601,297 @@ def _count_ts_slots(args: str, ret: str | None) -> tuple[int, int]:
     return typed, total
 
 
+# Complexity-counting decision-point patterns. We count each
+# DISTINCT decision point inside a function body as +1 to its
+# cyclomatic complexity (McCabe). Base value 1 (a no-branch
+# function has complexity 1). The total per function is:
+#
+#   complexity = 1 + sum(decision-point hits inside body)
+#
+# Recognised keywords / operators (whole-word matching only):
+#
+#   * if / elif / else if
+#   * for / while
+#   * case / when (switch / pattern-match branches)
+#   * catch / except
+#   * boolean ``and`` / ``or`` (Python) and ``&&`` / ``||`` (C-family)
+#   * ternary ``? :`` (JS / C-family)
+#
+# ``else`` itself does NOT add 1 because it has no condition;
+# only ``elif`` / ``else if`` do.
+#
+# Bool operators run as count-matches over the body so a complex
+# condition ``if a and b or c`` adds 1 (the if) + 1 (and) + 1
+# (or) = 3 to complexity, in line with how McCabe's metric is
+# typically computed.
+
+_COMPLEXITY_KEYWORDS_PY: tuple[re.Pattern, ...] = (
+    re.compile(r"\bif\b"),
+    re.compile(r"\belif\b"),
+    re.compile(r"\bfor\b"),
+    re.compile(r"\bwhile\b"),
+    re.compile(r"\bexcept\b"),
+    re.compile(r"\bcase\b"),
+    re.compile(r"\band\b"),
+    re.compile(r"\bor\b"),
+)
+
+_COMPLEXITY_KEYWORDS_JS: tuple[re.Pattern, ...] = (
+    # ``else if`` first: the bare ``if`` matcher must use a
+    # negative lookbehind to avoid double-counting the ``if`` in
+    # ``else if``.
+    re.compile(r"(?<!else\s)\bif\b"),
+    re.compile(r"\belse\s+if\b"),
+    re.compile(r"\bfor\b"),
+    re.compile(r"\bwhile\b"),
+    re.compile(r"\bcatch\b"),
+    re.compile(r"\bcase\b"),
+    re.compile(r"&&"),
+    re.compile(r"\|\|"),
+    re.compile(r"\?[^:]*:"),
+)
+
+_COMPLEXITY_KEYWORDS_JAVA: tuple[re.Pattern, ...] = (
+    re.compile(r"(?<!else\s)\bif\b"),
+    re.compile(r"\belse\s+if\b"),
+    re.compile(r"\bfor\b"),
+    re.compile(r"\bwhile\b"),
+    re.compile(r"\bcatch\b"),
+    re.compile(r"\bcase\b"),
+    re.compile(r"&&"),
+    re.compile(r"\|\|"),
+    re.compile(r"\?[^:]*:"),
+)
+
+_COMPLEXITY_KEYWORDS_GO: tuple[re.Pattern, ...] = (
+    re.compile(r"(?<!else\s)\bif\b"),
+    re.compile(r"\belse\s+if\b"),
+    re.compile(r"\bfor\b"),
+    re.compile(r"\bcase\b"),
+    re.compile(r"&&"),
+    re.compile(r"\|\|"),
+)
+
+_COMPLEXITY_KEYWORDS_RUST: tuple[re.Pattern, ...] = (
+    re.compile(r"(?<!else\s)\bif\b"),
+    re.compile(r"\belse\s+if\b"),
+    re.compile(r"\bfor\b"),
+    re.compile(r"\bwhile\b"),
+    re.compile(r"\bmatch\b"),
+    re.compile(r"&&"),
+    re.compile(r"\|\|"),
+)
+
+_COMPLEXITY_KEYWORDS_KOTLIN: tuple[re.Pattern, ...] = (
+    re.compile(r"(?<!else\s)\bif\b"),
+    re.compile(r"\belse\s+if\b"),
+    re.compile(r"\bfor\b"),
+    re.compile(r"\bwhile\b"),
+    re.compile(r"\bwhen\b"),
+    re.compile(r"\bcatch\b"),
+    re.compile(r"&&"),
+    re.compile(r"\|\|"),
+)
+
+
+_COMPLEXITY_PY_DEF_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?:async\s+)?def\s+(?P<name>\w+)\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:",
+    re.MULTILINE,
+)
+
+_COMPLEXITY_JS_FUNC_RE = re.compile(
+    r"(?:function\s+(?P<name>\w+)|"
+    r"(?:const|let|var)\s+(?P<name2>\w+)\s*=\s*(?:async\s+)?(?:function|\([^)]*\)\s*=>))",
+)
+
+_COMPLEXITY_JAVA_METHOD_RE = re.compile(
+    r"(?:^|\s)(?:public|private|protected|static|final|abstract|synchronized|override)\s+"
+    r"(?:[\w<>\[\],?\s.]+?\s+)?"
+    r"(?P<name>\w+)\s*\([^)]*\)\s*(?:throws\s+[\w,\s.]+)?\s*\{",
+    re.MULTILINE,
+)
+
+_COMPLEXITY_GO_FUNC_RE = re.compile(
+    r"\bfunc\s+(?:\([^)]*\)\s+)?(?P<name>\w+)\s*\([^)]*\)\s*(?:[\w*\[\].]+\s*|\([^)]*\)\s*)?\{",
+)
+
+_COMPLEXITY_RUST_FN_RE = re.compile(
+    r"\bfn\s+(?P<name>\w+)(?:<[^>]+>)?\s*\([^)]*\)\s*(?:->\s*[\w<>\[\],&':\s]+\s*)?\{",
+)
+
+_COMPLEXITY_KOTLIN_FUN_RE = re.compile(
+    r"\bfun\s+(?:\w+\.)?(?P<name>\w+)\s*\([^)]*\)\s*(?::\s*[\w<>?\[\],\s]+\s*)?\{",
+)
+
+
+def _find_matching_brace(text: str, open_idx: int) -> int:
+    """Given the index of an opening ``{``, return the index of the
+    matching close ``}``, or len(text) if unmatched."""
+    depth = 0
+    i = open_idx
+    in_string: str | None = None
+    while i < len(text):
+        ch = text[i]
+        if in_string is not None:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == in_string:
+                in_string = None
+            i += 1
+            continue
+        if ch in "'\"":
+            in_string = ch
+            i += 1
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return len(text)
+
+
+def _python_function_body(code: str, def_match: re.Match) -> str:
+    """Return the body of a Python def using indentation."""
+    indent = def_match.group("indent") or ""
+    base_indent_len = len(indent)
+    lines = code[def_match.end():].splitlines(keepends=True)
+    body_lines: list[str] = []
+    for line in lines:
+        if not line.strip():
+            body_lines.append(line)
+            continue
+        leading = len(line) - len(line.lstrip(" \t"))
+        if leading > base_indent_len:
+            body_lines.append(line)
+        else:
+            break
+    return "".join(body_lines)
+
+
+def _count_complexity_in_body(body: str, patterns: tuple[re.Pattern, ...]) -> int:
+    """Return McCabe-style complexity for the given body."""
+    score = 1
+    for pat in patterns:
+        score += len(pat.findall(body))
+    return score
+
+
+# Java-keyword guard set for the permissive Java method regex.
+_JAVA_KEYWORD_NAMES: frozenset[str] = frozenset({
+    "if", "for", "while", "switch", "catch", "else", "do", "try",
+    "synchronized", "return", "new", "throw", "throws",
+})
+
+
+def extract_complexity(
+    code: str, language: str | None = None
+) -> list[dict[str, int | str]]:
+    """Return per-function cyclomatic complexity scores.
+
+    The output is a list of ``{"name", "complexity"}`` dicts, one
+    per detected function. Order preserves first-seen-in-source.
+
+    Detection is per-language:
+      * Python: ``def`` / ``async def`` bodies (indentation).
+      * JavaScript / TypeScript: ``function`` and arrow-assigned forms.
+      * Java / Kotlin / Scala / C#: method declarations.
+      * Go: ``func`` declarations.
+      * Rust: ``fn`` declarations.
+
+    For anonymous arrow functions where the name cannot be derived,
+    the entry name is ``<anonymous>``.
+
+    Pure-data and shell languages return ``[]`` because the
+    "function" concept doesn't apply uniformly.
+    """
+    if not code or not isinstance(code, str):
+        return []
+    lang = (language or "").lower()
+    if lang in _NO_IMPORT_LANGUAGES:
+        return []
+
+    results: list[dict[str, int | str]] = []
+
+    # Python: def / async def
+    if lang in {"python", "py", ""} or "def " in code:
+        for m in _COMPLEXITY_PY_DEF_RE.finditer(code):
+            name = m.group("name")
+            body = _python_function_body(code, m)
+            score = _count_complexity_in_body(body, _COMPLEXITY_KEYWORDS_PY)
+            results.append({"name": name, "complexity": score})
+
+    # JS / TS
+    js_active = lang in {"javascript", "typescript", "ts", "tsx", "jsx", "js"} or (
+        "function " in code and lang != "python"
+    )
+    if js_active:
+        for m in _COMPLEXITY_JS_FUNC_RE.finditer(code):
+            name = m.group("name") or m.group("name2") or "<anonymous>"
+            open_brace = code.find("{", m.end())
+            if open_brace == -1:
+                continue
+            close_brace = _find_matching_brace(code, open_brace)
+            body = code[open_brace + 1:close_brace]
+            score = _count_complexity_in_body(body, _COMPLEXITY_KEYWORDS_JS)
+            results.append({"name": name, "complexity": score})
+
+    # Java / Scala / C#
+    if lang in {"java", "scala", "csharp", "c#"}:
+        for m in _COMPLEXITY_JAVA_METHOD_RE.finditer(code):
+            name = m.group("name")
+            if name in _JAVA_KEYWORD_NAMES:
+                continue
+            open_brace = code.find("{", m.end() - 1)
+            if open_brace == -1:
+                continue
+            close_brace = _find_matching_brace(code, open_brace)
+            body = code[open_brace + 1:close_brace]
+            score = _count_complexity_in_body(body, _COMPLEXITY_KEYWORDS_JAVA)
+            results.append({"name": name, "complexity": score})
+
+    # Kotlin
+    if lang == "kotlin":
+        for m in _COMPLEXITY_KOTLIN_FUN_RE.finditer(code):
+            name = m.group("name")
+            open_brace = code.find("{", m.end() - 1)
+            if open_brace == -1:
+                continue
+            close_brace = _find_matching_brace(code, open_brace)
+            body = code[open_brace + 1:close_brace]
+            score = _count_complexity_in_body(body, _COMPLEXITY_KEYWORDS_KOTLIN)
+            results.append({"name": name, "complexity": score})
+
+    # Go
+    if lang in {"go", "golang"}:
+        for m in _COMPLEXITY_GO_FUNC_RE.finditer(code):
+            name = m.group("name")
+            open_brace = code.find("{", m.end() - 1)
+            if open_brace == -1:
+                continue
+            close_brace = _find_matching_brace(code, open_brace)
+            body = code[open_brace + 1:close_brace]
+            score = _count_complexity_in_body(body, _COMPLEXITY_KEYWORDS_GO)
+            results.append({"name": name, "complexity": score})
+
+    # Rust
+    if lang in {"rust", "rs"}:
+        for m in _COMPLEXITY_RUST_FN_RE.finditer(code):
+            name = m.group("name")
+            open_brace = code.find("{", m.end() - 1)
+            if open_brace == -1:
+                continue
+            close_brace = _find_matching_brace(code, open_brace)
+            body = code[open_brace + 1:close_brace]
+            score = _count_complexity_in_body(body, _COMPLEXITY_KEYWORDS_RUST)
+            results.append({"name": name, "complexity": score})
+
+    return results
+
+
 def detect_type_annotation_density(
     code: str, language: str | None = None
 ) -> float:
@@ -4937,6 +5229,20 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if not unused_imports:
         unused_imports = extract_unused_imports(code, language)
+    # Per-function cyclomatic complexity. Caller-supplied list wins
+    # (preserved verbatim); otherwise scan the snippet for function
+    # definitions in the supported languages (Python / JS / TS /
+    # Java / Kotlin / Scala / C# / Go / Rust) and count decision
+    # points inside each body. Pure data + shell languages return
+    # [] unconditionally because the "function" concept doesn't
+    # apply uniformly.
+    complexity = (
+        list(existing.complexity)
+        if existing and existing.complexity
+        else []
+    )
+    if not complexity:
+        complexity = extract_complexity(code, language)
     return CodeFields(
         language=language,
         code=code,
@@ -4965,4 +5271,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         suspected_secrets=suspected_secrets,
         type_annotation_density=type_annotation_density,
         unused_imports=unused_imports,
+        complexity=complexity,
     )

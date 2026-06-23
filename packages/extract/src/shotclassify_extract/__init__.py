@@ -21,6 +21,7 @@ from .code import (
     detect_type_annotation_density,
     enrich_code,
     extract_build_commands,
+    extract_complexity,
     extract_copyrights,
     extract_dead_code,
     extract_dep_pins,
@@ -151,4 +152,5 @@ __all__ = [
     "extract_emojis",
     "extract_percentages",
     "extract_unused_imports",
+    "extract_complexity",
 ]
