@@ -17,6 +17,7 @@ from .error_fingerprints import extract_error_fingerprints
 from .fx_pairs import extract_fx_pairs
 from .git_shas import extract_git_shas
 from .identifiers import extract_identifiers
+from .invoice_ids import extract_invoice_ids
 from .jwts import extract_jwts
 from .macs import extract_macs
 from .network import extract_network
@@ -435,5 +436,25 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if twilio_ids:
         out.raw = dict(out.raw or {})
         out.raw["twilio_ids"] = twilio_ids
+
+    # Cross-category: stash accounting invoice / quote / bill /
+    # purchase-order / credit-note / estimate IDs found in the OCR
+    # text under raw["invoice_ids"]. These IDs surface across every
+    # category -- receipts and document captures of accounting
+    # paperwork are the obvious case, but chats cite "did you pay
+    # INV-2024-0099?", code snippets paste a Stripe / QuickBooks /
+    # Xero invoice ID into a test fixture, and error logs reference
+    # the invoice ID that failed to process. Each entry is a
+    # {kind, id} dict where kind is one of invoice / bill / quote /
+    # estimate / credit_note / purchase_order / accounts_receivable.
+    #
+    # Distinct from receipt.order_number (which is the per-receipt
+    # primary number for a SINGLE receipt) and from raw["stripe_ids"]
+    # (which catches Stripe-prefixed cus_ / inv_ / etc. IDs with a
+    # different shape).
+    invoice_ids = extract_invoice_ids(text)
+    if invoice_ids:
+        out.raw = dict(out.raw or {})
+        out.raw["invoice_ids"] = invoice_ids
 
     return out

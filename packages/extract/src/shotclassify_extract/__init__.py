@@ -52,6 +52,7 @@ from .error_fingerprints import extract_error_fingerprints
 from .fx_pairs import extract_fx_pairs
 from .git_shas import extract_git_shas
 from .identifiers import extract_identifiers
+from .invoice_ids import extract_invoice_ids
 from .jwts import extract_jwts
 from .macs import extract_macs
 from .network import extract_network
@@ -135,4 +136,5 @@ __all__ = [
     "extract_dep_pins",
     "extract_dead_code",
     "extract_twilio_ids",
+    "extract_invoice_ids",
 ]
