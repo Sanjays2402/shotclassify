@@ -33,6 +33,7 @@ from .credit_cards import extract_credit_cards
 from .crypto import extract_crypto
 from .discord_ids import extract_discord_ids
 from .emails import extract_emails
+from .emojis import extract_emojis
 from .error import (
     enrich_error,
     parse_apollo_error,
@@ -139,4 +140,5 @@ __all__ = [
     "extract_dead_code",
     "extract_twilio_ids",
     "extract_invoice_ids",
+    "extract_emojis",
 ]

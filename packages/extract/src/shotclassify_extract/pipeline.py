@@ -12,6 +12,7 @@ from .credit_cards import extract_credit_cards
 from .crypto import extract_crypto
 from .discord_ids import extract_discord_ids
 from .emails import extract_emails
+from .emojis import extract_emojis
 from .error import enrich_error
 from .error_fingerprints import extract_error_fingerprints
 from .fx_pairs import extract_fx_pairs
@@ -456,5 +457,26 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if invoice_ids:
         out.raw = dict(out.raw or {})
         out.raw["invoice_ids"] = invoice_ids
+
+    # Cross-category: stash emoji-codepoint tally found in the OCR
+    # text under raw["emojis"]. Each entry is a {emoji, codepoint,
+    # count} dict capturing one distinct emoji and how many times
+    # it appeared in the capture.
+    #
+    # Useful for meme-format dashboards, sentiment monitoring
+    # (lots of 😡 vs lots of 🎉), and detecting reaction-heavy
+    # chats. Sorted by descending count for "most-used-first"
+    # rendering. ZWJ sequences (family / professions), skin-tone
+    # modifiers, and variation selectors are combined with the
+    # preceding base emoji so a compound emoji 👨‍👩‍👧‍👦 stays
+    # as one logical unit.
+    #
+    # Distinct from chat.reactions which is per-message reaction
+    # footers; this extractor is text-density tally across the
+    # WHOLE OCR capture.
+    emojis = extract_emojis(text)
+    if emojis:
+        out.raw = dict(out.raw or {})
+        out.raw["emojis"] = emojis
 
     return out
