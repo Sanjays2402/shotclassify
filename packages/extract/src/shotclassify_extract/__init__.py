@@ -39,7 +39,7 @@ from .crypto import extract_crypto
 from .discord_ids import extract_discord_ids
 from .document import enrich_document, extract_headings
 from .emails import extract_emails
-from .emojis import extract_emojis
+from .emojis import extract_emoji_density, extract_emojis
 from .error import (
     enrich_error,
     parse_apollo_error,
@@ -154,6 +154,7 @@ __all__ = [
     "extract_twilio_ids",
     "extract_invoice_ids",
     "extract_emojis",
+    "extract_emoji_density",
     "extract_percentages",
     "extract_unused_imports",
     "extract_complexity",

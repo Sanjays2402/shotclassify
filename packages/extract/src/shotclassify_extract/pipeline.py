@@ -14,7 +14,7 @@ from .crypto import extract_crypto
 from .discord_ids import extract_discord_ids
 from .document import enrich_document
 from .emails import extract_emails
-from .emojis import extract_emojis
+from .emojis import extract_emoji_density, extract_emojis
 from .error import enrich_error
 from .error_fingerprints import extract_error_fingerprints
 from .fx_pairs import extract_fx_pairs
@@ -483,6 +483,25 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if emojis:
         out.raw = dict(out.raw or {})
         out.raw["emojis"] = emojis
+
+    # Cross-category: stash an emoji-density score under
+    # raw["emoji_density"]. A single float in [0.0, 1.0]
+    # representing the share of non-whitespace characters that
+    # are part of an emoji codepoint sequence. Useful as a
+    # quick "this capture is meme-heavy" signal without having
+    # to scan the raw["emojis"] per-emoji tally.
+    #
+    # We surface this even when raw["emojis"] is empty, BECAUSE
+    # the absence of emoji is itself a legitimate dashboard
+    # signal -- a density of 0.0 confirms "no emoji content"
+    # and lets dashboards filter "emoji-free vs emoji-heavy"
+    # captures consistently. The denominator excludes whitespace
+    # so a sparse capture with lots of newlines and a compact
+    # one are compared on the same content scale.
+    emoji_density = extract_emoji_density(text)
+    if emoji_density is not None:
+        out.raw = dict(out.raw or {})
+        out.raw["emoji_density"] = emoji_density
 
     # Cross-category: stash percent values found in the OCR text
     # under raw["percentages"]. Percentages surface across every

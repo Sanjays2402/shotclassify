@@ -218,4 +218,89 @@ def extract_emojis(text: str) -> list[dict[str, object]]:
     return out
 
 
-__all__ = ["extract_emojis"]
+def extract_emoji_density(text: str) -> float | None:
+    """Return the fraction of characters in ``text`` that are emoji.
+
+    A quick "this capture is meme-heavy" signal. Result is a float
+    in ``[0.0, 1.0]`` representing the share of non-whitespace
+    characters that participate in an emoji codepoint sequence.
+
+    The denominator excludes whitespace because OCR captures vary
+    wildly in how much whitespace they preserve (slide decks
+    introduce a lot, code snippets less) and dashboards comparing
+    captures should be comparing meaningful content density, not
+    padding density.
+
+    The numerator counts every base emoji codepoint PLUS its
+    modifier glue (skin-tone, variation selector, ZWJ + next-base)
+    so a ZWJ family ``👨‍👩‍👧‍👦`` contributes 7 codepoints to the
+    numerator (4 base emoji + 3 ZWJs) instead of just 1.
+
+    Returns:
+    * ``None`` when ``text`` is empty / not a string (no signal).
+    * ``0.0`` when text has only non-emoji content (the absence
+      of emoji is a legitimate signal worth surfacing as 0.0,
+      distinct from None which means "couldn't compute").
+    * A float >0.0 when at least one emoji codepoint appears.
+
+    Rounded to 3 decimal places because finer precision is
+    meaningless given OCR noise and small text samples.
+
+    Pairs with ``extract_emojis`` which returns the per-emoji
+    tally; ``extract_emoji_density`` is the WHOLE-DOCUMENT
+    aggregate score useful for "filter to meme-heavy captures"
+    dashboards without scanning a per-emoji breakdown.
+    """
+    if not text or not isinstance(text, str):
+        return None
+
+    # Walk the text counting emoji codepoints. We re-use the same
+    # base/modifier detection logic as ``extract_emojis`` but only
+    # need the count, not the rendered string.
+    emoji_codepoint_count = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        cp = ord(text[i])
+        if not _is_base_emoji(cp):
+            i += 1
+            continue
+        # Found a base emoji; consume its modifier glue and count
+        # every codepoint that's part of the unit.
+        emoji_codepoint_count += 1  # base
+        j = i + 1
+        while j < n:
+            ncp = ord(text[j])
+            if ncp in _VARIATION_SELECTORS:
+                emoji_codepoint_count += 1
+                j += 1
+                continue
+            if _is_skin_tone(ncp):
+                emoji_codepoint_count += 1
+                j += 1
+                continue
+            if ncp == _ZWJ and j + 1 < n:
+                next_cp = ord(text[j + 1])
+                if _is_base_emoji(next_cp):
+                    emoji_codepoint_count += 2  # ZWJ + next base
+                    j += 2
+                    continue
+            break
+        i = j
+
+    # Denominator: non-whitespace character count. We exclude
+    # whitespace so a sparse meme caption (lots of newlines) and a
+    # compact one are compared on the same scale.
+    non_ws_count = sum(1 for c in text if not c.isspace())
+    if non_ws_count == 0:
+        return 0.0
+
+    density = emoji_codepoint_count / non_ws_count
+    # Clip to [0.0, 1.0] -- defensive, density should never exceed
+    # 1.0 because emoji are also counted in the non-ws denominator.
+    density = max(0.0, min(1.0, density))
+    return round(density, 3)
+
+
+__all__ = ["extract_emojis", "extract_emoji_density"]
+
