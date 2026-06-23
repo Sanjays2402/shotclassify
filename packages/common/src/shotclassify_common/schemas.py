@@ -1557,6 +1557,42 @@ class DocumentFields(BaseModel):
     title: str | None = None
     summary: str | None = None
     page_kind: str | None = None
+    # Page-number footer / header info detected in the document
+    # capture. Multi-page documents (PDFs, slide decks, scanned
+    # contracts, wiki pages) print a page number at the bottom or
+    # top of each page in one of these conventional forms:
+    #
+    #   Page 3 of 12
+    #   Page 1
+    #   3 / 12
+    #   - 5 -
+    #   (continued)
+    #   p. 7
+    #
+    # Stored as a ``{"current": int | None, "total": int | None,
+    # "label": str, "continued": bool}`` dict.
+    #
+    # * ``current`` is the current page number when extractable
+    #   (``Page 3 of 12`` -> 3, ``- 5 -`` -> 5), else ``None``.
+    # * ``total`` is the total page count when extractable
+    #   (``Page 3 of 12`` -> 12), else ``None`` for bare
+    #   ``Page 1`` style.
+    # * ``label`` is the raw matched footer phrase preserved
+    #   verbatim so dashboards can surface ``"Page 3 of 12"`` as
+    #   typeset by the source document.
+    # * ``continued`` is ``True`` when a ``(continued)`` marker
+    #   appeared alongside the page number, signalling a section
+    #   that spans pages. ``False`` otherwise.
+    #
+    # Dashboards use this to drive "this is page 3 of 12" /
+    # "this document continues" annotations on multi-page document
+    # captures without re-OCRing the surrounding text.
+    #
+    # ``None`` for single-page captures and document-style captures
+    # that print no explicit page marker (most slide-deck screenshots
+    # rely on slide-counter overlays from the presenter view rather
+    # than a printed footer).
+    page_info: dict[str, int | str | bool | None] | None = None
 
 
 class UIMockupFields(BaseModel):

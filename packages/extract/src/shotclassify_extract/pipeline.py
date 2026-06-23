@@ -11,6 +11,7 @@ from .code import enrich_code
 from .credit_cards import extract_credit_cards
 from .crypto import extract_crypto
 from .discord_ids import extract_discord_ids
+from .document import enrich_document
 from .emails import extract_emails
 from .emojis import extract_emojis
 from .error import enrich_error
@@ -46,7 +47,9 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
         out.error = enrich_error(out.error, ocr)
     elif category == Category.chat_screenshot:
         out.chat = enrich_chat(out.chat, ocr)
-    # meme/document/ui_mockup/chart/other rely on LLM fields; nothing to enrich
+    elif category == Category.document:
+        out.document = enrich_document(out.document, ocr)
+    # meme/ui_mockup/chart/other rely on LLM fields; nothing to enrich
 
     # Cross-category: stash every http(s) URL found in the OCR text
     # under raw["urls"]. Runs for EVERY category because URLs show up
