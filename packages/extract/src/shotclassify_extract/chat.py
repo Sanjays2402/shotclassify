@@ -1323,6 +1323,259 @@ def _extract_polls(text: str) -> list[dict]:
     return out
 
 
+# Pinned / starred / favourite marker detection. Most chat
+# platforms render a small badge or action footer when a message
+# is pinned to a channel or starred / favourited by a user.
+#
+# Output is a list of {"kind", "sender"?, "actor"?} dicts. Kind is
+# either ``pin`` or ``star``.
+
+# Pin icon emoji that platforms use as the prefix to a pin badge.
+# 📌 (round pushpin, U+1F4CC) and 📍 (round pushpin, U+1F4CD) are
+# the canonical icons. Some clients also render 📎 (paperclip) for
+# attachment + pin combos but we don't include it here because
+# paperclip = attachment alone in the recognised vocabulary.
+_PIN_EMOJI = "[\U0001F4CC\U0001F4CD]"
+
+# Star icon emojis: ⭐ (star, U+2B50) and 🌟 (glowing star, U+1F31F).
+# Used by Slack for "Starred" / "Star this message" badges.
+_STAR_EMOJI = "[\u2B50\U0001F31F]"
+
+# Pin badge shapes:
+#
+#   📌 Pinned
+#   📌 Pinned by Alice
+#   📌 Pinned Message
+#   📌 Pinned by You
+#   📌 Pinned by Bob (admin)
+#
+# We require the pin emoji + the word ``Pinned`` (case-insensitive)
+# at line start. The "by NAME" clause is optional and pulls the
+# actor; the "(admin)" suffix is preserved into actor only if we
+# can extract a clean name first.
+_PIN_BADGE_RE = re.compile(
+    r"^\s*" + _PIN_EMOJI + r"\s*"
+    r"(?:Pinned|Pin)\b"
+    r"(?:\s+(?:Message|Post))?"
+    r"(?:\s+by\s+(?P<actor>[A-Z][\w'\- ]{1,30}?))?"
+    r"(?:\s*\([^)]+\))?"
+    r"\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Slack/Discord action footer: ``Bob pinned a message to this channel``
+# / ``Alice pinned this message`` / ``Alice pinned a message``.
+# Strict shape: capitalised name + ``pinned`` + a message reference.
+_PIN_ACTION_RE = re.compile(
+    r"^\s*(?P<actor>[A-Z][\w'\-]{0,30}(?:\s+[A-Z][\w'\-]{0,30})?)"
+    r"\s+pinned\s+"
+    r"(?:a\s+message|this\s+message|(?:that|the)\s+message|\")"
+    r"(?:[^\n]{0,100}?)"
+    r"\s*\.?\s*$",
+    re.MULTILINE,
+)
+
+# Telegram footer: ``Bob pinned "Welcome everyone"``.
+_PIN_QUOTED_RE = re.compile(
+    r"^\s*(?P<actor>[A-Z][\w'\-]{0,30}(?:\s+[A-Z][\w'\-]{0,30})?)"
+    r"\s+pinned\s+\"[^\"]+\"\s*\.?\s*$",
+    re.MULTILINE,
+)
+
+# Bare "Pinned by NAME" without emoji (iMessage / generic).
+_PIN_TEXT_RE = re.compile(
+    r"^\s*Pinned\s+by\s+(?P<actor>[A-Z][\w'\- ]{1,30}?)"
+    r"(?:\s*\([^)]+\))?"
+    r"\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Star badge shapes:
+#
+#   ⭐ Starred
+#   ⭐ Starred by Alice
+#   🌟 Saved
+#   Alice added a saved item
+#   Alice starred this message
+#
+# We accept either emoji + ``Starred`` / ``Saved`` keyword OR a
+# capitalised name + ``starred`` / ``saved`` action verb.
+_STAR_BADGE_RE = re.compile(
+    r"^\s*" + _STAR_EMOJI + r"\s*"
+    r"(?:Starred|Star|Saved|Favorite|Favourite|Favorited|Favourited)\b"
+    r"(?:\s+by\s+(?P<actor>[A-Z][\w'\- ]{1,30}?))?"
+    r"\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+_STAR_ACTION_RE = re.compile(
+    r"^\s*(?P<actor>[A-Z][\w'\-]{0,30}(?:\s+[A-Z][\w'\-]{0,30})?)"
+    r"\s+(?:starred|favorited|favourited|saved)\s+"
+    r"(?:this\s+message|a\s+message|an?\s+item|saved\s+item)"
+    r"\s*\.?\s*$",
+    re.MULTILINE,
+)
+
+_STAR_ADDED_SAVED_RE = re.compile(
+    r"^\s*(?P<actor>[A-Z][\w'\-]{0,30}(?:\s+[A-Z][\w'\-]{0,30})?)"
+    r"\s+added\s+(?:a\s+)?saved\s+item\s*\.?\s*$",
+    re.MULTILINE,
+)
+
+_MAX_PINS = 30
+
+
+def _clean_actor(raw: str | None) -> str | None:
+    """Trim trailing whitespace / parenthetical noise from an actor name."""
+    if not raw:
+        return None
+    text = re.sub(r"\s+", " ", raw.strip())
+    text = text.rstrip(".,;:")
+    return text or None
+
+
+def _extract_pins(text: str) -> list[dict[str, str | None]]:
+    """Return pin / star marker entries found in ``text``.
+
+    Each entry is a ``{"kind", "sender"?, "actor"?}`` dict.
+    ``kind`` is ``pin`` (pinned-to-channel) or ``star``
+    (starred / saved / favourited). ``sender`` is the nearest
+    preceding transcript speaker. ``actor`` is the user who
+    performed the pin / star (from a ``Pinned by NAME`` /
+    ``NAME pinned`` form), or ``None`` for bare markers.
+
+    Ordering preserves first-seen-in-OCR-text offset across all
+    matchers. De-dupes on the (kind, sender, actor) tuple.
+    Capped at 30 entries.
+    """
+    if not text:
+        return []
+    sender_re = re.compile(r"^(?P<sender>[A-Z][A-Za-z0-9 _\-]{1,24}):\s+\S")
+
+    # Build per-line sender map for offset lookups.
+    line_starts: list[int] = []
+    pos = 0
+    for ln in text.splitlines(keepends=True):
+        line_starts.append(pos)
+        pos += len(ln)
+    sender_at_line: list[str | None] = []
+    current: str | None = None
+    for ln in text.splitlines():
+        sm = sender_re.match(ln)
+        if sm:
+            current = sm.group("sender").strip()
+        sender_at_line.append(current)
+
+    def _sender_for(offset: int) -> str | None:
+        for k, _start in enumerate(line_starts):
+            if k + 1 == len(line_starts) or line_starts[k + 1] > offset:
+                return sender_at_line[k] if k < len(sender_at_line) else None
+        return None
+
+    candidates: list[tuple[int, dict[str, str | None]]] = []
+
+    # ``📌 Pinned [by NAME]`` / ``📌 Pinned Message``.
+    for m in _PIN_BADGE_RE.finditer(text):
+        actor = _clean_actor(m.group("actor"))
+        entry: dict[str, str | None] = {"kind": "pin"}
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        if actor:
+            entry["actor"] = actor
+        candidates.append((m.start(), entry))
+
+    # ``NAME pinned "..."`` (Telegram).
+    for m in _PIN_QUOTED_RE.finditer(text):
+        actor = _clean_actor(m.group("actor"))
+        entry = {"kind": "pin"}
+        if actor:
+            entry["actor"] = actor
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+
+    # ``NAME pinned a message to this channel`` (Slack/Discord).
+    for m in _PIN_ACTION_RE.finditer(text):
+        actor = _clean_actor(m.group("actor"))
+        # Skip if overlapping a quoted-form match already recorded.
+        overlap = any(s <= m.start() < s + 100 and e.get("kind") == "pin"
+                      and e.get("actor") == actor
+                      for s, e in candidates)
+        if overlap:
+            continue
+        entry = {"kind": "pin"}
+        if actor:
+            entry["actor"] = actor
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+
+    # ``Pinned by NAME`` (bare, no emoji).
+    for m in _PIN_TEXT_RE.finditer(text):
+        actor = _clean_actor(m.group("actor"))
+        entry = {"kind": "pin"}
+        if actor:
+            entry["actor"] = actor
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+
+    # ``⭐ Starred`` / ``⭐ Starred by NAME``.
+    for m in _STAR_BADGE_RE.finditer(text):
+        actor = _clean_actor(m.group("actor"))
+        entry = {"kind": "star"}
+        if actor:
+            entry["actor"] = actor
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+
+    # ``NAME starred this message`` / ``NAME saved this message``.
+    for m in _STAR_ACTION_RE.finditer(text):
+        actor = _clean_actor(m.group("actor"))
+        entry = {"kind": "star"}
+        if actor:
+            entry["actor"] = actor
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+
+    # ``NAME added a saved item`` (Slack saved-items shape).
+    for m in _STAR_ADDED_SAVED_RE.finditer(text):
+        actor = _clean_actor(m.group("actor"))
+        entry = {"kind": "star"}
+        if actor:
+            entry["actor"] = actor
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+
+    # Sort by offset, dedupe, cap.
+    candidates.sort(key=lambda x: x[0])
+    out: list[dict[str, str | None]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for _off, entry in candidates:
+        key = (
+            entry.get("kind", "") or "",
+            entry.get("sender", "") or "",
+            entry.get("actor", "") or "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(entry)
+        if len(out) >= _MAX_PINS:
+            break
+    return out
+
+
 def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
     text = ocr.text or ""
     platform = (existing.platform if existing and existing.platform else None) or _guess_platform(text)
@@ -1527,6 +1780,33 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         seen_polls.add(pk)
         polls.append(p)
 
+    # Pin / star markers (📌 Pinned by Alice / ⭐ Starred / Bob pinned
+    # a message / NAME starred this message). De-dupes on the
+    # (kind, sender, actor) tuple so an LLM-supplied pin plus the
+    # OCR-parsed identical pin collapses. Caller order preserved
+    # first.
+    pins: list[dict[str, str | None]] = (
+        list(existing.pins) if existing else []
+    )
+    seen_pins: set[tuple[str, str, str]] = set()
+    for p in pins:
+        pk2 = (
+            p.get("kind", "") or "",
+            p.get("sender", "") or "",
+            p.get("actor", "") or "",
+        )
+        seen_pins.add(pk2)
+    for p in _extract_pins(text):
+        pk2 = (
+            p.get("kind", "") or "",
+            p.get("sender", "") or "",
+            p.get("actor", "") or "",
+        )
+        if pk2 in seen_pins:
+            continue
+        seen_pins.add(pk2)
+        pins.append(p)
+
     return ChatFields(
         platform=platform,
         participants=participants,
@@ -1539,4 +1819,5 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         quotes=quotes,
         attachments=attachments,
         polls=polls,
+        pins=pins,
     )

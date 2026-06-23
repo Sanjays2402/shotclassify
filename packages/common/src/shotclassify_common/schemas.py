@@ -1124,6 +1124,50 @@ class ChatFields(BaseModel):
     # detect engagement spikes (a poll with >50 votes is a notable
     # thread).
     polls: list[dict] = Field(default_factory=list)
+    # Pinned / starred / favourite message markers detected in the
+    # screenshot. Most chat platforms render a small badge or
+    # action footer when a message is pinned to a channel or
+    # starred / favourited by a user:
+    #
+    #   Slack:
+    #     📌 Pinned by Alice
+    #     ⭐ Starred
+    #     Bob pinned a message to this channel
+    #     Alice added a saved item
+    #
+    #   Telegram:
+    #     📌 Pinned Message
+    #     📌 Pinned by Bob
+    #     Bob pinned "Welcome everyone"
+    #
+    #   Discord:
+    #     📌 Pinned
+    #     Alice pinned a message to this channel.
+    #
+    #   iMessage:
+    #     Pinned by You
+    #
+    #   WhatsApp:
+    #     📌 Pinned by Bob (admin)
+    #
+    # Each entry is a ``{"kind": str, "sender": str | None,
+    # "actor": str | None}`` dict:
+    #
+    # * ``kind`` is one of ``pin`` (pinned to channel / thread) or
+    #   ``star`` (starred / favourited / saved item).
+    # * ``sender`` is the speaker the marker is attached to (the
+    #   nearest preceding ``Sender:`` line) when extractable, or
+    #   ``None`` for floating markers / action footers that don't
+    #   sit inside a transcript.
+    # * ``actor`` is the user who performed the pin / star (when
+    #   captured from a ``Pinned by <name>`` / ``<name> pinned``
+    #   form) or ``None`` for bare markers (``📌 Pinned``).
+    #
+    # Ordering preserves first-seen-in-OCR order. Capped at 30
+    # entries. Dashboards use this list to surface "this thread
+    # has 4 pinned messages" annotations and to spot moderation /
+    # admin activity (most pins are performed by channel admins).
+    pins: list[dict[str, str | None]] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):
