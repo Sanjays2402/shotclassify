@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (122 features tracked, 100 complete)
+## Roadmap (127 features tracked, 105 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -170,6 +170,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 113. [x] Receipt: tip-jar / digital-tip URL extraction (new `ReceiptFields.tip_url`; modern POS terminals (Square / Stripe Terminal / Toast / Clover) print short URL or QR-code target so customer can tip via phone; stored as URL string verbatim with scheme preserved when printed (bare hostnames also accepted because most printers omit https:// to save ink); Cash App `$tag` and Venmo `@handle` shapes captured as the tag itself (not URL) because apps prefer handle for routing; keyword catalogue most-specific-first: explicit labels Tip QR/URL/Link/Code, scan forms Scan to tip/leave a tip, action forms Leave/Add a tip [online], audience forms Tip your server/driver/barista/courier/host/stylist/guide, adjective forms Digital/Online/Mobile tip, bare Tip: fallback (ONLY when URL itself contains "tip" vocabulary as defence); Cash App / Venmo tag forms: Cash App: $jane / Cashapp: $bob / Cash Tag: $alice / Venmo: @jane / Venmo: @jane-doe / Venmo: @jane_doe; safety: keyword + URL MUST sit on same OCR line, bare Tip: keyword ONLY fires when URL has tip vocab (prevents loyalty/newsletter URLs from misfiring), trailing punctuation stripped, URL keyword forms WIN over Cash App fallback when both present; distinct from raw["urls"] which captures every URL regardless of context -- tip_url is SPECIFIC tip-target identifier for "digital tip adoption rate" analytics; LLM wire-format updated; enrich-receipt backfill list updated).
 
 
+### Done in tick 21 (5 features)
+129. [x] Extract: cross-category invoice/quote/PO ID extractor into `raw["invoice_ids"]` (list of `{kind, id}` dicts; 7 recognised kinds invoice / bill / quote / estimate / credit_note / purchase_order / accounts_receivable; three shape families: PREFIX-patterned `INV-12345` / `Q-2024-001` / `PO-12345` / `CN-12345` / `EST-12345` / `AR-2024-099` with case-insensitive prefix normalised to uppercase canonical id; keyword-led `Invoice No: 12345` / `Invoice #12345` / `Purchase Order: 12345` / `PO Number: 12345` / `Credit Note No: 12345` / `Quote #12345` requiring the keyword qualifier (no/number/#/id) OR a colon/hash separator so bare prose "Credit Note draft" / "Invoice template" never fires; slash-form year-encoded `2024/INV/0099` (year first) / `INV/2024/00001` (prefix first) common in European/QuickBooks numbering; safety: word-boundary on BOTH ends, body must contain at least one digit so "INV-OICE"/"BILL-BOARD"/"PO-OFFICE" reject as letter-only prose, short prefixes (Q/QU/CN/PO/AR) require 4+ char body so "Q-1"/"PO-1" prose tail rejects, long prefixes require 3+ char body so 3-digit small-business invoices INV-001 still parse, bare "Bill 12345" prose rejected because Bill matcher REQUIRES compound form (Bill No: / Bill Number: / Bill #) -- "Bill: $50" too common on dinner receipts; slash-form span-claim defence prevents keyword-led from also firing on the inner "INV" of a slash hit; distinct from receipt.order_number (per-receipt) and raw["stripe_ids"] (Stripe-prefixed); hash prefix stripped from canonical id (# is printer convention); cap 50; dedupe on (kind, id) pair).
+127. [x] Receipt: split-payment / multi-tender detection into `ReceiptFields.tenders` (list of `{kind, amount}` dicts; 23 catalogued tender kinds covering cards (visa/mastercard/amex/discover/jcb/diners/unionpay), wallets (apple_pay/google_pay/samsung_pay), apps (paypal/venmo/cashapp/zelle), cash family (cash/check normalising Cheque/ebt), stored-value (gift_card/store_credit), generic fallback (card/credit/debit); recognised shapes: bare keyword + separator + amount `Visa: 25.00` / `Cash: 10.00`, masked-PAN form `Visa **** 1234: 25.00` / `Mastercard ** 5678 - 50.00` / `Amex XXXX 1234: 33.00` / `Visa ....1234: 50.00`, modern split `Apple Pay: 50.00` / `Gift Card: 15.00`; safety: surfaces ONLY when 2+ distinct tender LINES detected so dashboards rely on len(tenders) > 0 meaning real split-tender breakdown -- single-tender receipts use existing payment_method/tendered slots; per-line matching (keyword + amount must sit on SAME line) so a "Visa" header at top doesn't pair with total at bottom; multi-word forms beat short aliases via catalogue ordering ("American Express" -> amex / "Master Card" -> mastercard / "Gift Card" -> gift_card NOT bare card / "Credit Card" -> credit / "Cash App" -> cashapp); negative-sign stripped (field semantic positive), both US (1,234.56) and EU (1.234,56) decimal conventions parse correctly; dedupe on (kind, amount) pair so doubled echo (header + footer summary) collapses; cap 10 entries; LLM wire format updated; enrich_receipt backfill list updated -- caller's non-empty list never overwritten).
+126. [x] Chat: forwarded-message marker detection into `ChatFields.forwards` (list of `{kind, forwarded_from?, sender?}` dicts; 3 kinds: forwarded / forwarded_many / shared; 7 recognised shapes priority-ordered with span-claim defence: `Forwarded many times` (full-line optional arrow/italic, distinct kind because dashboards care about viral propagation), `[Forwarded from #channel]` bracketed Discord/Slack form, `(Forwarded from <name>)` parenthesised inline form, `Forwarded from <name>` Telegram badge with optional ``via <channel>`` tail stripped accepting capitalised names/@-handles/#-channels/multi-word source names, bare ``Forwarded``/``↪️ Forwarded``/``→ Forwarded``/``_Forwarded_``/``*Forwarded*`` badge (full-line only), ``<Name> shared a message from <source>`` Slack with source, ``<Name> shared a message`` Slack bare; safety: bare-Forwarded matcher requires full-line match (with optional arrow/italic markers) so mid-sentence prose "I forwarded that yesterday" never fires; bracketed/paren/many-times spans CONSUME their region so the bare "Forwarded from <X>" matcher doesn't also steal them preventing double-tagging; shared-action matcher requires capitalised name prefix so "alice shared a message" lowercase and prose "We shared a photo" both reject; forward-arrow emoji alone (``↪️`` without ``Forwarded``) doesn't fire because keyword is discriminator; sender attribution from nearest preceding ``Sender:`` line; dedupe on (kind, forwarded_from, sender) tuple; cap 30; LLM wire-format updated).
+125. [x] Code: shell-script style detection into `CodeFields.shell_style` (one of bash/zsh/fish/powershell/tcsh/posix; returns None when language non-shell or empty/pure-comments; six recognised styles: powershell (cmdlets Get-X/Set-Y/Invoke-Z with standard PS approved verbs, comparison operators -eq/-ne/-gt/-lt/-match/-like, [CmdletBinding()]/[Parameter()] attributes, $_ / $PSItem / $PSBoundParameters automatic vars, type accelerators [int]/[string]/[System.X], Write-Host/Write-Output cmdlets), fish (`set -x VAR value` no = sign, `string match -r`/`string sub` builtins, `function NAME --argument-names`, `commandline -f`, `status is-interactive`, `functions -q`), tcsh/csh (`set VAR = value` spaces around =, `setenv VAR value`, `foreach VAR (list)`, `if (cond) then`, `alias NAME 'cmd'`), zsh (glob qualifiers `*.txt(.om[1])`, parameter flags `${(U)x}`/`${(L)x}`, `autoload -Uz`, prompt color escapes `%F{red}`, `zmodload`, `zstyle`), bash (`[[ ... ]]` double-bracket test, process substitution `<(cmd)`/`>(cmd)`, array assignment `arr=(a b c)`, ANSI-C quoting `$'\n'`, regex match operator =~, `function NAME {` keyword form, `declare -aAn`/`local -n` modifiers, brace expansion `{1..10}`, `mapfile`/`readarray` builtins), posix (shell snippet with NONE of above signals fallback for portable sh/dash); detection precedence: PowerShell (highly distinctive) > tcsh/csh (BEFORE fish because both use `set` and tcsh's spaces-around-= wins) > fish > zsh > bash > posix; safety: shell-language gate enforced -- non-shell language returns None unconditionally (Python string containing `[[ $foo ]]` won't false-positive); when language is None runs content sniffing returning matched style only on positive signal; LLM wire-format updated).
+124. [x] Extract: cross-category emoji tally extractor into `raw["emojis"]` (list of `{emoji, codepoint, count}` dicts sorted by descending count then first-seen on ties; 10 detected Unicode ranges covering Miscellaneous Symbols (U+2600..U+26FF), Dingbats (U+2700..U+27BF), Supplemental arrows (U+21AA..U+21AB), Enclosed Alphanumerics flags (U+1F1E0..U+1F1FF), Miscellaneous Symbols and Pictographs (U+1F300..U+1F5FF), Emoticons (U+1F600..U+1F64F), Transport and Map (U+1F680..U+1F6FF), Geometric Shapes Extended coloured circles/squares (U+1F7E0..U+1F7FF), Supplemental Symbols and Pictographs (U+1F900..U+1F9FF), Symbols and Pictographs Extended-A (U+1FA70..U+1FAFF); compound emoji handled: ZWJ sequences (U+200D) combine two emoji codepoints into one logical unit so 👨‍👩‍👧‍👦 family / 👨‍💻 technologist / 🏳️‍🌈 rainbow flag stay as single entries with full codepoint sequence preserved, skin-tone modifiers (U+1F3FB..U+1F3FF) attach to preceding hand/face emoji so 👍🏻 light vs 👍🏿 dark count as DISTINCT entries, variation selectors (U+FE0E text-style / U+FE0F emoji-style) combine with preceding base char so ❤ bare vs ❤️ with VS-16 are distinct; safety: plain ASCII symbols ($/€/£/©/®/→) NOT captured because they appear in non-emoji contexts, math symbols (∑/∞) outside emoji ranges, defensive non-string input returns []; cap 50; distinct from chat.reactions which is per-message footers, this extractor is text-density tally across WHOLE OCR capture).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -194,14 +202,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 120. [ ] Receipt: customer-name / address-block extraction for shipping receipts (e-commerce captures include `Ship To: Alice Smith / 123 Main St / Springfield, IL 62704` blocks into new `ReceiptFields.ship_to`).
 122. [ ] Extract: cross-category trading-strategy/position notation into `raw["positions"]` (`5 ETH @ $3500 long`, `+0.5 BTC short @ 67000`, `100 AAPL @ 175 call $200 strike` from trading-app screenshots).
 123. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce; pairs with existing #80 which is the same idea but with concrete catalogue scope).
-124. [ ] Extract: cross-category emoji extractor into `raw["emojis"]` (list of {emoji, codepoint, count} dicts; tally every distinct emoji codepoint with its count in the OCR text; separate from #100 emoji-density which is a single float, this is per-codepoint detail for meme-format dashboards).
-125. [ ] Code: shell-script style detection into `CodeFields.shell_style` (`posix` / `bash` / `zsh` / `fish` / `powershell` / `tcsh` -- discriminate based on shape (`[[ ... ]]` vs `[ ... ]`, `function f { }` vs `f() { }`, etc.)).
-126. [ ] Chat: forwarded-message marker detection into `ChatFields.forwards` (list of `{kind, forwarded_from?}` dicts; recognised shapes: `↪️ Forwarded` / `Forwarded from Alice` / `→ Forwarded from @channel` Telegram & Discord forward badges + WhatsApp `Forwarded many times` chain markers).
-127. [ ] Receipt: split-payment / multi-tender detection into `ReceiptFields.tenders` (list of `{kind, amount}` dicts; recognised shapes: `Visa: 25.00 / Cash: 10.00` split-bill at restaurants, `Gift Card: 15.00 + Visa: 10.00` partial gift-card payments, `Apple Pay: 50.00 / Tip: 10.00 separate`).
 128. [ ] Code: type-annotation density into `CodeFields.type_annotation_density` (fraction in [0, 1] of function-arg / variable / return slots that carry a type annotation; useful for "this Python is fully typed" / "this Java has missing generics" dashboards).
-129. [ ] Extract: cross-category invoice ID extractor into `raw["invoice_ids"]` (Stripe / QuickBooks / Xero / Square invoice ID shapes: `INV-12345`, `Q-2024-001`, `2024/INV/0099` -- distinct from `receipt.order_number` which is per-receipt).
 130. [ ] Chat: thread-reply marker detection into `ChatFields.threads` (Slack/Discord `2 replies`, `Last reply 2h ago`, `View thread` action footers indicating the message has a sub-thread).
 131. [ ] Receipt: lottery / scratch-card draw line detection into `ReceiptFields.lottery` (US convenience-store receipts often print `LOTTO #4231 Powerball 12345 Draw 11/04/24` lines as separate items).
+132. [ ] Chart: legend-color-to-series mapping into `ChartFields.legend_map` (legends often print `■ Q1 ■ Q2 ■ Q3 ■ Q4` with coloured swatches -- surface a list of `{color, series}` dicts).
+133. [ ] Document: page-number footer detection into `DocumentFields.page_info` (`Page 3 of 12`, `Page 1`, `- 5 -`, `(continued)` markers from multi-page document captures).
+134. [ ] Extract: cross-category percentage extractor into `raw["percentages"]` (every `<n>%` value in OCR text; useful for sparkline overlays, sentiment polls, performance metric screenshots).
+135. [ ] Chat: bot vs human message detection into `ChatFields.bot_messages` (Slack/Discord bot integrations are tagged with `APP` / `BOT` badges that should be surfaced separately so dashboards can filter automated vs human messages).
+136. [ ] Receipt: subscription / recurring-charge detection into `ReceiptFields.recurring` (SaaS invoices print `Recurring monthly`, `Auto-renew`, `Next charge: 2024-03-15`, `Subscription` keywords that flag the receipt as a recurring rather than one-off charge).
 
 
 ## Tick log
@@ -1159,6 +1167,119 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
       32-hex char run in source text. Worth
       documenting in conventions for future
       Twilio / AWS / Stripe / similar test work.
+
+- 2026-06-23 00:32 PT (tick 21, Cake): 5 features.
+  - c569e9c feat(extract): cross-category invoice/quote/PO ID extractor into raw["invoice_ids"]
+  - 93fdceb feat(extract/receipt): split-payment / multi-tender detection into ReceiptFields.tenders
+  - c4303eb feat(extract/chat): forwarded-message marker detection into ChatFields.forwards
+  - 9a7ef36 feat(extract/code): shell-script style detection into CodeFields.shell_style
+  - df872f0 feat(extract): cross-category emoji tally extractor into raw["emojis"]
+  - Gate: ruff at baseline 536 (one I001 fixup folded
+    via --fixup + --autosquash into the forwards
+    commit -- ruff wanted no blank line between
+    `from __future__ import annotations` and the
+    next import paragraph in test_chat_forwards.py)
+    + pytest 5052 passed / 3 skipped in 123.00s.
+    310 new tests across the 5 features (77 + 49 +
+    54 + 73 + 57). New ReceiptFields shipped:
+    tenders (list of {kind, amount} dicts). New
+    ChatFields shipped: forwards (list of {kind,
+    forwarded_from?, sender?} dicts). New CodeFields
+    shipped: shell_style (str | None). Two new
+    cross-category raw keys: raw["invoice_ids"] and
+    raw["emojis"]. LLM wire format in classify/
+    client.py updated for tenders / forwards /
+    shell_style. Roadmap refilled with 5 new items
+    (132..136 -- chart legend-color-map, document
+    page-info footer, cross-category percentages,
+    chat bot-vs-human messages, receipt subscription
+    detection) so backlog stays at 27+ open.
+    Disk-space note: hit /var/folders 100% full at
+    pytest run -- freed 1.1Gi by removing the
+    leftover pytest-of-sanjay tmpdirs from previous
+    runs (936MiB) plus the node-compile-cache
+    (24MiB) before the rerun. Notable design
+    decisions:
+    * invoice_ids: three-shape matching with span-
+      claim defence -- slash-form (2024/INV/0099)
+      runs FIRST so the inner "INV" isn't also
+      consumed by the keyword-led "Invoice 0099"
+      matcher. Bare "Bill 12345" prose rejected
+      because Bill matcher REQUIRES the compound
+      form (Bill No: / Bill Number: / Bill #) --
+      "Bill: $50" is too common on dinner receipts
+      to be safe with a bare-colon match. Short
+      prefixes (Q/QU/CN/PO/AR) require 4+ char body
+      so "Q-1"/"PO-1" prose tail rejects; long
+      prefixes (INV/INVOICE/BILL/EST/QUOTE/CREDIT/
+      PURCHASE) require 3+ char body so 3-digit
+      small-business invoices (INV-001) still
+      parse. Hash prefix is stripped from canonical
+      id because # is printer convention.
+    * tenders: per-line matching (keyword + amount
+      must sit on the SAME line) so a "Visa"
+      header at the top doesn't pair with the
+      total at the bottom. Surfaces ONLY when 2+
+      distinct tender lines detected -- single-
+      tender receipts use the existing payment_
+      method / tendered slots. Multi-word forms
+      beat short aliases via catalogue ordering
+      ("American Express" -> amex, "Master Card"
+      -> mastercard, "Gift Card" -> gift_card NOT
+      bare card). Both US (1,234.56) and EU
+      (1.234,56) decimal conventions parse.
+      Negative-sign stripped because field
+      semantic implies positive amount.
+    * forwards: priority-ordered with consumed-
+      span defence so the more-specific bracketed
+      ([Forwarded from #channel]) and parenthesised
+      ((Forwarded from Alice)) shapes claim their
+      regions BEFORE the bare "Forwarded from <X>"
+      matcher fires, preventing double-tagging.
+      Bare-Forwarded badge matcher requires full-
+      line match (with optional arrow/italic
+      markers) so mid-sentence prose "I forwarded
+      that yesterday" never fires. Forward-arrow
+      emoji alone (↪️ without the Forwarded word)
+      doesn't fire because the keyword is the
+      discriminator. "Forwarded many times" tagged
+      as a distinct ``forwarded_many`` kind
+      because dashboards care about viral-
+      propagation chain markers (often
+      misinformation in real-world WhatsApp).
+    * shell_style: detection precedence -- tcsh/csh
+      checked BEFORE fish because both use `set`
+      but tcsh's `set VAR = value` (with spaces
+      around =) wins over fish's broader `set
+      VAR value` matcher. PowerShell wins
+      immediately when present because the
+      cmdlet vocabulary is highly distinctive.
+      Shell-language gate enforced: non-shell
+      language returns None unconditionally so a
+      Python string containing `[[ $foo ]]`
+      won't false-positive. When language is None
+      runs content sniffing returning the matched
+      style ONLY on a positive signal -- generic
+      snippets (JSON/YAML/prose) with no signals
+      return None instead of posix to avoid mis-
+      classifying.
+    * emojis: ZWJ sequences combine two emoji
+      codepoints into one logical unit so family
+      compounds (👨‍👩‍👧‍👦), technologist
+      (👨‍💻), and rainbow-flag (🏳️‍🌈) all
+      surface as single entries with the full
+      codepoint sequence preserved (U+1F468
+      U+200D U+1F469 U+200D ...). Skin-tone
+      modifiers attach to preceding hand/face
+      emoji so 👍🏻 light and 👍🏿 dark count as
+      DISTINCT entries (the modifier semantic is
+      meaningful). Variation selectors (U+FE0E
+      text vs U+FE0F emoji) combine with
+      preceding base char so ❤ bare and ❤️
+      with VS-16 are distinct. Plain ASCII
+      symbols ($/€/£/©/®/→) intentionally NOT
+      captured because they appear in non-emoji
+      contexts (math, prose, copyright).
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
