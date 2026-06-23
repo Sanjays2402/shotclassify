@@ -2921,6 +2921,285 @@ def extract_build_commands(code: str) -> list[dict[str, str]]:
     return out
 
 
+# ---------------------------------------------------------------------
+# Dependency version-pin extraction. Many code captures show
+# package.json / requirements.txt / Cargo.toml / Gemfile / composer.json
+# / go.mod / pyproject.toml content. We detect the recognised
+# pin shapes for each ecosystem and emit ``{ecosystem, package,
+# version}`` dicts.
+#
+# Ecosystem detection uses per-line pattern matching -- we do NOT
+# rely on the surrounding language tag because OCR captures often
+# mix multiple manifest snippets. The same line that matches an
+# ecosystem-specific shape determines the tag for THAT line; lines
+# can come from different ecosystems within the same snippet.
+# ---------------------------------------------------------------------
+
+# A version specifier accepts the common operators across ecosystems:
+# exact (1.0), caret (^1.0), tilde (~1.0, ~> 1.0), >= / <= / != / < / >,
+# wildcard (*, x), pre-release tail (-alpha, -beta.1, -rc1),
+# build metadata (+build), single-quoted / double-quoted forms.
+# The ``[ <>=!^~*]?`` family of leading operator chars is captured
+# but we keep them in the version output verbatim.
+_VERSION_BODY = r"[\w.+\-*x]"
+_VERSION_SPEC = (
+    r"(?:[<>=!^~]{1,2}\s*)?" + _VERSION_BODY + r"+"
+    + r"(?:\s*,\s*[<>=!^~]{1,2}\s*" + _VERSION_BODY + r"+)*"
+)
+
+# npm / package.json:  "react": "^18.2.0"  /  "@types/react": "^18.2"
+# The leading-name shape allows the @scoped/name form.
+_NPM_DEP_RE = re.compile(
+    r'^\s*"(?P<name>(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+)"\s*:\s*"(?P<ver>[^"]+)"',
+    re.MULTILINE,
+)
+
+# pip / requirements.txt: requests==2.31.0   flask>=2.0,<3.0
+# Allows extras: requests[socks]==2.31.0
+# Quietly rejects comments (#), URL-based deps (-e .), git/file URLs.
+_PIP_DEP_RE = re.compile(
+    r"^\s*"
+    r"(?P<name>[A-Za-z][A-Za-z0-9._-]{0,127})"
+    r"(?:\[[A-Za-z0-9_,\s]+\])?"  # optional extras [socks, brotli]
+    r"\s*"
+    r"(?P<spec>(?:==|>=|<=|!=|~=|>|<)\s*"
+    + _VERSION_BODY + r"+"
+    + r"(?:\s*,\s*(?:==|>=|<=|!=|~=|>|<)\s*" + _VERSION_BODY + r"+)*"
+    + r")\s*(?:#.*)?$",
+    re.MULTILINE,
+)
+
+# Cargo.toml: serde = "1.0"   /   serde = { version = "1.0", features = ["foo"] }
+# We capture the simple form first; the table-form needs a separate
+# pattern.
+_CARGO_DEP_SIMPLE_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z][A-Za-z0-9._-]{0,127})"
+    r'\s*=\s*"(?P<ver>[^"]+)"',
+    re.MULTILINE,
+)
+_CARGO_DEP_TABLE_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z][A-Za-z0-9._-]{0,127})"
+    r"\s*=\s*\{[^}]*?\bversion\s*=\s*"
+    r'"(?P<ver>[^"]+)"',
+    re.MULTILINE | re.DOTALL,
+)
+
+# Gemfile:  gem 'rails', '~> 7.0'   /   gem "puma", "~> 6.4"
+_GEM_DEP_RE = re.compile(
+    r"^\s*gem\s+['\"](?P<name>[A-Za-z][A-Za-z0-9._-]{0,127})['\"]"
+    r"\s*,\s*['\"](?P<ver>[^'\"]+)['\"]",
+    re.MULTILINE,
+)
+
+# composer.json: "monolog/monolog": "^2.5"
+# Always uses the vendor/package shape.
+_COMPOSER_DEP_RE = re.compile(
+    r'^\s*"(?P<name>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)"'
+    r'\s*:\s*"(?P<ver>[^"]+)"',
+    re.MULTILINE,
+)
+
+# go.mod: require github.com/x/y v1.2.3   /   github.com/x/y v1.2.3
+# Inside a require ( ... ) block, the require keyword is absent on
+# each line so we match both shapes.
+_GO_MOD_DEP_RE = re.compile(
+    r"^\s*(?:require\s+)?"
+    r"(?P<name>[a-z0-9.][a-z0-9./_-]{2,127})\s+"
+    r"v(?P<ver>\d+\.\d+\.\d+(?:[\-+][\w.]+)*"
+    r"(?:\+incompatible)?)",
+    re.MULTILINE,
+)
+
+# Maven (pom.xml): <dependency>
+#                    <groupId>foo</groupId>
+#                    <artifactId>bar</artifactId>
+#                    <version>1.0</version>
+#                  </dependency>
+# We capture the inline-XML form that's common in OCR captures.
+_MAVEN_DEP_RE = re.compile(
+    r"<groupId>(?P<group>[^<\s]+)</groupId>\s*"
+    r"<artifactId>(?P<artifact>[^<\s]+)</artifactId>\s*"
+    r"<version>(?P<ver>[^<\s]+)</version>",
+    re.IGNORECASE,
+)
+
+# Gradle: implementation 'com.example:lib:1.0'   /   compile "com.example:lib:1.0"
+# Also: implementation group: 'com.example', name: 'lib', version: '1.0'
+_GRADLE_DEP_RE = re.compile(
+    r"\b(?:implementation|compile|api|testImplementation|runtimeOnly|"
+    r"compileOnly|annotationProcessor|kapt|ksp)\s+"
+    r"['\"](?P<name>[a-zA-Z0-9.][a-zA-Z0-9._-]*:[a-zA-Z0-9.][a-zA-Z0-9._-]*)"
+    r":(?P<ver>[^'\"]+)['\"]"
+)
+
+# Maximum number of dep_pins entries surfaced per snippet.
+_MAX_DEP_PINS = 100
+
+# Pip / npm names that look like names but are placeholders to skip
+# (the ``Section name`` / ``Package`` headers on doc tables).
+_DEP_NAME_BLOCKLIST = frozenset({
+    "package", "name", "version", "library", "dependency",
+    "deps", "section",
+})
+
+
+def extract_dep_pins(code: str) -> list[dict[str, str]]:
+    """Return dependency version-pins found in ``code``.
+
+    Each entry is a ``{"package": str, "version": str,
+    "ecosystem": str}`` dict where ``ecosystem`` is one of
+    ``npm`` / ``pip`` / ``cargo`` / ``gem`` / ``composer`` /
+    ``go`` / ``maven`` / ``gradle``.
+
+    Recognised shapes (per ecosystem):
+
+    * **npm** -- ``"react": "^18.2.0"``,
+      ``"@types/react": "^18.2"`` (package.json format)
+    * **pip** -- ``requests==2.31.0`` / ``flask>=2.0,<3.0`` /
+      ``requests[socks]==2.31.0`` (requirements.txt format)
+    * **cargo** -- ``serde = "1.0"`` / ``tokio = { version = "1.0",
+      features = ["full"] }`` (Cargo.toml format)
+    * **gem** -- ``gem 'rails', '~> 7.0'`` (Gemfile format)
+    * **composer** -- ``"monolog/monolog": "^2.5"`` (composer.json
+      format with mandatory vendor/package shape)
+    * **go** -- ``require github.com/x/y v1.2.3`` /
+      ``github.com/x/y v1.2.3`` (go.mod format)
+    * **maven** -- ``<groupId>foo</groupId>
+      <artifactId>bar</artifactId><version>1.0</version>``
+      (pom.xml format; emits ``foo:bar`` as the package name)
+    * **gradle** -- ``implementation 'com.example:lib:1.0'``
+      (build.gradle format)
+
+    Ecosystem detection uses per-shape pattern matching -- we do NOT
+    rely on the surrounding language tag. A snippet can mix multiple
+    manifest formats (a tutorial blog post quoting BOTH a
+    requirements.txt and a package.json fragment) and we tag each
+    line according to its own format.
+
+    Priority ordering: composer (mandatory vendor/package shape)
+    runs BEFORE generic npm (which would also match composer's
+    ``"foo/bar": "1.0"`` shape but tag it as npm). gradle runs
+    BEFORE maven on a per-line basis (gradle has a more-specific
+    prelude). Within the npm / cargo / pip / gem / go / maven
+    branches, ordering doesn't matter because their shapes don't
+    overlap.
+
+    Duplicate suppression: de-duped on the
+    ``(ecosystem, package, version)`` triple. First-seen order
+    preserved. Capped at 100 entries.
+
+    Empty list when no recognised pin is present (a plain function /
+    class body, raw prose, etc).
+    """
+    if not code:
+        return []
+
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def _add(ecosystem: str, package: str, version: str) -> None:
+        package = package.strip()
+        version = version.strip()
+        if not package or not version:
+            return
+        if package.lower() in _DEP_NAME_BLOCKLIST:
+            return
+        key = (ecosystem, package, version)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({
+            "ecosystem": ecosystem,
+            "package": package,
+            "version": version,
+        })
+
+    # Track captured spans per line so we don't double-count -- but
+    # only WITHIN the same line. Different ecosystems on different
+    # lines are independent.
+    #
+    # Composer FIRST because its mandatory vendor/package format
+    # is more specific than the generic npm key:value shape.
+    for m in _COMPOSER_DEP_RE.finditer(code):
+        name = m.group("name")
+        if "/" not in name:  # composer requires vendor/package
+            continue
+        _add("composer", name, m.group("ver"))
+        if len(out) >= _MAX_DEP_PINS:
+            return out
+
+    for m in _NPM_DEP_RE.finditer(code):
+        name = m.group("name")
+        if "/" in name and not name.startswith("@"):
+            # Composer-style "vendor/package" was already handled
+            # above. We only accept npm scoped form (@scope/pkg).
+            continue
+        if len(out) >= _MAX_DEP_PINS:
+            return out
+        _add("npm", name, m.group("ver"))
+
+    for m in _PIP_DEP_RE.finditer(code):
+        if len(out) >= _MAX_DEP_PINS:
+            return out
+        spec = m.group("spec").replace(" ", "")
+        _add("pip", m.group("name"), spec)
+
+    # Cargo: table-form FIRST because its body contains a quoted
+    # version that the simple form would also match (with the wrong
+    # name -- e.g. `tokio = { version = "1.0" }` would otherwise
+    # also match the simple shape with name=tokio version=1.0
+    # which is correct, but the table-form captures it cleaner).
+    cargo_table_spans: list[tuple[int, int]] = []
+    for m in _CARGO_DEP_TABLE_RE.finditer(code):
+        if len(out) >= _MAX_DEP_PINS:
+            return out
+        _add("cargo", m.group("name"), m.group("ver"))
+        cargo_table_spans.append((m.start(), m.end()))
+
+    # Simple cargo form: skip matches whose span overlaps a table-form match.
+    for m in _CARGO_DEP_SIMPLE_RE.finditer(code):
+        if len(out) >= _MAX_DEP_PINS:
+            return out
+        # Skip if this match's span sits inside a table-form span.
+        overlap = False
+        for ts, te in cargo_table_spans:
+            if ts <= m.start() < te:
+                overlap = True
+                break
+        if overlap:
+            continue
+        _add("cargo", m.group("name"), m.group("ver"))
+
+    for m in _GEM_DEP_RE.finditer(code):
+        if len(out) >= _MAX_DEP_PINS:
+            return out
+        _add("gem", m.group("name"), m.group("ver"))
+
+    for m in _GO_MOD_DEP_RE.finditer(code):
+        if len(out) >= _MAX_DEP_PINS:
+            return out
+        name = m.group("name")
+        # Defensive: go module paths always contain a dot (the TLD
+        # in the registry host). Reject single-word names that
+        # would otherwise misfire on random text like ``module v1``.
+        if "." not in name:
+            continue
+        _add("go", name, "v" + m.group("ver"))
+
+    for m in _GRADLE_DEP_RE.finditer(code):
+        if len(out) >= _MAX_DEP_PINS:
+            return out
+        _add("gradle", m.group("name"), m.group("ver"))
+
+    for m in _MAVEN_DEP_RE.finditer(code):
+        if len(out) >= _MAX_DEP_PINS:
+            return out
+        name = f"{m.group('group')}:{m.group('artifact')}"
+        _add("maven", name, m.group("ver"))
+
+    return out
+
+
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     code = (existing.code if existing and existing.code else ocr.text or "").strip()
     # Markdown fence-language detection. Runs FIRST on the original
@@ -3114,6 +3393,22 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if not build_commands:
         build_commands = extract_build_commands(code)
+    # Dependency version-pin extraction. Caller-supplied list wins
+    # (preserved verbatim); otherwise scan the snippet for recognised
+    # npm / pip / cargo / gem / composer / go / maven / gradle pin
+    # shapes and surface each {ecosystem, package, version} dict.
+    # Ecosystem detection uses per-shape pattern matching so a
+    # snippet that mixes multiple manifest formats (a blog post
+    # quoting both a requirements.txt and package.json fragment)
+    # tags each line independently. Returns an empty list when no
+    # recognised pin is present.
+    dep_pins = (
+        list(existing.dep_pins)
+        if existing and existing.dep_pins
+        else []
+    )
+    if not dep_pins:
+        dep_pins = extract_dep_pins(code)
     return CodeFields(
         language=language,
         code=code,
@@ -3136,4 +3431,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         css_vendor_prefixes=css_vendor_prefixes,
         regexes=regexes,
         build_commands=build_commands,
+        dep_pins=dep_pins,
     )

@@ -158,6 +158,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             css_vendor_prefixes=c.get("css_vendor_prefixes") or [],
             regexes=c.get("regexes") or [],
             build_commands=c.get("build_commands") or [],
+            dep_pins=c.get("dep_pins") or [],
         )
     if e := fields_in.get("error"):
         fields.error = ErrorFields(**{k: e.get(k) for k in ErrorFields.model_fields})

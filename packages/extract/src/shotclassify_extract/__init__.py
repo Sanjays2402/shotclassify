@@ -20,6 +20,7 @@ from .code import (
     enrich_code,
     extract_build_commands,
     extract_copyrights,
+    extract_dep_pins,
     extract_feature_flags,
     extract_imports,
     extract_regex_literals,
@@ -129,4 +130,5 @@ __all__ = [
     "extract_postal_codes",
     "extract_regex_literals",
     "extract_build_commands",
+    "extract_dep_pins",
 ]

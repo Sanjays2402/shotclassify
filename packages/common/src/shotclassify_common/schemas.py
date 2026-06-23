@@ -778,6 +778,42 @@ class CodeFields(BaseModel):
     # preserved. Capped at 50 entries. Empty list when no recognised
     # command is present.
     build_commands: list[dict[str, str]] = Field(default_factory=list)
+    # Dependency version-pins extracted from manifest-shaped snippets.
+    # Many code captures show package.json / requirements.txt /
+    # Cargo.toml / Gemfile / composer.json / go.mod / pyproject.toml
+    # content, and a dashboard reviewing the snippet wants to know
+    # which packages it pins:
+    #
+    #   "react": "^18.2.0"           (package.json)
+    #   requests==2.31.0             (requirements.txt)
+    #   flask>=2.0,<3.0              (requirements.txt range)
+    #   serde = "1.0"                (Cargo.toml)
+    #   gem 'rails', '~> 7.0'        (Gemfile)
+    #   "monolog/monolog": "^2.5"    (composer.json)
+    #   require github.com/x v1.2.3  (go.mod)
+    #   tokio = { version = "1.0", features = ["full"] }  (Cargo.toml)
+    #
+    # Each entry is a ``{"package": str, "version": str,
+    # "ecosystem": str}`` dict. ``package`` is the package /
+    # dependency name verbatim (preserving namespace separators
+    # like the ``vendor/package`` form for composer or the
+    # ``github.com/user/repo`` form for go). ``version`` is the
+    # version specifier as printed (exact pin ``2.31.0``, caret
+    # ``^18.2.0``, tilde ``~> 7.0``, range ``>=2.0,<3.0``, etc).
+    # ``ecosystem`` is the inferred package-manager tag:
+    # ``npm`` / ``pip`` / ``cargo`` / ``gem`` / ``composer`` /
+    # ``go`` / ``maven`` / ``gradle``.
+    #
+    # Dashboards use this list to surface "this snippet pins 7
+    # dependencies" annotations, detect outdated pins against a
+    # known-bad version list, and flag snippets that should be
+    # auto-updated by Dependabot / Renovate.
+    #
+    # De-duped on the (ecosystem, package, version) tuple; first-
+    # seen order preserved. Capped at 100 entries because a
+    # package.json / Cargo.lock screenshot can legitimately list
+    # 50+ dependencies. Empty list when no recognised pin is present.
+    dep_pins: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):
