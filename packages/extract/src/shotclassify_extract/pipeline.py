@@ -14,6 +14,7 @@ from .discord_ids import extract_discord_ids
 from .emails import extract_emails
 from .error import enrich_error
 from .error_fingerprints import extract_error_fingerprints
+from .fx_pairs import extract_fx_pairs
 from .git_shas import extract_git_shas
 from .identifiers import extract_identifiers
 from .jwts import extract_jwts
@@ -391,5 +392,24 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if fingerprints:
         out.raw = dict(out.raw or {})
         out.raw["error_fingerprints"] = fingerprints
+
+    # Cross-category: stash currency / crypto trading pairs found in
+    # the OCR text under raw["fx_pairs"]. Trading pairs surface on
+    # fintech / trading-app screenshots, exchange dashboards, broker
+    # captures, and developer chats about forex / crypto positions.
+    # Each entry is a {base, quote, rate} dict where base is the
+    # asset being priced, quote is the asset doing the pricing, and
+    # rate is the float rate when printed alongside the pair (after
+    # @ / : / bare whitespace) or None for bare-pair captures.
+    #
+    # Both sides MUST be in the curated catalogue (40 fiat ISO 4217
+    # codes + ~60 top-by-market-cap crypto tickers) so a stray
+    # USD/RED on a recipe website doesn't false-positive. The
+    # word-boundary defence on both ends stops false-positives on
+    # filesystem paths and date ranges.
+    fx_pairs = extract_fx_pairs(text)
+    if fx_pairs:
+        out.raw = dict(out.raw or {})
+        out.raw["fx_pairs"] = fx_pairs
 
     return out

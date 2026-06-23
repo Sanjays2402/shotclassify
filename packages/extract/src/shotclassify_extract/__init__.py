@@ -47,6 +47,7 @@ from .error import (
     parse_syntax_caret,
 )
 from .error_fingerprints import extract_error_fingerprints
+from .fx_pairs import extract_fx_pairs
 from .git_shas import extract_git_shas
 from .identifiers import extract_identifiers
 from .jwts import extract_jwts
@@ -97,6 +98,7 @@ __all__ = [
     "parse_syntax_caret",
     "parse_beam_crash",
     "extract_error_fingerprints",
+    "extract_fx_pairs",
     "enrich_chat",
     "parse_timestamp",
     "extract_urls",
