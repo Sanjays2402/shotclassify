@@ -166,6 +166,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             dep_pins=c.get("dep_pins") or [],
             dead_code=c.get("dead_code") or [],
             shell_style=c.get("shell_style"),
+            suspected_secrets=c.get("suspected_secrets") or [],
         )
     if e := fields_in.get("error"):
         fields.error = ErrorFields(**{k: e.get(k) for k in ErrorFields.model_fields})

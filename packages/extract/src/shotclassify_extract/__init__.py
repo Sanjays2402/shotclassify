@@ -26,6 +26,7 @@ from .code import (
     extract_feature_flags,
     extract_imports,
     extract_regex_literals,
+    extract_suspected_secrets,
     extract_todo_authors,
     extract_todo_tickets,
 )
@@ -139,6 +140,7 @@ __all__ = [
     "extract_build_commands",
     "extract_dep_pins",
     "extract_dead_code",
+    "extract_suspected_secrets",
     "extract_twilio_ids",
     "extract_invoice_ids",
     "extract_emojis",

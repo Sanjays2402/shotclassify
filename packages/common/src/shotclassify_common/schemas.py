@@ -1107,6 +1107,47 @@ class CodeFields(BaseModel):
     # OR when the snippet IS shell but the detector can't decide
     # between the styles (no signal in either direction).
     shell_style: str | None = None
+    # Suspected secret literals sniffed from the snippet body.
+    # Captures string literals that LOOK like API keys / credentials /
+    # OAuth secrets / private keys even when not caught by the typed
+    # redact modes. Useful for surfacing accidental leaks in
+    # screenshot captures of .env files, config snippets, terminal
+    # pastes, and code-review screenshots before the dashboard
+    # renders the snippet.
+    #
+    # Each entry is a ``{"kind": str, "hint": str}`` dict:
+    #
+    # * ``kind`` is the canonical suspected-secret category tag:
+    #     ``private_key``      -- BEGIN ... PRIVATE KEY block
+    #     ``api_key``          -- assignment like KEY=... with
+    #                             high-entropy alphanumeric value
+    #     ``bearer_token``     -- Authorization: Bearer <hex>
+    #     ``basic_auth``       -- Authorization: Basic <base64>
+    #     ``oauth_token``      -- access_token = ... / refresh_token
+    #     ``db_password``      -- password = ... / DB_PASSWORD = ...
+    #     ``secret_key``       -- SECRET_KEY = ... in env / config
+    #     ``connection_string`` -- postgres:// / mysql:// / mongodb://
+    #                             with user:pass@ embedded
+    #     ``hex_secret``       -- long hex blob (32+ chars) on an
+    #                             assignment line
+    # * ``hint`` is a SHORT redacted preview of the suspected
+    #   value -- the first 4 chars + ``...`` + the last 4 chars
+    #   so dashboards can render \"sk-1...AB89\" without leaking
+    #   the full secret. For private-key blocks the hint is the
+    #   block header (e.g. ``-----BEGIN RSA PRIVATE KEY-----``).
+    #
+    # The FULL VALUE IS NEVER STORED in this slot as a security
+    # guarantee. Pair with the typed redact modes (``aws_access_key``,
+    # ``github_pat``, ``slack_token``, ``jwt``, ``credit_card``) in
+    # shotclassify_common.redact for defence-in-depth -- this slot
+    # surfaces SUSPECTED secrets that the typed matchers missed
+    # (custom env-var names, vendor-specific tokens, generic
+    # high-entropy blobs).
+    #
+    # Empty list when no suspected secrets are detected. Capped at
+    # 20 entries because a single snippet rarely contains more
+    # than a handful of secret-shaped literals.
+    suspected_secrets: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):

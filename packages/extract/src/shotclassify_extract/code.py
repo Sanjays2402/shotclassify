@@ -3886,6 +3886,296 @@ def extract_dead_code(code: str) -> list[dict[str, str | None]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Suspected-secret literal sniffing.
+# ---------------------------------------------------------------------------
+
+# Private-key block headers (PEM-style).
+_PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN\s+(?:RSA|DSA|EC|OPENSSH|ENCRYPTED|PGP)?\s*PRIVATE\s+KEY-----",
+    re.IGNORECASE,
+)
+
+# Authorization: Bearer <token>
+_BEARER_RE = re.compile(
+    r"(?i)Authorization[\s:=]+Bearer\s+(?P<val>[A-Za-z0-9_.\-+/=]{16,})",
+)
+
+# Authorization: Basic <base64>
+_BASIC_AUTH_RE = re.compile(
+    r"(?i)Authorization[\s:=]+Basic\s+(?P<val>[A-Za-z0-9+/=]{12,})",
+)
+
+# Connection strings: postgres:// mysql:// mongodb:// redis:// with embedded
+# user:pass@ -- the password fragment is what we want to surface.
+_CONNECTION_STRING_RE = re.compile(
+    r"(?:postgres|postgresql|mysql|mongodb|mongodb\+srv|redis|rediss|amqp|amqps|"
+    r"mssql|cassandra|couchbase|cockroachdb)://"
+    r"(?P<user>[^\s:@/]+):(?P<pass>[^\s@/]{4,})@",
+    re.IGNORECASE,
+)
+
+# Assignment shapes: KEY=VALUE / KEY = "VALUE" / KEY: VALUE
+# Captures the key name AND value. We then classify by key name.
+_ASSIGNMENT_RE = re.compile(
+    r"^[ \t]*"
+    r"(?:export\s+|const\s+|let\s+|var\s+|setenv\s+|env\.|process\.env\.|"
+    r"ENV\[|@)?"
+    r"(?P<key>[A-Z][A-Z0-9_]{2,40})"
+    r"\s*(?:=|:|=>)\s*"
+    r"(?P<quote>['\"]?)(?P<val>[A-Za-z0-9_\-+/=.~!@#$%^&*]{12,})"
+    r"(?P=quote)",
+    re.MULTILINE,
+)
+
+# Lowercase JSON / YAML key forms: "key": "value" / key: value
+_LOWERCASE_KEY_RE = re.compile(
+    r"^[ \t]*"
+    r"(?P<quote_k>['\"]?)(?P<key>(?:api[_\-]?key|secret|password|passwd|"
+    r"pwd|token|access[_\-]?token|refresh[_\-]?token|private[_\-]?key|"
+    r"client[_\-]?secret|api[_\-]?secret|auth[_\-]?token|session[_\-]?token))"
+    r"(?P=quote_k)"
+    r"\s*[:=]\s*"
+    r"(?P<quote_v>['\"]?)(?P<val>[A-Za-z0-9_\-+/=.~!@#$%^&*]{8,})"
+    r"(?P=quote_v)",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# Long-hex secret on assignment: ``SECRET = abc123def456...`` 32+ hex chars.
+_HEX_SECRET_RE = re.compile(
+    r"(?P<key>[A-Z][A-Z0-9_]{2,40})\s*[:=]\s*"
+    r"(?P<quote>['\"]?)(?P<val>[a-f0-9]{32,})(?P=quote)",
+    re.MULTILINE,
+)
+
+# Key-name -> suspected secret kind. Order matters -- specific names
+# beat generic. We do case-insensitive prefix matching.
+_KEY_TO_KIND: tuple[tuple[str, str], ...] = (
+    # OAuth tokens
+    ("ACCESS_TOKEN", "oauth_token"),
+    ("REFRESH_TOKEN", "oauth_token"),
+    ("AUTH_TOKEN", "oauth_token"),
+    ("BEARER_TOKEN", "bearer_token"),
+    ("SESSION_TOKEN", "oauth_token"),
+    # Database / passwords
+    ("DB_PASSWORD", "db_password"),
+    ("DATABASE_PASSWORD", "db_password"),
+    ("PASSWORD", "db_password"),
+    ("PASSWD", "db_password"),
+    ("PWD", "db_password"),
+    # Secret keys (encryption / signing)
+    ("SECRET_KEY", "secret_key"),
+    ("SIGNING_KEY", "secret_key"),
+    ("ENCRYPTION_KEY", "secret_key"),
+    ("PRIVATE_KEY", "private_key"),
+    ("APP_SECRET", "secret_key"),
+    ("CLIENT_SECRET", "secret_key"),
+    # API keys
+    ("API_KEY", "api_key"),
+    ("API_SECRET", "api_key"),
+    ("APIKEY", "api_key"),
+)
+
+
+def _redact_hint(value: str, max_len: int = 80) -> str:
+    """Return a redacted preview of ``value`` safe for storage.
+
+    First 4 + ``...`` + last 4 chars. Caps the entire result at
+    ``max_len`` chars to avoid storing a long hint that's still
+    secret-bearing.
+    """
+    s = value.strip()
+    if len(s) <= 8:
+        return "*" * len(s)
+    if len(s) <= max_len:
+        return f"{s[:4]}...{s[-4:]}"
+    # Very long values get the same head/tail treatment.
+    return f"{s[:4]}...{s[-4:]}"
+
+
+def _classify_key(key: str) -> str | None:
+    """Return the suspected-secret kind tag for ``key``, or None.
+
+    Matches against the curated ``_KEY_TO_KIND`` table by full-name
+    equality (case-insensitive). Generic key names that don't carry
+    secret semantics (e.g. ``API_VERSION``, ``API_URL``) return None.
+    """
+    upper = key.upper()
+    for needle, kind in _KEY_TO_KIND:
+        if upper == needle:
+            return kind
+    return None
+
+
+def _has_high_entropy(value: str) -> bool:
+    """Cheap entropy check: at least 2 char classes + 16+ chars.
+
+    Used to filter out obvious low-entropy assignments like
+    ``LOG_LEVEL = INFO`` or ``DEBUG = true``. A real secret has
+    mixed case + digits AND/OR symbols.
+    """
+    if len(value) < 16:
+        return False
+    classes = 0
+    if any(c.islower() for c in value):
+        classes += 1
+    if any(c.isupper() for c in value):
+        classes += 1
+    if any(c.isdigit() for c in value):
+        classes += 1
+    if any(not c.isalnum() for c in value):
+        classes += 1
+    return classes >= 2
+
+
+_MAX_SUSPECTED_SECRETS = 20
+
+
+def extract_suspected_secrets(code: str) -> list[dict[str, str]]:
+    """Return suspected-secret literals found in ``code``.
+
+    Each entry is a ``{"kind": str, "hint": str}`` dict. The
+    FULL secret value is NEVER stored -- the hint is a redacted
+    preview (first 4 + ``...`` + last 4 chars).
+
+    Detected categories:
+    * ``private_key``       PEM-style ``-----BEGIN ... PRIVATE KEY-----``
+    * ``bearer_token``      ``Authorization: Bearer ...``
+    * ``basic_auth``        ``Authorization: Basic <base64>``
+    * ``connection_string`` ``postgres://user:pass@host/db`` user:pass
+    * ``api_key``           ``API_KEY = ...`` env / config
+    * ``db_password``       ``PASSWORD = ...`` / ``DB_PASSWORD = ...``
+    * ``secret_key``        ``SECRET_KEY = ...`` / ``CLIENT_SECRET = ...``
+    * ``oauth_token``       ``ACCESS_TOKEN`` / ``REFRESH_TOKEN`` /
+                            ``AUTH_TOKEN`` / ``SESSION_TOKEN``
+    * ``hex_secret``        Long hex blob (32+ chars) on assignment
+
+    Safety:
+    * The FULL value is never stored; only a redacted hint.
+    * Generic env vars without secret semantics (LOG_LEVEL,
+      API_URL, API_VERSION) don't fire even when the value is
+      long, because we require the KEY name to match the curated
+      catalogue.
+    * Low-entropy assignments (``DEBUG = true``, ``ENABLED = 1``)
+      filtered out by the entropy check (need 2+ char classes
+      and 16+ chars).
+    * De-duped on the (kind, hint) pair so the same secret
+      printed twice collapses to one entry. Capped at 20 entries.
+
+    Pair with the typed redact modes in shotclassify_common.redact
+    (``aws_access_key``, ``github_pat``, ``slack_token``, ``jwt``,
+    ``credit_card``) for defence-in-depth -- this slot catches
+    SUSPECTED secrets that the typed matchers missed.
+    """
+    if not code or not isinstance(code, str):
+        return []
+
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _emit(kind: str, hint: str) -> None:
+        key = (kind, hint)
+        if key in seen:
+            return
+        seen.add(key)
+        if len(out) < _MAX_SUSPECTED_SECRETS:
+            out.append({"kind": kind, "hint": hint})
+
+    # Pass 1: private-key block headers. Hint is the header line itself
+    # (no secret material in the header).
+    for m in _PRIVATE_KEY_RE.finditer(code):
+        header = m.group(0)
+        _emit("private_key", header)
+
+    # Pass 2: connection strings with embedded user:pass@.
+    for m in _CONNECTION_STRING_RE.finditer(code):
+        pw = m.group("pass")
+        # Hint shows user + redacted password.
+        user = m.group("user")
+        hint = f"{user}:{_redact_hint(pw)}"
+        _emit("connection_string", hint)
+
+    # Pass 3: Authorization: Bearer <token>
+    for m in _BEARER_RE.finditer(code):
+        token = m.group("val")
+        if _has_high_entropy(token):
+            _emit("bearer_token", _redact_hint(token))
+
+    # Pass 4: Authorization: Basic <base64>
+    for m in _BASIC_AUTH_RE.finditer(code):
+        token = m.group("val")
+        _emit("basic_auth", _redact_hint(token))
+
+    # Pass 5: uppercase-env-var assignments matching catalogue.
+    for m in _ASSIGNMENT_RE.finditer(code):
+        key = m.group("key")
+        val = m.group("val")
+        kind = _classify_key(key)
+        if kind is None:
+            continue
+        if not _has_high_entropy(val):
+            continue
+        _emit(kind, _redact_hint(val))
+
+    # Pass 6: lowercase / JSON / YAML key forms.
+    for m in _LOWERCASE_KEY_RE.finditer(code):
+        key = m.group("key")
+        val = m.group("val")
+        # Normalise the key to a canonical kind tag.
+        key_norm = key.lower().replace("-", "_")
+        if "private_key" in key_norm or key_norm == "private_key":
+            kind = "private_key"
+        elif "client_secret" in key_norm or "app_secret" in key_norm:
+            kind = "secret_key"
+        elif (
+            "access_token" in key_norm
+            or "refresh_token" in key_norm
+            or "auth_token" in key_norm
+            or "session_token" in key_norm
+        ):
+            kind = "oauth_token"
+        elif "api_key" in key_norm or "apikey" in key_norm or "api_secret" in key_norm:
+            kind = "api_key"
+        elif "secret" in key_norm:
+            kind = "secret_key"
+        elif (
+            "password" in key_norm
+            or "passwd" in key_norm
+            or key_norm == "pwd"
+        ):
+            kind = "db_password"
+        elif "token" in key_norm:
+            kind = "oauth_token"
+        else:
+            continue
+        # Don't require high entropy for lowercase keyed assignments
+        # because they're already explicitly named as secrets.
+        if len(val) < 8:
+            continue
+        _emit(kind, _redact_hint(val))
+
+    # Pass 7: long hex blobs on assignment. Catches generic
+    # ``SECRET = abc123...`` patterns the catalogue missed.
+    for m in _HEX_SECRET_RE.finditer(code):
+        key = m.group("key")
+        val = m.group("val")
+        # Only fire if the key name CONTAINS a secret-y word so
+        # we don't false-positive on things like SHA_HASH or
+        # COMMIT_ID.
+        upper = key.upper()
+        if not any(
+            kw in upper
+            for kw in (
+                "SECRET", "KEY", "TOKEN", "PASS", "AUTH", "PRIV", "CRED",
+                "API", "SIGN",
+            )
+        ):
+            continue
+        _emit("hex_secret", _redact_hint(val))
+
+    return out
+
+
 def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     code = (existing.code if existing and existing.code else ocr.text or "").strip()
     # Markdown fence-language detection. Runs FIRST on the original
@@ -4119,6 +4409,22 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if shell_style is None:
         shell_style = detect_shell_style(code, language)
+    # Suspected-secret literal sniffing. Caller-supplied list wins
+    # (preserved verbatim); otherwise scan the snippet for high-
+    # entropy string literals that look like API keys / OAuth
+    # tokens / passwords / private keys / connection strings.
+    # Each entry stores a REDACTED hint (first 4 + ... + last 4
+    # chars), NEVER the full secret -- pair with the typed
+    # `aws_access_key` / `github_pat` / `slack_token` / `jwt` /
+    # `credit_card` redact modes in shotclassify_common.redact
+    # for defence-in-depth.
+    suspected_secrets = (
+        list(existing.suspected_secrets)
+        if existing and existing.suspected_secrets
+        else []
+    )
+    if not suspected_secrets:
+        suspected_secrets = extract_suspected_secrets(code)
     return CodeFields(
         language=language,
         code=code,
@@ -4144,4 +4450,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         dep_pins=dep_pins,
         dead_code=dead_code,
         shell_style=shell_style,
+        suspected_secrets=suspected_secrets,
     )
