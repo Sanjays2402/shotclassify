@@ -1542,6 +1542,58 @@ _GRAPHQL_MESSAGE_FIELD = re.compile(
     r'"message"\s*:\s*"(?P<msg>(?:[^"\\]|\\.)*)"',
     re.IGNORECASE,
 )
+
+# Apollo Client / Apollo Server error preludes. Apollo's client SDK
+# wraps GraphQL responses in either a ``Network error: ...`` (fetch
+# layer failure) or ``GraphQL error: ...`` (server returned errors)
+# message inside a top-level ``ApolloError:`` line. Apollo Server
+# additionally throws typed exception classes (``AuthenticationError``,
+# ``ForbiddenError``, ``UserInputError``, ``SyntaxError``,
+# ``ValidationError``, ``PersistedQueryNotFoundError``, etc) that
+# print without the JSON ``errors`` array wrapping.
+#
+# The bracketed form ``[GraphQLError: <message>]`` shows up in stack
+# tails from both client and server (e.g. JS arrays of error objects
+# coerced to string via .toString()).
+_APOLLO_TOPLEVEL_RE = re.compile(
+    # ``ApolloError: <message>`` (client + server both)
+    r"\bApolloError\b\s*:\s*(?P<msg>[^\n\r]*)",
+)
+_APOLLO_BRACKETED_RE = re.compile(
+    # ``[GraphQLError: <message>]`` or ``[ApolloError: <message>]``
+    # form used by JS array stringification.
+    r"\[(?P<exc>(?:GraphQL|Apollo)Error)\s*:\s*(?P<msg>[^\]\n\r]*)\]",
+)
+# Apollo Server typed exception classes raised before the JSON
+# response shape is materialised (e.g. inside a resolver, before
+# Apollo wraps into ``errors: []``). When the OCR capture shows the
+# raw thrown exception line we want to tag the framework as
+# ``apollo`` not generic ``node`` / ``graphql``.
+_APOLLO_SERVER_EXC_RE = re.compile(
+    r"\b(?P<exc>AuthenticationError|ForbiddenError|UserInputError"
+    r"|SyntaxError|ValidationError|PersistedQueryNotFoundError"
+    r"|PersistedQueryNotSupportedError"
+    r"|ApolloError|ApolloServerError|MissingFieldError)"
+    r"\s*:\s*(?P<msg>[^\n\r]+)"
+)
+# Bare ``ApolloError:`` is the strongest discriminator; the typed
+# server classes (SyntaxError / ValidationError) are NOT --
+# SyntaxError is a built-in JS class that also fires on plain JS code
+# captures. We require an Apollo-vocabulary anchor in the same text
+# (``ApolloServer`` / ``apollo`` / ``GraphQLError`` / ``resolveType`` /
+# ``Resolver`` / ``graphql`` / ``gql\``) before we accept the typed
+# class as Apollo-tagged. Without an anchor those classes fall
+# through to whatever framework branch matches next (typically Node).
+_APOLLO_ANCHOR_RE = re.compile(
+    r"\b(?:Apollo(?:Server|Client|Link)?|apollo-(?:client|server|link)"
+    r"|\@apollo/(?:client|server|link)|graphql|GraphQLError|resolveType"
+    r"|gql`|useQuery|useMutation|useSubscription|writeQuery|readQuery"
+    r"|apolloServer|apolloClient)\b",
+    re.IGNORECASE,
+)
+# Path / line extracted from a stack frame inside the Apollo error.
+# Reuses the Node ``at Foo.bar (file.ts:N:M)`` shape so we share
+# logic with the existing _JS_AT pattern.
 _GRAPHQL_CODE_FIELD = re.compile(
     r'"code"\s*:\s*"(?P<code>[A-Z][A-Z0-9_]{0,79})"',
     re.IGNORECASE,
@@ -1782,6 +1834,178 @@ def _json_string_unescape(s: str) -> str:
             out.append(ch)
             i += 1
     return "".join(out)
+
+
+def _parse_apollo_error(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    """Return (exception, message, file or None, line or None) for an
+    Apollo Client / Apollo Server error, or None when no Apollo
+    signature is detectable.
+
+    Apollo has three distinct text shapes that are NOT covered by the
+    JSON ``errors: []`` parser in :func:`_parse_graphql_error`:
+
+    1. ``ApolloError: Network error: Failed to fetch``
+       (Apollo Client wrapping a fetch failure)
+    2. ``ApolloError: GraphQL error: Cannot query field "foo"``
+       (Apollo Client wrapping a server GraphQL error)
+    3. ``[GraphQLError: Cannot query field "foo" on type "Bar"]``
+       (server-side GraphQLError stringified into a stack tail)
+    4. ``AuthenticationError: ...`` / ``ForbiddenError: ...`` /
+       ``UserInputError: ...`` / ``ValidationError: ...`` /
+       ``PersistedQueryNotFoundError: ...`` (Apollo Server typed
+       exception classes thrown from a resolver, alongside the
+       generic JS stack-trace)
+
+    The typed-server-exception shapes (case 4) ONLY count as Apollo
+    when an Apollo-vocabulary anchor sits in the same text -- without
+    an anchor those names collide with built-in JS classes (``Syntax
+    Error`` / ``ValidationError`` from form libraries) so we let them
+    fall through to whatever generic branch matches next.
+
+    Exception slot priority:
+      * Bracketed form: ``GraphQLError`` / ``ApolloError`` literal.
+      * Top-level ``ApolloError:`` form: ``ApolloError`` literal.
+      * Typed-server form: the matched class name.
+
+    Message slot: text after the colon, trimmed. For nested
+    ``ApolloError: Network error: detail`` we PRESERVE the inner
+    classifier (``Network error: detail``) because dashboards want
+    the distinction between network-vs-graphql wrapping.
+
+    File / line: from the innermost JS ``at file.ts:N:M`` frame when
+    present; otherwise ``None``.
+
+    Returns ``None`` when:
+      * No Apollo / GraphQL prelude is detectable, OR
+      * Only a typed-server exception fires but no Apollo anchor is
+        present in the surrounding text.
+    """
+    if not text:
+        return None
+
+    # 1) Bracketed [GraphQLError: msg] / [ApolloError: msg] form.
+    #    This is the most distinctive shape -- the brackets + colon +
+    #    typed class name don't appear anywhere else, so we don't
+    #    require an anchor.
+    bracket = _APOLLO_BRACKETED_RE.search(text)
+
+    # 2) Top-level ``ApolloError: <msg>`` form. Distinctive enough
+    #    that the bare class name alone is sufficient evidence.
+    toplevel = _APOLLO_TOPLEVEL_RE.search(text)
+
+    # 3) Typed Apollo-server exception classes. Require an Apollo /
+    #    GraphQL anchor in the same text so a stand-alone JS
+    #    ``ValidationError: ...`` from a form-library doesn't tag.
+    typed = _APOLLO_SERVER_EXC_RE.search(text)
+    has_anchor = _APOLLO_ANCHOR_RE.search(text) is not None
+
+    if bracket is None and toplevel is None and (typed is None or not has_anchor):
+        return None
+
+    # Priority: bracket > toplevel > typed. The bracket form carries
+    # the most-specific class name + body. The toplevel form is
+    # explicit about the Apollo wrapper. The typed form is the last
+    # resort.
+    exc: str
+    msg: str
+    if bracket is not None:
+        exc = bracket.group("exc")
+        msg = bracket.group("msg").strip()
+    elif toplevel is not None:
+        exc = "ApolloError"
+        msg = toplevel.group("msg").strip()
+    else:
+        # typed is not None and has_anchor is True (per the guard above)
+        assert typed is not None
+        exc = typed.group("exc")
+        msg = typed.group("msg").strip()
+
+    # File / line from the innermost JS frame.
+    file_: str | None = None
+    line_: int | None = None
+    for m in _JS_AT.finditer(text):
+        file_, line_ = m.group(1), int(m.group(2))
+
+    return exc, msg, file_, line_
+
+
+def _apollo_likely_cause(exception: str, message: str) -> str | None:
+    """Return operator-friendly hints for common Apollo errors.
+
+    Handles both:
+      * Apollo Client wrapping shapes (``Network error: ...``,
+        ``GraphQL error: ...`` inside an ApolloError message).
+      * Apollo Server typed exception classes
+        (AuthenticationError / ForbiddenError / UserInputError /
+        ValidationError / PersistedQueryNotFoundError).
+    """
+    exc_l = exception.lower()
+    msg_l = message.lower()
+    # Apollo Client wrappers -- the inner classifier carries the signal.
+    if "network error" in msg_l:
+        if "failed to fetch" in msg_l or "fetch failed" in msg_l:
+            return (
+                "Apollo Client fetch failed; check server URL, CORS, and "
+                "network connectivity."
+            )
+        if "timeout" in msg_l or "timed out" in msg_l:
+            return "Apollo Client request timed out; raise timeout or check upstream."
+        if "abort" in msg_l:
+            return "Apollo Client request aborted; check link middleware and AbortController."
+        return "Apollo Client transport error; inspect the link chain and response."
+    if "graphql error" in msg_l:
+        # The inner GraphQL error tail is the actual server message.
+        if "cannot query field" in msg_l:
+            return "Field doesn't exist on the parent type; check schema and field name."
+        if "syntax" in msg_l:
+            return "Request document has a GraphQL syntax error; validate the query string."
+        return "Apollo Client received a GraphQL response with errors; inspect the resolver."
+    # Apollo Server typed exception classes.
+    if "authenticationerror" in exc_l:
+        return "Authentication failed; check Authorization header or session cookie."
+    if "forbiddenerror" in exc_l:
+        return "Authenticated but lacking permission; check role / directive guard."
+    if "userinputerror" in exc_l:
+        return "Resolver input validation failed; check the variables match scalar / type."
+    if "persistedquerynotfounderror" in exc_l:
+        return "Automatic Persisted Queries cache miss; resend with full document."
+    if "persistedquerynotsupportederror" in exc_l:
+        return "Server doesn't support APQ; configure client to send full document."
+    if "missingfielderror" in exc_l:
+        return "Cache miss for the requested field; check writeQuery / writeFragment shape."
+    if "syntaxerror" in exc_l:
+        return "Request document has a GraphQL syntax error; validate the query string."
+    if "validationerror" in exc_l:
+        return "Schema validation failed; check field names, argument types, fragment shape."
+    if "apolloservererror" in exc_l or "apolloerror" in exc_l:
+        return "Apollo Server reported an unhandled resolver exception; check logs."
+    return None
+
+
+def parse_apollo_error(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    """Return ``(exception, message, file or None, line or None)`` for
+    an Apollo Client / Apollo Server error, or ``None`` when no Apollo
+    signature is present.
+
+    Three recognised shapes:
+    * ``[GraphQLError: <msg>]`` / ``[ApolloError: <msg>]`` (stringified
+      array entry from JS array of error objects)
+    * ``ApolloError: <msg>`` (Apollo Client wrapper; ``<msg>`` is
+      typically ``Network error: ...`` or ``GraphQL error: ...``)
+    * Apollo Server typed exception classes
+      (``AuthenticationError`` / ``ForbiddenError`` / ``UserInputError``
+      / ``ValidationError`` / ``PersistedQueryNotFoundError`` /
+      ``MissingFieldError``)
+
+    The typed-server-exception shape ONLY counts as Apollo when an
+    Apollo vocabulary anchor (``Apollo`` / ``GraphQLError`` / ``gql\\``
+    / ``useQuery`` / ``useMutation`` / etc) sits in the same text.
+    """
+    return _parse_apollo_error(text)
 
 
 def _graphql_likely_cause(code: str | None, message: str | None) -> str | None:
@@ -2157,6 +2381,28 @@ def parse_error_text(text: str) -> ErrorFields:
             likely_cause=_graphql_likely_cause(code_for_cause, gql_msg),
             file=gql_path,
             line=gql_line,
+        )
+    # Apollo Client / Apollo Server text-shape errors run AFTER the
+    # GraphQL JSON branch (so a real GraphQL response with errors[]
+    # wins) but BEFORE the python / node / framework branches so a
+    # bare ``ApolloError: Network error: ...`` line doesn't get
+    # mis-tagged as ``node``. The Apollo parser is conservative:
+    # the bracketed [GraphQLError: ...] form and top-level
+    # ``ApolloError:`` form fire unconditionally, but the typed
+    # server-exception classes (AuthenticationError /
+    # ValidationError / etc) ONLY fire when an Apollo-vocabulary
+    # anchor sits in the same text -- without an anchor those
+    # generic JS class names would steal innocent JS captures.
+    apollo = _parse_apollo_error(text)
+    if apollo is not None:
+        apollo_exc, apollo_msg, apollo_file, apollo_line = apollo
+        return ErrorFields(
+            framework="apollo",
+            exception=apollo_exc,
+            message=apollo_msg,
+            likely_cause=_apollo_likely_cause(apollo_exc, apollo_msg),
+            file=apollo_file,
+            line=apollo_line,
         )
     if _PY_TRACE.search(text):
         framework = "python"

@@ -32,6 +32,7 @@ from .discord_ids import extract_discord_ids
 from .emails import extract_emails
 from .error import (
     enrich_error,
+    parse_apollo_error,
     parse_beam_crash,
     parse_error_text,
     parse_graphql_error,
@@ -83,6 +84,7 @@ __all__ = [
     "enrich_code",
     "enrich_error",
     "parse_error_text",
+    "parse_apollo_error",
     "parse_graphql_error",
     "parse_http_status",
     "parse_kotlin_coroutine",
