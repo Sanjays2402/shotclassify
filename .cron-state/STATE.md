@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (132 features tracked, 110 complete)
+## Roadmap (132 features tracked, 115 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -186,6 +186,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 128. [x] Code: type-annotation density into `CodeFields.type_annotation_density` (float in [0.0, 1.0]; counts share of function-arg + return slots that carry type annotation; language-aware: Python def/async def shapes detected always, JS/TS family (javascript/typescript/ts/tsx/jsx/js) detects both function declarations AND arrow function declarations, strictly-typed languages (Java/Kotlin/Scala/Go/Rust/Swift/C#/Haskell/OCaml/F#) return 1.0 when ANY function-def shape detected because annotations are language-mandated; counted slots: each arg in arg list (defaults stripped) + return type slot (counted when present OR when args non-empty so functions with args but no return type contribute one untyped slot); excluded: Python self/cls and TS this (idiomatically untyped), empty-args functions without return type stay at 0.0; safety: _split_args respects nested brackets/parens/braces so dict[str, int] doesn't split mid-arg, optional TS args (y?: string) recognised via ? in name regex, _FUNC_LIKE_RE recognises both keyword-led (func/fn/fun/def) AND access-modifier-led (public X.Y foo()) shapes with optional return type; result rounded to 2 decimal places; LLM wire-format updated).
 
 
+### Done in tick 23 (5 features)
+140. [x] Receipt: warranty / return-period notice extraction (new `ReceiptFields.warranty` dict with `{kind, duration_days, notice}`; 3 kinds: return / warranty / no_returns; recognised shapes include `Returns within 30 days` / `30-day return policy` / `Manufacturer warranty: 2 years` / `Limited 1-year warranty` / `Final sale - no refunds` / `All sales final` / `Non-refundable` / `Return by 04/15/2024`; duration normalisation: day->1, week->7, month->30, year/yr->365 with 0<n<=999 bound so `Returns within 0 days` and `Returns within 9999 days` reject as OCR noise; no_returns matchers run FIRST so `Final sale, no returns` is not partially claimed by the return-window matcher; qualifier+num+warranty form (Limited 1-year) runs BEFORE bare num+warranty so qualifier survives in notice text; LLM wire-format updated; enrich_receipt backfill list updated -- caller's non-None warranty value never overwritten).
+133. [x] Document: page-number footer detection (new `DocumentFields.page_info` dict with `{current, total, label, continued}`; recognised shapes include `Page 3 of 12` / `Page 3 / 12` / `Slide 4 of 20` / `Sheet 3 of 5` / `Pg. 12 of 30` / `p. 7 of 12` / bare `Page 1` / bare `Slide 7` / `p. 7` / `- 5 -` typography form / bare `3 / 12` slash form (own line only) / `(continued)` marker; continuation marker detected independently and OR'd into result so a separate `cont. on next page` line still tags continued=True; safety: bare slash form requires own line so a date `3 / 12 / 2024` and math fraction reject, total<current rejects as reversed-date noise, `p. 5` requires literal dot so `p ride`/`p 5` reject, Page 0 rejects (numbering starts at 1), word-boundary on bare Page-N form prevents `Page 12 of 3` from partial-claiming as `Page 1` with `2 of 3` tail; NEW module: extract/document.py with enrich_document(); pipeline.enrich now routes Category.document through enrich_document; LLM-supplied page_info preserved verbatim).
+141. [x] PII redact: VIN (Vehicle Identification Number) redaction mode (new `vin` mode strips 17-character ISO 3779 identifiers from car titles / registrations / insurance cards / dealer invoices / sales contracts; character set: digits 0-9 + capital letters EXCEPT I/O/Q (ISO ban so they cannot be confused with 1/0/0 visually); must contain at least ONE digit AND at least ONE letter so pure-digit 17-char runs (long order numbers) and pure-letter prose acronyms reject; word-boundary on both ends so embedded 17-char alphanumerics inside longer hashes don't misfire; lowercase rejected (VINs uppercase by convention); both labelled forms (`VIN: 1HGBH41JXMN109186`, `Vehicle Identification Number: ...`, `Chassis No: ...`) and bare 17-char runs captured; we do NOT validate the position-9 check digit because post-2017 EU VINs sometimes non-compliant + OCR captures often misread one or two chars in a long run; custom _sub_vin handler replaces the WHOLE matched VIN with [REDACTED:vin] -- we don't preserve any label because the vehicle-identification context is itself sensitive; added to PII_REDACT_MODES allow-list in tenant_settings).
+144. [x] Code: dead-import detection (new `CodeFields.unused_imports` list of strings -- modules / symbols imported but never referenced; LEXICAL detection: derive expected-identifier per import shape (Python `from X import a,b` -> check symbols a,b; Python `import X as Y` -> check ALIAS Y; Python `import X.Y.Z` -> check TOP-LEVEL X; JS `import X from 'mod'` -> check default name; JS `import { a, b }` -> check braced symbols; JS `import { a as b }` -> check ALIAS; JS `import * as ns` -> check namespace; JVM `import com.foo.Bar;` -> check simple class Bar) then scan body with import-statement spans masked out so an import doesn't count as its own usage; word-boundary on body matching so `foo` import is NOT considered used when only `foobar` appears; pure-data languages (json/csv/tsv/yaml/xml/sql/html/markdown) and shell langs (bash/sh/zsh/fish/powershell/dockerfile) return [] unconditionally; `from X import *` wildcard and JVM `import com.foo.*;` skipped because cannot safely tag unused; bare `require('mod')` and side-effect-only `import 'mod'` skipped; cap 50; documented trade-off: lexical detector counts usages inside comments + string literals as legitimate (low-FP design for code-review-screenshot surfacing, NOT full lint pass); LLM wire format updated).
+138. [x] Code: function-complexity heuristic (new `CodeFields.complexity` list of `{name, complexity}` dicts; McCabe-style cyclomatic complexity per function; base 1 + 1 per decision point: if/elif/else if, for/while, case/when, catch/except, boolean operators and/or/&&/||, ternary ? :; `else` does NOT add 1 because it has no condition (only `elif`/`else if` do); language coverage Python def/async def (indentation-delimited body) + JS/TS function/arrow (brace-delimited) + Java/Kotlin/Scala/C# methods + Go func + Rust fn; function-body extraction is language-aware with brace-matching for C-family that's string-literal-aware so `{`/`}` inside strings don't confuse the matcher; `else if` lookbehind on bare `\bif\b` matcher prevents double-counting in C-family; Java method matcher uses keyword guard rejecting if/for/while/switch/catch/else/do/try/synchronized name false-positives; pure-data + shell langs return []; anonymous arrows tag as `<anonymous>`; documented trade-offs: lexical scan counts keyword occurrences inside comments + strings, nested functions reported separately AND contribute to outer's count; LLM wire format updated).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -211,16 +219,16 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 123. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce; pairs with existing #80 which is the same idea but with concrete catalogue scope).
 131. [ ] Receipt: lottery / scratch-card draw line detection into `ReceiptFields.lottery` (US convenience-store receipts often print `LOTTO #4231 Powerball 12345 Draw 11/04/24` lines as separate items).
 132. [ ] Chart: legend-color-to-series mapping into `ChartFields.legend_map` (legends often print `■ Q1 ■ Q2 ■ Q3 ■ Q4` with coloured swatches -- surface a list of `{color, series}` dicts).
-133. [ ] Document: page-number footer detection into `DocumentFields.page_info` (`Page 3 of 12`, `Page 1`, `- 5 -`, `(continued)` markers from multi-page document captures).
 135. [ ] Chat: bot vs human message detection into `ChatFields.bot_messages` (Slack/Discord bot integrations are tagged with `APP` / `BOT` badges that should be surfaced separately so dashboards can filter automated vs human messages).
 137. [ ] Document: heading-hierarchy detection into `DocumentFields.headings` (list of `{level, text}` dicts from H1/H2/H3 style headings in document captures -- useful for outlining slide decks / docs / wiki pages).
-138. [ ] Code: function-complexity heuristic into `CodeFields.complexity` (cyclomatic-complexity-like score per function based on branch/loop keyword counts; surfaces "this function has 12 branches" for code-review screenshots).
 139. [ ] Chart: error-bar / confidence-interval detection into `ChartFields.has_error_bars` (bool flag indicating the chart shows uncertainty intervals).
-140. [ ] Receipt: warranty / return-period notice extraction into `ReceiptFields.warranty` (the small print "Returns accepted within 30 days" / "1-year warranty" lines printed at bottom of retail receipts).
-141. [ ] PII redact: VIN (vehicle identification number) redaction mode (`vin` mode; recognises the 17-character WMI+VDS+VIS format including the check-digit at position 9 per ISO 3779).
 142. [ ] Chat: reply-with-photo / reply-with-video marker into `ChatFields.media_replies` (Slack/Discord rendering of attachment-in-reply differs from regular attachment block).
 143. [ ] Error: Vue.js component error parsing (new framework='vue'; `Error in v-on handler` / `Error in callback for watcher` / `Error in render function` / `Error in mounted hook` patterns with component-path tail).
-144. [ ] Code: dead-import detection into `CodeFields.unused_imports` (imports that are referenced exactly 0 times in the snippet body; useful for code-review screenshots showing cleanup opportunities).
+145. [ ] Receipt: estimated-arrival / delivery-eta extraction into `ReceiptFields.delivery_eta` (DoorDash / Uber Eats / Amazon receipts print `Arriving by 8:45 PM` / `Delivery: Today 6-7 PM` / `Estimated arrival: Wed Jun 10`; useful for "this purchase arrived late" analytics).
+146. [ ] Extract: cross-category color-hex extractor into `raw["colors"]` (CSS / Tailwind / Figma screenshots reference `#FF5733` / `rgb(255,87,51)` / `hsl(11, 100%, 60%)` / `oklch(0.8 0.1 30)` -- surface as list of `{model, value}` dicts for design-system tooling).
+147. [ ] Chat: link-preview block detection into `ChatFields.link_previews` (Slack/Discord/Teams render OG-card previews below shared URLs with title + description + thumbnail thumbprint -- surface as list of `{title, description, source_url}` dicts).
+148. [ ] Code: cyclomatic-complexity outlier flag in CodeFields.complexity (when a snippet has multiple functions, flag the function with the highest complexity as `outlier: true` to highlight refactor candidates; pairs with #138).
+149. [ ] PII redact: phone-number redaction mode upgrade (existing `phone` regex uses `[REDACTED:phone]` placeholder; refine to the `<PHONE>` stub form for consistency with #56 design notes).
 
 
 ## Tick log
@@ -1362,6 +1370,76 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
       (func/fn/fun/def) AND access-modifier-led forms
       (public X.Y foo()) with optional return type between
       keyword and name.
+
+- 2026-06-23 08:44 PT (tick 23, Cake): 5 features.
+  - 76978ee feat(extract/receipt): warranty / return-period notice extraction into ReceiptFields.warranty
+  - ccdf146 feat(extract/document): page-number footer detection into DocumentFields.page_info
+  - 53c30c5 feat(redact): VIN (Vehicle Identification Number) redaction mode
+  - f0d68d4 feat(extract/code): dead-import detection into CodeFields.unused_imports
+  - e6bfd9c feat(extract/code): per-function cyclomatic complexity into CodeFields.complexity
+  - Gate: ruff at baseline 536 (no NEW errors after six fixups
+    folded directly: 4 N802 uppercase letter in test_redact_vin.py
+    test names (test_vin_with_letter_I_not_redacted etc) renamed
+    to lowercase letter form; 1 W291 trailing whitespace in
+    test_code_complexity.py docstring; 1 E501 line-too-long on
+    _PY_FROM_SYMBOLS_RE pattern in code.py split across two
+    lines; all six folded via --fixup + --autosquash into the
+    respective feature commits before push) + pytest
+    5586 passed / 3 skipped in 152.82s. 234 new tests across
+    the 5 features (52 + 48 + 32 + 55 + 47).
+    New ReceiptFields shipped: warranty (dict). New
+    DocumentFields shipped: page_info (dict). New CodeFields
+    shipped: unused_imports (list[str]), complexity
+    (list[{name,complexity}]). New redact mode: vin. Added
+    to PII_REDACT_MODES allow-list. Pipeline.enrich now
+    routes Category.document through enrich_document so the
+    new page_info slot populates automatically. LLM wire
+    format in classify/client.py updated for all five new
+    slots. Roadmap refilled with 5 new items (145..149 --
+    receipt delivery-eta, cross-category color-hex extractor,
+    chat link-preview block detection, code complexity-outlier
+    flag, phone redact mode upgrade) so backlog grows from
+    23 to 24 open. Notable design decisions:
+    * Warranty matcher pattern ordering: no_returns runs FIRST
+      so "Final sale, no returns" is not partially claimed by
+      the return-window matcher (which would otherwise see
+      "no returns" as a "returns" mention). Qualifier+num+warranty
+      ("Limited 1-year warranty") runs BEFORE bare num+warranty
+      so the qualifier survives in the captured notice text.
+    * Document page-info has TWO classes of matcher: those with
+      a vocabulary anchor (Page/Slide/Sheet/Pg/p.) always fire,
+      those without an anchor (bare 3/12 slash form, - 5 -
+      typography) require their own line so date strings and
+      math fractions don't false-positive.
+    * VIN matcher rejects pure-digit / pure-letter 17-char runs.
+      We do NOT validate the position-9 check digit because (a)
+      post-2017 EU VINs sometimes ship non-compliant and (b)
+      OCR captures often misread one or two chars in a long
+      run -- strict check-digit would reject legitimate captures
+      that still leak the rest of the identifier. The redaction
+      strips the WHOLE matched VIN (including any leading
+      label) because vehicle-identification context is itself
+      sensitive.
+    * Dead-import detector identifier-check semantic varies by
+      shape: Python `from X import a,b` checks the SYMBOLS,
+      `import X as Y` checks the ALIAS, `import X.Y.Z` checks
+      the TOP-LEVEL X; JS `import { a as b }` checks the
+      ALIAS b. Documented trade-off: lexical detector counts
+      occurrences inside comments + string literals as
+      legitimate usage (low-FP design for "obvious dead imports
+      on code-review screenshots", NOT a full lint pass).
+    * Complexity counter: `else if` lookbehind on bare \\bif\\b
+      matcher prevents double-counting in C-family. Two tests
+      that I wrote with wrong expected numbers (test_python_high_
+      complexity_function and test_real_go_handler) revealed
+      this bug on the first gate run; I tightened the regex
+      with (?<!else\\s) negative lookbehind and updated the
+      test expectations to match the corrected count.
+    * Test name camel-case caught by ruff N802 on a single
+      letter (I/O/Q) inside the function name -- renamed all
+      4 to lowercase form. Confirms the "letters look like
+      digits" naming choice was right for the test description
+      but wrong for Python identifier convention.
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
