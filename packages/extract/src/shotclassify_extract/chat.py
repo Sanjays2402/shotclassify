@@ -1576,6 +1576,277 @@ def _extract_pins(text: str) -> list[dict[str, str | None]]:
     return out
 
 
+# Forwarded-message marker detection. Telegram / WhatsApp / Discord /
+# Slack render small badges or footers when a message was forwarded
+# from another conversation:
+#
+#   Telegram:
+#     Forwarded from Alice
+#     ↪️ Forwarded from @newschannel
+#     Forwarded from Bob via Channel-X
+#
+#   WhatsApp:
+#     Forwarded
+#     Forwarded many times
+#     -> Forwarded
+#
+#   Discord:
+#     [Forwarded from #general]
+#     ↪️ Forwarded
+#
+#   Slack:
+#     Bob shared a message from #channel
+#     (forwarded from Alice)
+#
+# Output is a list of {"kind", "forwarded_from"?, "sender"?} dicts.
+
+# Forward arrow emoji used by Telegram / Discord: ↪️ (U+21AA + variant
+# selector), → (U+2192), ➜ (U+279C). All three optional prefixes.
+_FORWARD_ARROW = "(?:\u21AA\uFE0F?|\u2192|\u279C)"
+
+# Telegram-style ``Forwarded from <name>`` badge. The name can be:
+#   * A capitalised handle (Alice, Bob-Jr, Alice123)
+#   * A @-prefixed channel handle (@newschannel)
+#   * A #-prefixed Discord channel (#general)
+#   * Multiple words (Alice Smith / News Channel / Daily News)
+#
+# We accept a trailing ", via <channel>" / " via <channel>" tail
+# but only capture the FROM portion as forwarded_from. We also
+# accept a trailing date / time tail that we strip.
+_FORWARDED_FROM_RE = re.compile(
+    r"^[ \t]*(?:" + _FORWARD_ARROW + r"[ \t]*)?"
+    r"\[?\s*Forwarded\s+from\s+"
+    r"(?P<from>[@#]?[A-Za-z][\w'\-. ]{0,49}?)"
+    r"(?:\s+via\s+[^\n\]]{1,40})?"
+    r"\s*\]?\s*\.?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Bracketed Discord/Slack-style ``[Forwarded from #channel]``.
+# Slightly stricter than the bare form -- requires the brackets.
+_FORWARDED_BRACKETED_RE = re.compile(
+    r"\[\s*Forwarded\s+from\s+"
+    r"(?P<from>[@#]?[A-Za-z][\w'\-. ]{0,49}?)"
+    r"\s*\]",
+    re.IGNORECASE,
+)
+
+# Bare ``Forwarded`` badge (WhatsApp inline, Discord footer, etc).
+# Requires the line to be either:
+#   * Standalone "Forwarded" / "↪️ Forwarded" / "→ Forwarded"
+#   * Italic "_Forwarded_" / "*Forwarded*" markdown-flavoured
+# We require the WORD ``Forwarded`` to be the full line content
+# (with optional emoji prefix + optional bold/italic markers) so
+# a mid-sentence "Forwarded that to him" never fires.
+_FORWARDED_BARE_RE = re.compile(
+    r"^[ \t]*(?:" + _FORWARD_ARROW + r"[ \t]*)?"
+    r"[_*]?Forwarded[_*]?\s*\.?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# WhatsApp "Forwarded many times" chain marker. Distinct kind tag
+# because dashboards care about viral propagation -- a forward-many
+# badge often indicates misinformation.
+_FORWARDED_MANY_RE = re.compile(
+    r"^[ \t]*(?:" + _FORWARD_ARROW + r"[ \t]*)?"
+    r"[_*]?Forwarded\s+many\s+times[_*]?\s*\.?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Slack-style ``Bob shared a message from #channel`` action footer.
+# Captures the actor (Slack's sharer) AND the source channel.
+_SHARED_FROM_RE = re.compile(
+    r"^[ \t]*(?P<sender>[A-Z][\w'\-]{0,30}(?:\s+[A-Z][\w'\-]{0,30})?)"
+    r"\s+shared\s+(?:a\s+)?messages?\s+from\s+"
+    r"(?P<from>[@#]?[A-Za-z][\w'\-. ]{0,49}?)"
+    r"\s*\.?\s*$",
+    re.MULTILINE,
+)
+
+# Bare ``shared a message`` action footer without "from <X>" tail.
+_SHARED_BARE_RE = re.compile(
+    r"^[ \t]*(?P<sender>[A-Z][\w'\-]{0,30}(?:\s+[A-Z][\w'\-]{0,30})?)"
+    r"\s+shared\s+(?:a\s+)?messages?\s*\.?\s*$",
+    re.MULTILINE,
+)
+
+# Parenthesised "(forwarded from <X>)" inline form often appearing
+# below a message body on legacy clients.
+_FORWARDED_PAREN_RE = re.compile(
+    r"\(\s*Forwarded\s+from\s+"
+    r"(?P<from>[@#]?[A-Za-z][\w'\-. ]{0,49}?)"
+    r"\s*\)",
+    re.IGNORECASE,
+)
+
+_MAX_FORWARDS = 30
+
+
+def _clean_from(raw: str | None) -> str | None:
+    """Trim trailing whitespace / punctuation from a forwarded_from."""
+    if not raw:
+        return None
+    text = re.sub(r"\s+", " ", raw.strip())
+    text = text.rstrip(".,;:")
+    return text or None
+
+
+def _extract_forwards(text: str) -> list[dict[str, str | None]]:
+    """Return forward / shared marker entries found in ``text``.
+
+    Each entry is a ``{"kind", "forwarded_from"?, "sender"?}`` dict.
+    ``kind`` is one of:
+      * ``forwarded``       -- single forward marker
+      * ``forwarded_many``  -- WhatsApp "Forwarded many times"
+      * ``shared``          -- Slack-style "Bob shared a message"
+
+    ``forwarded_from`` is the source (name / channel / handle)
+    when extractable. ``sender`` is the speaker in the current
+    transcript whose message carries the badge.
+
+    Ordering preserves first-seen-in-OCR offset. De-dupes on the
+    (kind, forwarded_from, sender) tuple. Capped at 30.
+    """
+    if not text:
+        return []
+    sender_re = re.compile(r"^(?P<sender>[A-Z][A-Za-z0-9 _\-]{1,24}):\s+\S")
+
+    line_starts: list[int] = []
+    pos = 0
+    for ln in text.splitlines(keepends=True):
+        line_starts.append(pos)
+        pos += len(ln)
+    sender_at_line: list[str | None] = []
+    current: str | None = None
+    for ln in text.splitlines():
+        sm = sender_re.match(ln)
+        if sm:
+            current = sm.group("sender").strip()
+        sender_at_line.append(current)
+
+    def _sender_for(offset: int) -> str | None:
+        for k, _start in enumerate(line_starts):
+            if k + 1 == len(line_starts) or line_starts[k + 1] > offset:
+                return sender_at_line[k] if k < len(sender_at_line) else None
+        return None
+
+    candidates: list[tuple[int, dict[str, str | None]]] = []
+    consumed_spans: list[tuple[int, int]] = []
+
+    def _overlaps(s: int, e: int) -> bool:
+        for cs, ce in consumed_spans:
+            if s < ce and e > cs:
+                return True
+        return False
+
+    # Pass 1 (most specific): WhatsApp "Forwarded many times".
+    for m in _FORWARDED_MANY_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        entry: dict[str, str | None] = {"kind": "forwarded_many"}
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    # Pass 2: bracketed "[Forwarded from #channel]".
+    for m in _FORWARDED_BRACKETED_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        entry = {"kind": "forwarded"}
+        src = _clean_from(m.group("from"))
+        if src:
+            entry["forwarded_from"] = src
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    # Pass 3: parenthesised "(forwarded from X)" inline.
+    for m in _FORWARDED_PAREN_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        entry = {"kind": "forwarded"}
+        src = _clean_from(m.group("from"))
+        if src:
+            entry["forwarded_from"] = src
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    # Pass 4: "Forwarded from <X>" badge.
+    for m in _FORWARDED_FROM_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        entry = {"kind": "forwarded"}
+        src = _clean_from(m.group("from"))
+        if src:
+            entry["forwarded_from"] = src
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    # Pass 5: bare "Forwarded" badge (lowest priority because the
+    # other forms above carry more information).
+    for m in _FORWARDED_BARE_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        entry = {"kind": "forwarded"}
+        sender = _sender_for(m.start())
+        if sender:
+            entry["sender"] = sender
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    # Pass 6: Slack "shared a message from #channel" with source.
+    for m in _SHARED_FROM_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        entry = {"kind": "shared"}
+        actor = m.group("sender").strip()
+        if actor:
+            entry["sender"] = actor
+        src = _clean_from(m.group("from"))
+        if src:
+            entry["forwarded_from"] = src
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    # Pass 7: Slack bare "shared a message" without source.
+    for m in _SHARED_BARE_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        entry = {"kind": "shared"}
+        actor = m.group("sender").strip()
+        if actor:
+            entry["sender"] = actor
+        candidates.append((m.start(), entry))
+        consumed_spans.append((m.start(), m.end()))
+
+    candidates.sort(key=lambda x: x[0])
+    out: list[dict[str, str | None]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for _off, entry in candidates:
+        key = (
+            entry.get("kind", "") or "",
+            entry.get("forwarded_from", "") or "",
+            entry.get("sender", "") or "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(entry)
+        if len(out) >= _MAX_FORWARDS:
+            break
+    return out
+
+
 def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
     text = ocr.text or ""
     platform = (existing.platform if existing and existing.platform else None) or _guess_platform(text)
@@ -1807,6 +2078,33 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         seen_pins.add(pk2)
         pins.append(p)
 
+    # Forward / shared marker badges (Forwarded from Alice / [Forwarded
+    # from #channel] / Bob shared a message). De-dupes on the (kind,
+    # forwarded_from, sender) tuple so an LLM-supplied forward plus
+    # the OCR-parsed identical entry collapses. Caller order
+    # preserved first.
+    forwards: list[dict[str, str | None]] = (
+        list(existing.forwards) if existing else []
+    )
+    seen_forwards: set[tuple[str, str, str]] = set()
+    for f in forwards:
+        fk = (
+            f.get("kind", "") or "",
+            f.get("forwarded_from", "") or "",
+            f.get("sender", "") or "",
+        )
+        seen_forwards.add(fk)
+    for f in _extract_forwards(text):
+        fk = (
+            f.get("kind", "") or "",
+            f.get("forwarded_from", "") or "",
+            f.get("sender", "") or "",
+        )
+        if fk in seen_forwards:
+            continue
+        seen_forwards.add(fk)
+        forwards.append(f)
+
     return ChatFields(
         platform=platform,
         participants=participants,
@@ -1820,4 +2118,5 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         attachments=attachments,
         polls=polls,
         pins=pins,
+        forwards=forwards,
     )

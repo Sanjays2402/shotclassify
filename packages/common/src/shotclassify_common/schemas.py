@@ -1255,6 +1255,54 @@ class ChatFields(BaseModel):
     # has 4 pinned messages" annotations and to spot moderation /
     # admin activity (most pins are performed by channel admins).
     pins: list[dict[str, str | None]] = Field(default_factory=list)
+    # Forwarded-message markers detected in the screenshot. Most
+    # chat platforms render a small badge or footer when a message
+    # was forwarded from another conversation:
+    #
+    #   Telegram:
+    #     Forwarded from Alice
+    #     ↪️ Forwarded from @newschannel
+    #     Forwarded from Bob via Channel-X
+    #
+    #   WhatsApp:
+    #     Forwarded
+    #     Forwarded many times
+    #     -> Forwarded
+    #
+    #   Discord:
+    #     [Forwarded from #general]
+    #     ↪️ Forwarded
+    #
+    #   Slack:
+    #     Bob shared a message from #channel
+    #     (forwarded from Alice)
+    #
+    # Each entry is a ``{"kind": str, "forwarded_from": str | None,
+    # "sender": str | None}`` dict.
+    #
+    # * ``kind`` is the canonical lowercase forward tag:
+    #     ``forwarded``        -- single forward marker
+    #     ``forwarded_many``   -- WhatsApp "Forwarded many times"
+    #                             chain-marker for viral messages
+    #     ``shared``           -- Slack-style "Bob shared a message"
+    #
+    # * ``forwarded_from`` is the source (the original sender or
+    #   channel the message was forwarded from) when extractable
+    #   from a ``Forwarded from X`` / ``[Forwarded from #channel]``
+    #   shape, or ``None`` for bare ``Forwarded`` badges that
+    #   don't surface the origin.
+    #
+    # * ``sender`` is the speaker in the CURRENT transcript whose
+    #   message carries the forward badge (the person doing the
+    #   forwarding -- nearest preceding ``Sender:`` line), or
+    #   ``None`` for floating markers.
+    #
+    # Ordering preserves first-seen-in-OCR order. Capped at 30
+    # entries. Dashboards use this list to surface "this thread
+    # has 3 forwarded messages" annotations and to detect viral-
+    # message propagation chains (a high-forward-count thread is
+    # often misinformation in real-world Telegram / WhatsApp).
+    forwards: list[dict[str, str | None]] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):
