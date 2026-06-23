@@ -1020,6 +1020,54 @@ class CodeFields(BaseModel):
     # order preserved. Capped at 50 entries. Empty list when
     # no recognised marker is present.
     dead_code: list[dict[str, str | None]] = Field(default_factory=list)
+    # Shell-script style detected from a shell snippet (one of
+    # ``posix`` / ``bash`` / ``zsh`` / ``fish`` / ``powershell`` /
+    # ``tcsh``). Only meaningful when the snippet is a shell
+    # script (language detector tagged it as bash / sh / shell /
+    # zsh / fish / powershell). Useful to discriminate which
+    # shell-specific extensions a snippet relies on:
+    #
+    # * ``bash``        -- uses bash-specific features like
+    #                      ``[[ ... ]]`` double-brackets,
+    #                      ``$'...'`` ANSI-C quoting, process
+    #                      substitution ``<(...)``, arrays
+    #                      ``arr=(a b c)``, ``function f { }``
+    #                      keyword-form, ``=~`` regex match
+    # * ``zsh``         -- uses zsh-specific features like
+    #                      glob qualifiers ``*(.)``, parameter
+    #                      flags ``${(U)x}``, autoload, anonymous
+    #                      functions ``() { ... } "$@"``, prompt
+    #                      ``%F{red}`` color escapes
+    # * ``fish``        -- uses fish-specific syntax like
+    #                      ``set -x VAR value`` (no ``=`` assignment),
+    #                      ``string match -r`` builtin, ``-- arg``
+    #                      function args, fish-conf functions
+    # * ``powershell``  -- uses PS-specific syntax like
+    #                      ``$Variable`` PascalCase, ``-eq`` /
+    #                      ``-ne`` operators, cmdlets (Get-X /
+    #                      Set-X / Invoke-X), ``[CmdletBinding()]``
+    # * ``tcsh``        -- uses (t)csh-specific syntax like
+    #                      ``set foo = bar``, ``if (cond) then``,
+    #                      ``foreach``, ``setenv``
+    # * ``posix``       -- portable shell using only POSIX-defined
+    #                      syntax: ``[ ... ]`` single brackets,
+    #                      ``foo() { ... }`` function form, no
+    #                      bash-isms. The conservative tag for
+    #                      a snippet that COULD run under sh /
+    #                      dash without bash extensions.
+    #
+    # Detection is precedence-based: PowerShell signals win
+    # immediately (highly distinctive cmdlet vocabulary); fish
+    # next (set-x syntax is unique); tcsh next (set= and foreach);
+    # zsh next (glob qualifiers / autoload); bash next (double-
+    # brackets / process-sub / ANSI-quoting); finally ``posix``
+    # as the fallback for shell snippets with none of the above.
+    #
+    # ``None`` when the snippet's language is not shell at all
+    # (a Python / JS / etc snippet returns None unconditionally),
+    # OR when the snippet IS shell but the detector can't decide
+    # between the styles (no signal in either direction).
+    shell_style: str | None = None
 
 
 class ErrorFields(BaseModel):

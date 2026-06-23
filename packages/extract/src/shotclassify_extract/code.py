@@ -662,6 +662,219 @@ def _comment_leaders_for(language: str | None) -> tuple[str, ...]:
     return _COMMENT_LEADERS_BY_LANGUAGE.get(lang, ("#",))
 
 
+# Shell-script style detection. Distinguishes the major shell
+# dialects (bash / zsh / fish / powershell / tcsh / posix) using
+# syntactic signal vocabularies that are distinctive enough to
+# avoid false-positives on prose mentions.
+
+# Languages that the language detector tags as shell. Used to
+# gate shell_style detection -- a Python snippet with no shell
+# signals returns None unconditionally.
+_SHELL_LANGUAGES: frozenset[str] = frozenset({
+    "bash", "sh", "shell", "zsh", "fish", "powershell",
+    "ps1", "pwsh", "csh", "tcsh", "ksh",
+})
+
+# PowerShell-specific signal vocabulary. These tokens are
+# extremely distinctive (cmdlet naming convention + operator
+# syntax + class metadata + sigil-prefixed automatic variables).
+_POWERSHELL_SIGNALS: tuple[re.Pattern[str], ...] = (
+    # Verb-Noun cmdlet calls (Get-X / Set-Y / Invoke-Z / etc.).
+    # Conservative verb list (the standard PS approved verbs).
+    re.compile(
+        r"(?<![A-Za-z0-9])"
+        r"(?:Get|Set|New|Remove|Add|Clear|Copy|Move|Rename|Test|"
+        r"Invoke|Start|Stop|Restart|Suspend|Resume|Read|Write|"
+        r"Out|Import|Export|Convert|Push|Pop|Select|Where|"
+        r"ForEach|Sort|Group|Measure|Compare|Find|Format|"
+        r"Enable|Disable|Install|Uninstall|Update|Register|"
+        r"Unregister|Connect|Disconnect|Send|Receive|Wait|Skip)"
+        r"-[A-Z][A-Za-z0-9]+\b"
+    ),
+    # PowerShell operators: -eq, -ne, -gt, -lt, -ge, -le, -match, -like
+    re.compile(r"\s(?:-eq|-ne|-gt|-lt|-ge|-le|-match|-like|-notlike|"
+               r"-contains|-notcontains|-in|-notin|-as|-is|-replace)\s"),
+    # [CmdletBinding()] / [Parameter()] attribute decorators
+    re.compile(r"\[\s*CmdletBinding\s*\("),
+    re.compile(r"\[\s*Parameter\s*\("),
+    # PowerShell pipeline objects $_ / $PSItem / $Args / $PSBoundParameters
+    re.compile(r"\$_\."),
+    re.compile(r"\$PSItem\b"),
+    re.compile(r"\$PSBoundParameters\b"),
+    # PowerShell type accelerators [int] / [string] / [System.IO.X]
+    re.compile(r"\[(?:int|string|bool|double|datetime|hashtable|"
+               r"System\.(?:[A-Z][A-Za-z0-9.]*))\]"),
+    # write-host / write-output capitalised forms
+    re.compile(r"\bWrite-Host\b"),
+    re.compile(r"\bWrite-Output\b"),
+)
+
+# fish-specific signal vocabulary. ``set -x VAR value`` (NOT
+# ``VAR=value``) and ``string match -r`` are the most distinctive
+# fish-only forms.
+_FISH_SIGNALS: tuple[re.Pattern[str], ...] = (
+    # ``set -x VAR value`` / ``set -e VAR`` / ``set VAR value``
+    # (fish uses set instead of = assignment; no = sign in the
+    # assignment). bash/zsh ``VAR=value`` cannot match this.
+    re.compile(
+        r"(?:^|\n)\s*set\s+(?:-[a-zA-Z]\s+)?[a-zA-Z_][a-zA-Z0-9_]*\s+\S"
+    ),
+    # ``string match -r`` / ``string match -e`` / ``string sub``
+    # / ``string length`` -- fish's string builtin.
+    re.compile(r"\bstring\s+(?:match|sub|length|join|split|"
+               r"replace|trim|upper|lower)\s+-[a-zA-Z]\b"),
+    # ``function NAME --argument-names a b c`` -- fish-only
+    # double-dash long flag for function args.
+    re.compile(r"\bfunction\s+\S+\s+--argument-names\b"),
+    # ``commandline -f execute`` -- fish-only command.
+    re.compile(r"\bcommandline\s+-[a-zA-Z]"),
+    # ``status is-interactive`` / ``status --is-login`` fish-only.
+    re.compile(r"\bstatus\s+(?:is-interactive|is-login|--is-interactive)"),
+    # ``functions -q NAME`` -- query if function exists.
+    re.compile(r"\bfunctions\s+-q\s+"),
+)
+
+# tcsh / csh-specific signal vocabulary.
+_TCSH_SIGNALS: tuple[re.Pattern[str], ...] = (
+    # ``set foo = bar`` (csh uses ``=`` with surrounding spaces;
+    # bash/sh use ``foo=bar`` with NO spaces around the equal).
+    re.compile(r"(?:^|\n)\s*set\s+[a-zA-Z_][a-zA-Z0-9_]*\s+=\s+\S"),
+    # ``setenv VAR value`` -- csh-only env-var setter.
+    re.compile(r"(?:^|\n)\s*setenv\s+[a-zA-Z_][a-zA-Z0-9_]*\s+\S"),
+    # ``foreach VAR (list)\n ... \nend`` -- csh foreach loop.
+    re.compile(r"(?:^|\n)\s*foreach\s+[a-zA-Z_]\w*\s*\("),
+    # ``if (cond) then`` -- csh requires ``then`` keyword after
+    # parens (bash uses ``if [[ ... ]]; then`` with brackets).
+    re.compile(r"(?:^|\n)\s*if\s*\([^)]+\)\s+then\b"),
+    # ``alias NAME 'cmd'`` -- csh form (no = sign).
+    re.compile(r"(?:^|\n)\s*alias\s+[a-zA-Z_]\w*\s+['\"]"),
+)
+
+# zsh-specific signal vocabulary. zsh shares MOST of bash's
+# syntax but adds glob qualifiers, parameter flags, and a few
+# unique builtins.
+_ZSH_SIGNALS: tuple[re.Pattern[str], ...] = (
+    # Glob qualifiers ``*.txt(.)`` / ``*.txt(N.om[1])`` -- zsh-only.
+    re.compile(r"\*[^()*\s]*\(\.[^\)]{0,20}\)"),
+    re.compile(r"\(\.(?:[NomdrR][a-zA-Z0-9]*)+\)"),
+    # ``${(U)x}`` / ``${(L)x}`` / ``${(c)x}`` parameter flag forms.
+    re.compile(r"\$\{\([A-Za-z@]+\)[A-Za-z_]"),
+    # ``autoload -U add-zsh-hook`` / ``autoload -Uz compinit``.
+    re.compile(r"(?:^|\n)\s*autoload\s+-[A-Za-z]"),
+    # Prompt color escapes ``%F{red}`` / ``%B`` / ``%f``.
+    re.compile(r"%[FB]\{[a-z]+\}"),
+    # ``zmodload`` builtin.
+    re.compile(r"(?:^|\n)\s*zmodload\b"),
+    # ``zstyle`` builtin for completion settings.
+    re.compile(r"(?:^|\n)\s*zstyle\s+"),
+)
+
+# bash-specific signal vocabulary. ``[[ ... ]]`` double-brackets
+# is the most distinctive bash-only feature (POSIX sh uses single
+# brackets ``[ ... ]``). Arrays / process-substitution / ANSI-C
+# quoting are also bash extensions.
+_BASH_SIGNALS: tuple[re.Pattern[str], ...] = (
+    # ``[[ cond ]]`` double-bracket test (bash + ksh extension,
+    # NOT in POSIX sh).
+    re.compile(r"\[\[\s+[^]]+\s+\]\]"),
+    # Process substitution: ``<(cmd)`` or ``>(cmd)`` (bash-only).
+    re.compile(r"[<>]\((?!\?)[^)]+\)"),
+    # Array assignment: ``arr=(a b c)`` (bash extension, NOT POSIX).
+    re.compile(r"(?:^|\n)\s*[a-zA-Z_]\w*=\([^)]*\)"),
+    # ANSI-C quoting: ``$'...'`` (bash extension).
+    re.compile(r"\$'[^']*'"),
+    # Regex match operator: ``=~`` (bash extension).
+    re.compile(r"\s=~\s"),
+    # ``function NAME {`` keyword-form (bash + ksh; POSIX uses
+    # ``NAME() {`` without ``function``).
+    re.compile(r"(?:^|\n)\s*function\s+[a-zA-Z_]\w*\s*[\(\{]"),
+    # ``declare -a`` / ``declare -A`` / ``local -n`` -- bash type
+    # modifiers.
+    re.compile(r"(?:^|\n)\s*(?:declare|local)\s+-[aAniIxrt]+\b"),
+    # Brace-expansion: ``{1..10}`` / ``{a,b,c}`` (bash extension).
+    re.compile(r"\{\d+\.\.\d+(?:\.\.\d+)?\}"),
+    # ``mapfile`` / ``readarray`` builtins (bash 4+).
+    re.compile(r"(?:^|\n)\s*(?:mapfile|readarray)\b"),
+)
+
+
+def detect_shell_style(code: str, language: str | None = None) -> str | None:
+    """Return the shell-script style tag for ``code``, or None.
+
+    Tags: ``bash`` / ``zsh`` / ``fish`` / ``powershell`` /
+    ``tcsh`` / ``posix``. Returns ``None`` when the snippet's
+    language is not in the shell family OR when the snippet is
+    so generic that no shell can be deduced (an empty snippet
+    or pure comments).
+
+    Detection precedence (most-specific-first):
+
+    1. PowerShell  -- cmdlet vocabulary + operator syntax
+    2. tcsh / csh  -- set= / setenv / foreach (checked BEFORE
+                      fish because both use ``set`` -- tcsh has
+                      ``set VAR = value`` with spaces around =
+                      while fish has ``set VAR value`` with no =)
+    3. fish        -- set-x assignment + string builtin
+    4. zsh         -- glob qualifiers / autoload / zstyle
+    5. bash        -- [[ ]] / process-sub / ANSI quoting / arrays
+    6. posix       -- a shell snippet with NONE of the above
+                      special signals (fallback for portable sh)
+
+    The shell-language gate is enforced: only when ``language``
+    is in {bash, sh, shell, zsh, fish, powershell, ps1, pwsh,
+    csh, tcsh, ksh} OR is None (unknown language, fall through
+    to content sniffing) will we attempt the detection.
+    """
+    if not code or not code.strip():
+        return None
+    lang_lower = (language or "").lower().strip()
+    if lang_lower and lang_lower not in _SHELL_LANGUAGES:
+        # Non-shell language: don't try to guess.
+        return None
+
+    # Optional: when language is unknown / None, require at least
+    # ONE shell signal to be present before returning a tag --
+    # otherwise we'd false-positive on every JSON/YAML/etc.
+    # snippet with a leading ``#`` line.
+    text = code
+
+    # Precedence-based: most-specific-first.
+    # 1. PowerShell.
+    for pat in _POWERSHELL_SIGNALS:
+        if pat.search(text):
+            return "powershell"
+
+    # 2. tcsh / csh -- checked BEFORE fish because both use ``set``
+    # but tcsh's ``set VAR = value`` (with spaces around =) is
+    # distinct from fish's ``set VAR value`` (no =). Putting tcsh
+    # first lets the = signal land before fish's broader matcher.
+    for pat in _TCSH_SIGNALS:
+        if pat.search(text):
+            return "tcsh"
+
+    # 3. fish.
+    for pat in _FISH_SIGNALS:
+        if pat.search(text):
+            return "fish"
+
+    # 4. zsh.
+    for pat in _ZSH_SIGNALS:
+        if pat.search(text):
+            return "zsh"
+
+    # 5. bash.
+    for pat in _BASH_SIGNALS:
+        if pat.search(text):
+            return "bash"
+
+    # 6. posix fallback -- only return ``posix`` when language is
+    # explicitly shell-family AND no other signal fired. For
+    # unknown-language snippets, return None.
+    if lang_lower in _SHELL_LANGUAGES:
+        return "posix"
+    return None
+
+
 def detect_comment_density(code: str, language: str | None = None) -> float:
     """Return the fraction of NON-BLANK lines that open with a comment
     leader for ``language``, as a float in ``[0.0, 1.0]``.
@@ -3896,6 +4109,16 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if not dead_code:
         dead_code = extract_dead_code(code)
+    # Shell-script style detection. Caller-supplied value wins;
+    # otherwise scan the snippet for bash / zsh / fish / powershell /
+    # tcsh / posix signal vocabularies. Returns None when the
+    # snippet's language is non-shell OR when the snippet is
+    # generic enough that no style can be deduced.
+    shell_style = (
+        existing.shell_style if existing and existing.shell_style else None
+    )
+    if shell_style is None:
+        shell_style = detect_shell_style(code, language)
     return CodeFields(
         language=language,
         code=code,
@@ -3920,4 +4143,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         build_commands=build_commands,
         dep_pins=dep_pins,
         dead_code=dead_code,
+        shell_style=shell_style,
     )
