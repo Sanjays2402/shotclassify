@@ -408,6 +408,205 @@ def _find_change(text: str) -> float | None:
     return None
 
 
+# Split-payment / multi-tender detection. Restaurant and retail
+# receipts that accept more than one payment method print one
+# explicit line per tender component:
+#
+#   Visa: 25.00
+#   Cash: 10.00
+#
+# or with masked PANs:
+#
+#   Visa **** 1234       25.00
+#   Mastercard ** 5678   18.00
+#
+# or modern split-payment via gift-card + card:
+#
+#   Gift Card: 15.00
+#   Apple Pay: 10.00
+#
+# Each detected line becomes a {kind, amount} entry. The list is
+# returned ONLY when 2+ distinct tender lines are present so
+# dashboards can rely on len(tenders) > 0 meaning a real
+# split-tender breakdown.
+#
+# Catalogue ordered most-specific-first so multi-word forms win:
+# "American Express" beats "amex", "Master Card" beats "card",
+# "Gift Card" beats "Card" / "Credit", "Apple Pay" beats "Apple".
+# Generic "Card" / "Credit" / "Debit" / "Other" sit at the tail
+# as catch-all fallbacks.
+_TENDER_CATALOGUE: tuple[tuple[str, str], ...] = (
+    # (keyword regex fragment -- case-insensitive whole-word, kind tag)
+    (r"american\s+express", "amex"),
+    (r"master\s*card", "mastercard"),
+    (r"apple\s*pay", "apple_pay"),
+    (r"google\s*pay", "google_pay"),
+    (r"samsung\s*pay", "samsung_pay"),
+    (r"gift\s+card", "gift_card"),
+    (r"store\s+credit", "store_credit"),
+    (r"cash\s+app", "cashapp"),
+    (r"union\s*pay", "unionpay"),
+    (r"diners(?:\s+club)?", "diners"),
+    (r"visa", "visa"),
+    (r"mastercard", "mastercard"),
+    (r"amex", "amex"),
+    (r"discover", "discover"),
+    (r"jcb", "jcb"),
+    (r"paypal", "paypal"),
+    (r"venmo", "venmo"),
+    (r"zelle", "zelle"),
+    (r"cashapp", "cashapp"),
+    (r"check", "check"),
+    (r"cheque", "check"),
+    (r"cash", "cash"),
+    (r"ebt", "ebt"),
+    (r"debit(?:\s+card)?", "debit"),
+    (r"credit(?:\s+card)?", "credit"),
+    (r"card", "card"),
+)
+
+# Build a single combined regex that captures the tender keyword
+# plus its amount on the same line. The amount may carry an
+# optional masked-PAN ("**** 1234" / "** 5678" / "...1234") AND
+# an optional separator (": " / " - " / "  ") AND an optional
+# currency symbol AND an optional leading sign before the value.
+#
+# We intentionally require the amount to sit on the same line as
+# the keyword so a "Visa" header at the top doesn't pair with the
+# total at the bottom.
+#
+# The amount regex matches the standard two-decimal currency form
+# (e.g. ``25.00``, ``-12.50``, ``$10.00``, ``1,250.00``). Comma-
+# thousands grouping is accepted; the regex strips them before
+# float() conversion. Comma-decimal style (``25,00``) is also
+# accepted.
+_TENDER_AMOUNT = (
+    r"-?\s*[$€£¥]?\s*"
+    r"\d{1,5}(?:[.,]\d{2,3})*(?:[.,]\d{2})"
+)
+
+
+def _build_tender_pattern(keyword: str) -> re.Pattern[str]:
+    """Compile a per-keyword tender-line matcher.
+
+    Matches:
+        <keyword> [mask] [: / - / whitespace separator] <amount>
+
+    on a single line (the body cannot contain a newline before
+    the amount). Mask shapes accepted:
+        ****  1234
+        ****1234
+        **    5678
+        ......1234
+        XXXX 1234
+    """
+    return re.compile(
+        # Word-boundary lookbehind to avoid matching mid-word.
+        r"(?<![A-Za-z])"
+        rf"(?:{keyword})\b"
+        # Optional masked-PAN: 2+ mask chars + optional digits tail.
+        # We use [^\S\n] so newlines don't get swallowed.
+        r"(?:[^\S\n]+[*xX.]{2,16}[^\S\n]*\d{0,6})?"
+        # Optional separator (colon / dash / whitespace).
+        r"[^\S\n]*[:\-=][^\S\n]*"
+        rf"(?P<amt>{_TENDER_AMOUNT})",
+        re.IGNORECASE,
+    )
+
+
+# Compile once at module load.
+_TENDER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (_build_tender_pattern(kw), kind) for kw, kind in _TENDER_CATALOGUE
+)
+
+_MAX_TENDERS = 10
+
+
+def _parse_amount(raw: str) -> float | None:
+    """Parse a tender-amount string into a positive float, or None."""
+    cleaned = raw.strip().lstrip("-+").lstrip()
+    # Strip currency symbol.
+    for sym in "$€£¥":
+        cleaned = cleaned.replace(sym, "")
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return None
+    # Normalise comma-decimal / comma-thousands.
+    if "," in cleaned and "." in cleaned:
+        # Both separators present -- the rightmost is the decimal.
+        last_comma = cleaned.rfind(",")
+        last_dot = cleaned.rfind(".")
+        if last_comma > last_dot:
+            # Comma is decimal, dot is thousands.
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        else:
+            # Dot is decimal, comma is thousands.
+            cleaned = cleaned.replace(",", "")
+    elif "," in cleaned:
+        # Only comma -- if the comma sits in the last 3 positions
+        # AND there are 2-3 digits after, treat as decimal.
+        # Otherwise, treat as thousands separator.
+        last_comma = cleaned.rfind(",")
+        after = cleaned[last_comma + 1:]
+        if len(after) == 2:
+            cleaned = cleaned.replace(",", ".")
+        else:
+            cleaned = cleaned.replace(",", "")
+    try:
+        val = float(cleaned)
+    except ValueError:
+        return None
+    return abs(val)  # Field semantic is positive amount.
+
+
+def _find_tenders(text: str) -> list[dict[str, str | float]]:
+    """Return split-payment / multi-tender lines, or empty list.
+
+    Walks the text line-by-line. Each line is matched against the
+    tender catalogue most-specific-first; the FIRST tender keyword
+    to match on a line claims that line. The list is returned ONLY
+    when 2+ distinct tender entries are found because a single
+    tender line is the ordinary case (already covered by the
+    ``payment_method`` and ``tendered`` slots).
+
+    Returns at most 10 entries (real-world split-bill receipts
+    rarely exceed 4-6 components). Order preserves first-seen-in-
+    OCR order so dashboards render the breakdown in receipt-print
+    order.
+    """
+    if not text:
+        return []
+    out: list[dict[str, str | float]] = []
+    seen_signatures: set[tuple[str, float]] = set()
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        # Try each tender pattern in catalogue order. First match
+        # on a line wins; we don't try to match multiple tenders
+        # on the same line because real-world split receipts put
+        # one tender per line.
+        for pattern, kind in _TENDER_PATTERNS:
+            m = pattern.search(line)
+            if not m:
+                continue
+            amt = _parse_amount(m.group("amt"))
+            if amt is None:
+                break  # next line
+            sig = (kind, amt)
+            if sig in seen_signatures:
+                break
+            seen_signatures.add(sig)
+            out.append({"kind": kind, "amount": amt})
+            break
+        if len(out) >= _MAX_TENDERS:
+            break
+    # Require 2+ distinct entries to surface (single tender is
+    # already handled by payment_method/tendered).
+    if len(out) < 2:
+        return []
+    return out
+
+
 # Cash-rounding keywords printed on receipts in countries where small
 # denomination coins are out of circulation. Ordered MOST-SPECIFIC
 # first so multi-word forms win over short aliases. The bare
@@ -2463,6 +2662,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         suggested_tips=_find_suggested_tips(text),
         points_earned=_find_points_earned(text),
         tip_url=_find_tip_url(text),
+        tenders=_find_tenders(text),
         items=_parse_items(text),
     )
 
@@ -2495,6 +2695,12 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     # pass fills it.
     if not merged.suggested_tips:
         merged.suggested_tips = parsed.suggested_tips
+    # Backfill tenders when caller supplied none. The LLM may have
+    # surfaced an explicit split-tender breakdown from the OCR
+    # screenshot; if not, the regex pass fills it from the
+    # printed lines.
+    if not merged.tenders:
+        merged.tenders = parsed.tenders
     # Recompute tip_percent against the merged tip + subtotal/total so a
     # caller that only supplied a subtotal still gets a derived percent
     # when the OCR pass discovered the tip.

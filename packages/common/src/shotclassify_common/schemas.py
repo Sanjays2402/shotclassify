@@ -448,6 +448,57 @@ class ReceiptFields(BaseModel):
     # for dashboards that want to surface "this merchant has a
     # digital tipping rate of X%" analytics.
     tip_url: str | None = None
+    # Split-payment / multi-tender lines printed when the customer
+    # paid with more than one method or split the bill across cards.
+    # Restaurant and retail POS systems print one explicit line per
+    # tender component:
+    #
+    #   Visa: 25.00
+    #   Cash: 10.00
+    #   Tip: 5.00
+    #
+    # or restaurant split-bill receipts:
+    #
+    #   Visa **** 1234     25.00
+    #   Mastercard ** 5678 18.00
+    #
+    # or gift-card-plus-card receipts:
+    #
+    #   Gift Card: 15.00
+    #   Apple Pay: 10.00
+    #
+    # Each entry is a ``{"kind": str, "amount": float}`` dict
+    # capturing one tender component. ``kind`` is one of:
+    #
+    #   ``visa``        ``mastercard``    ``amex``       ``discover``
+    #   ``jcb``         ``diners``        ``unionpay``
+    #   ``cash``        ``check``         ``gift_card``   ``store_credit``
+    #   ``apple_pay``   ``google_pay``    ``samsung_pay``
+    #   ``paypal``      ``venmo``         ``cashapp``     ``zelle``
+    #   ``card``        ``credit``        ``debit``       ``ebt``
+    #   ``other``       (fallback for unrecognised tender names)
+    #
+    # ``amount`` is the POSITIVE float amount paid by that tender
+    # component (the negative sign on a printed ``-25.00`` is
+    # stripped because the field semantic implies sign).
+    #
+    # Surfaces only when 2+ distinct tender LINES are detected so
+    # dashboards can rely on ``len(tenders) > 0`` meaning "this
+    # receipt has a real split-tender breakdown" without per-receipt
+    # special-casing. A single tender line is the ordinary case --
+    # the ``payment_method`` and ``tendered`` slots already cover
+    # it.
+    #
+    # Distinct from ``payment_method`` (which is the single primary
+    # method when the receipt didn't split). The two CAN coexist:
+    # ``payment_method`` reflects the dominant or last tender, while
+    # ``tenders`` carries the full component breakdown for
+    # reconciliation.
+    #
+    # Empty list when the receipt is single-tender (the typical
+    # case). Capped at 10 entries because real-world split-bill
+    # receipts rarely exceed 4-6 components.
+    tenders: list[dict[str, str | float]] = Field(default_factory=list)
     items: list[ReceiptLine] = Field(default_factory=list)
 
 
