@@ -140,6 +140,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             recurring=r.get("recurring"),
             warranty=r.get("warranty"),
             delivery_eta=r.get("delivery_eta"),
+            lottery=r.get("lottery") or [],
             items=items,
         )
     if c := fields_in.get("code"):

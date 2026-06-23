@@ -600,6 +600,51 @@ class ReceiptFields(BaseModel):
     # ``None`` when no warranty / return notice is printed (most
     # restaurant receipts and small-vendor receipts).
     warranty: dict[str, str | int | None] | None = None
+    # Lottery / scratch-card / sweepstake draw lines printed on US
+    # / UK / EU convenience-store receipts. Most state-lottery
+    # terminals (Powerball, Mega Millions, EuroMillions, National
+    # Lottery, Lotto Max, Camelot, etc.) and many gas-station POS
+    # systems print one printed line per ticket sold:
+    #
+    #   LOTTO #4231 Powerball 12345 Draw 11/04/24
+    #   Mega Millions QP 5.00 Draw 2024-06-15
+    #   Scratch Off Win for Life 2.00 #98765
+    #   EuroMillions 1+0 Draw Fri 14/06 2.50
+    #   National Lottery Lucky Dip 6.00
+    #
+    # Each entry is a ``{"game": str, "ticket_id": str | None,
+    # "draw_date": str | None, "amount": float | None}`` dict.
+    #
+    # * ``game`` is the canonical lottery game name as printed
+    #   (``Powerball`` / ``Mega Millions`` / ``Lotto`` /
+    #   ``EuroMillions`` / ``National Lottery`` / ``Lotto Max`` /
+    #   ``Scratch Off`` / etc.). The catalogue covers the
+    #   distinctive game-name vocabulary printed at lottery POS
+    #   terminals.
+    # * ``ticket_id`` is the printed serial / ticket-number when
+    #   the line carries one (``#4231`` / ``Ticket #98765`` /
+    #   bare numeric tail after the game name). ``None`` when the
+    #   ticket has no printed serial.
+    # * ``draw_date`` is the captured draw date verbatim
+    #   (``11/04/24`` / ``2024-06-15`` / ``Fri 14/06`` /
+    #   ``Saturday`` -- preserved as-printed) when a ``Draw`` /
+    #   ``Drawing`` keyword sits on the same line, else ``None``.
+    # * ``amount`` is the cost / ticket price in float (always
+    #   positive) when the line carries one, else ``None``.
+    #
+    # Dashboards use this to:
+    # * Track lottery-ticket sales separately from groceries /
+    #   fuel / general merchandise (regulated revenue category).
+    # * Bucket sales by game (Powerball vs scratch-offs vs
+    #   instant-win) for compliance reporting.
+    # * Flag receipts that mix lottery purchases with food-stamp
+    #   (EBT) tenders -- typically not permitted by state rules.
+    #
+    # Empty list when the receipt has no lottery line (the
+    # typical case for most retail / restaurant receipts). Capped
+    # at 20 entries because a single receipt rarely lists more
+    # than a handful of tickets.
+    lottery: list[dict[str, str | float | None]] = Field(default_factory=list)
     items: list[ReceiptLine] = Field(default_factory=list)
 
 

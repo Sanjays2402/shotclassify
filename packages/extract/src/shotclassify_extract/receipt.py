@@ -3189,6 +3189,240 @@ def _find_delivery_eta(text: str) -> str | None:
     return None
 
 
+# Lottery / scratch-card / sweepstake game catalogue. Each entry is
+# (regex-fragment, canonical-name). The catalogue is ordered
+# longest-first so multi-word games (``Mega Millions``, ``Win for
+# Life``, ``Powerball``) match before bare aliases (``Lotto``).
+# Patterns are compiled into one alternation per scan.
+#
+# We curate the catalogue from real-world state-lottery / national
+# lottery games so a random capitalised prose word "Lottery"
+# doesn't false-positive without a real game name. The bare
+# ``LOTTO`` keyword IS included because most state terminals print
+# their generic ticket lines that way.
+_LOTTERY_GAMES: tuple[tuple[str, str], ...] = (
+    # Multi-word US games (longest first).
+    (r"Mega\s+Millions", "Mega Millions"),
+    (r"Win\s+for\s+Life", "Win for Life"),
+    (r"Cash\s+for\s+Life", "Cash for Life"),
+    (r"Lucky\s+for\s+Life", "Lucky for Life"),
+    (r"Pick\s+(?:3|4|5|6|10)", "Pick"),
+    (r"Cash\s+5", "Cash 5"),
+    (r"Cash\s+4\s+Life", "Cash 4 Life"),
+    (r"Take\s+5", "Take 5"),
+    (r"Daily\s+Numbers?", "Daily Numbers"),
+    (r"Hot\s+Lotto", "Hot Lotto"),
+    (r"Numbers\s+Game", "Numbers Game"),
+    # Multi-word EU / UK / CA / AU games.
+    (r"National\s+Lottery", "National Lottery"),
+    (r"Lotto\s+Max", "Lotto Max"),
+    (r"Lotto\s+6\s*/\s*49", "Lotto 6/49"),
+    (r"Lotto\s+649", "Lotto 6/49"),
+    (r"Set\s+for\s+Life", "Set for Life"),
+    (r"Thunderball", "Thunderball"),
+    (r"Lucky\s+Dip", "Lucky Dip"),
+    (r"Health\s+Lottery", "Health Lottery"),
+    (r"Postcode\s+Lottery", "Postcode Lottery"),
+    (r"Saturday\s+Lotto", "Saturday Lotto"),
+    (r"Oz\s+Lotto", "Oz Lotto"),
+    (r"Powerball\s+Plus", "Powerball Plus"),
+    # Bare game names.
+    (r"Powerball", "Powerball"),
+    (r"EuroMillions", "EuroMillions"),
+    (r"EuroJackpot", "EuroJackpot"),
+    (r"SuperLotto", "SuperLotto"),
+    (r"Megabucks", "Megabucks"),
+    (r"Quinto", "Quinto"),
+    (r"Keno", "Keno"),
+    (r"Bingo", "Bingo"),
+    # Scratch-off family.
+    (r"Scratch\s*-?\s*Off?s?", "Scratch Off"),
+    (r"Scratchcards?", "Scratchcard"),
+    (r"Scratchers?", "Scratchers"),
+    (r"Instant\s+Win", "Instant Win"),
+    (r"Instant\s+Game", "Instant Game"),
+    # Generic terminals print bare LOTTO or LOTTERY headers --
+    # accept these but ONLY when ALL-CAPS so prose mentions of
+    # "lottery" in lower-case don't false-positive.
+    (r"LOTTO\b", "Lotto"),
+    (r"LOTTERY\b", "Lottery"),
+)
+
+# Combined alternation. The non-capturing wrapper means the
+# match offset / span belongs to the WHOLE keyword while each
+# inner alternation preserves its own structure.
+#
+# Two compiled regexes: the case-insensitive one for proper game
+# names (Powerball / Mega Millions etc) and a SECOND case-sensitive
+# one for the bare LOTTO / LOTTERY fallbacks. Required because
+# lowercase "lottery" in prose is too common (~"won the lottery")
+# but ALL-CAPS LOTTO / LOTTERY only appears on real POS terminals.
+_LOTTERY_GAME_RE = re.compile(
+    r"(?P<game>" + "|".join(p for p, _ in _LOTTERY_GAMES if p not in {r"LOTTO\b", r"LOTTERY\b"}) + r")",
+    re.IGNORECASE,
+)
+_LOTTERY_GAME_ALLCAPS_RE = re.compile(
+    r"(?P<game>LOTTO\b|LOTTERY\b)"
+)
+
+# Build canonical-name lookup keyed by the lower-cased flattened
+# match span so we can normalise any capitalisation variation back
+# to the catalogue's canonical spelling.
+_LOTTERY_GAME_LOOKUP: dict[str, str] = {}
+for _pat, _canon in _LOTTERY_GAMES:
+    # Strip regex syntax (\s+, ?, [...], \b) -- we only need a
+    # rough lowercase key for canonicalisation, the regex above
+    # already matched the actual span.
+    _key = re.sub(r"\\[sb]\+?|\\s\*|\\\\|\\b", " ", _pat)
+    _key = re.sub(r"[\[\](){}|?+*]", "", _key)
+    _key = re.sub(r"\s+", " ", _key).strip().lower()
+    if _key and _key not in _LOTTERY_GAME_LOOKUP:
+        _LOTTERY_GAME_LOOKUP[_key] = _canon
+
+
+def _canonical_lottery_game(raw: str) -> str:
+    """Map a raw matched span back to its catalogue canonical name."""
+    key = re.sub(r"\s+", " ", raw.strip()).lower()
+    # Try exact match first.
+    if key in _LOTTERY_GAME_LOOKUP:
+        return _LOTTERY_GAME_LOOKUP[key]
+    # Try collapsed (no spaces) since some catalogue entries are
+    # single-word (EuroMillions) which the lookup builds without
+    # surrounding whitespace.
+    collapsed = key.replace(" ", "")
+    for k, v in _LOTTERY_GAME_LOOKUP.items():
+        if k.replace(" ", "") == collapsed:
+            return v
+    # Try matching a catalogue canonical name as a PREFIX of the
+    # captured span -- this handles plural / suffix variations
+    # like ``Scratch Offs`` -> ``Scratch Off`` and ``Scratchcards``
+    # -> ``Scratchcard``. We pick the longest matching canonical
+    # name so a partial match doesn't shadow a more specific one.
+    best_match: str | None = None
+    for _k, v in _LOTTERY_GAME_LOOKUP.items():
+        v_norm = v.lower().replace(" ", "")
+        if collapsed.startswith(v_norm):
+            if best_match is None or len(v) > len(best_match):
+                best_match = v
+    if best_match is not None:
+        return best_match
+    # Fall back to the captured span verbatim.
+    return raw.strip()
+
+
+# Ticket id forms recognised on the same line as a game:
+#   #4231 / Ticket #4231 / Ticket No. 4231 / Serial 12345
+_LOTTERY_TICKET_RE = re.compile(
+    r"(?:"
+    r"(?:Ticket|Serial|Ref|Ticket\s+No\.?|Ticket\s+Number)\s*[:#]?\s*"
+    r"(?P<ticket_kw>[A-Za-z0-9\-]{3,20})"
+    r"|#\s*(?P<ticket_hash>\d{3,12})"
+    r")",
+    re.IGNORECASE,
+)
+
+# Draw-date capture: ``Draw 11/04/24`` / ``Drawing 2024-06-15`` /
+# ``Draw Date: Sat 14/06`` / ``Draw Fri 14/06``.
+_LOTTERY_DRAW_RE = re.compile(
+    r"(?:Draw(?:ing)?(?:\s+Date)?)\s*[:#\-]?\s*"
+    r"(?P<draw>"
+    r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+\d{1,2}[/\-]\d{1,2}(?:[/\-]\d{2,4})?"
+    r"|\d{4}[/\-]\d{1,2}[/\-]\d{1,2}"
+    r"|\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}"
+    r"|\d{1,2}[/\-]\d{1,2}"
+    r"|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*"
+    r")",
+    re.IGNORECASE,
+)
+
+# Amount capture: $5.00 / 5.00 / 2,50 (EU). We want a positive
+# amount with at least a decimal portion (whole-dollar amounts
+# like ``Powerball 5`` are too ambiguous -- could be the number
+# of plays).
+_LOTTERY_AMOUNT_RE = re.compile(
+    r"(?:[$£€¥]\s*)?"
+    r"(?P<amt>\d{1,4}[.,]\d{2})"
+)
+
+
+def _parse_lottery_line(line: str) -> dict[str, str | float | None] | None:
+    """Parse one OCR line into a lottery entry or None.
+
+    The line must contain at least a recognised game name from the
+    curated catalogue. ticket_id / draw_date / amount are optional.
+    """
+    if not line or len(line) > 200:
+        return None
+    # Try the case-insensitive matcher first (proper game names).
+    # If no match, try the ALL-CAPS fallback for bare LOTTO /
+    # LOTTERY headers.
+    m = _LOTTERY_GAME_RE.search(line)
+    if m is None:
+        m = _LOTTERY_GAME_ALLCAPS_RE.search(line)
+    if m is None:
+        return None
+    game = _canonical_lottery_game(m.group("game"))
+
+    # Ticket id -- look anywhere on the line (the bare ``#4231``
+    # form sometimes precedes the game name in printer columns).
+    ticket_id: str | None = None
+    tm = _LOTTERY_TICKET_RE.search(line)
+    if tm:
+        ticket_id = tm.group("ticket_kw") or tm.group("ticket_hash")
+        if ticket_id:
+            ticket_id = ticket_id.strip().upper() if (
+                tm.group("ticket_kw") and not tm.group("ticket_kw").isdigit()
+            ) else ticket_id.strip()
+
+    # Draw date.
+    draw_date: str | None = None
+    dm = _LOTTERY_DRAW_RE.search(line)
+    if dm:
+        draw_date = re.sub(r"\s+", " ", dm.group("draw").strip())
+
+    # Amount (cost / ticket price).
+    amount: float | None = None
+    am = _LOTTERY_AMOUNT_RE.search(line)
+    if am:
+        raw = am.group("amt").replace(",", ".")
+        try:
+            parsed = float(raw)
+            if 0 < parsed < 10_000:
+                amount = parsed
+        except ValueError:
+            amount = None
+
+    return {
+        "game": game,
+        "ticket_id": ticket_id,
+        "draw_date": draw_date,
+        "amount": amount,
+    }
+
+
+def _find_lottery(text: str) -> list[dict[str, str | float | None]]:
+    """Return a list of lottery / scratch-card draw entries.
+
+    Walks the OCR text line-by-line and surfaces every line that
+    contains a recognised lottery game name from the curated
+    catalogue. Capped at 20 entries.
+
+    Returns an empty list when no lottery line is detected (the
+    typical case for most receipts).
+    """
+    if not text:
+        return []
+    out: list[dict[str, str | float | None]] = []
+    for line in text.splitlines():
+        entry = _parse_lottery_line(line)
+        if entry is None:
+            continue
+        out.append(entry)
+        if len(out) >= 20:
+            break
+    return out
+
+
 def parse_receipt_text(text: str) -> ReceiptFields:
     subtotal = _find_amount_after(text, "subtotal")
     tax = _find_amount_after(text, "tax") or _find_amount_after(text, "vat")
@@ -3232,6 +3466,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         recurring=_find_recurring(text),
         warranty=_find_warranty(text),
         delivery_eta=_find_delivery_eta(text),
+        lottery=_find_lottery(text),
         items=_parse_items(text),
     )
 
@@ -3281,6 +3516,14 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     # fills it from the printed keyword vocab.
     if merged.warranty is None:
         merged.warranty = parsed.warranty
+    # Backfill lottery / scratch-card lines when caller supplied
+    # none. The LLM may surface lottery entries from the OCR
+    # screenshot; if not, the regex pass fills them from the
+    # printed game catalogue. Caller's non-empty list is
+    # preserved verbatim (an LLM may have richer per-line
+    # parsing than the regex catalogue).
+    if not merged.lottery:
+        merged.lottery = parsed.lottery
     # Recompute tip_percent against the merged tip + subtotal/total so a
     # caller that only supplied a subtotal still gets a derived percent
     # when the OCR pass discovered the tip.
