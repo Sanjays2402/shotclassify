@@ -117,6 +117,35 @@ class ReceiptFields(BaseModel):
     # Dashboards use this to surface refund volume and net revenue
     # without re-parsing every receipt.
     refund_amount: float | None = None
+    # Free-form reason text printed alongside a refund line. Many
+    # POS systems prompt the cashier to enter a reason when issuing
+    # a refund / void / return so the receipt prints it for the
+    # customer:
+    #
+    #   Refund - damaged goods
+    #   Refund: customer changed mind
+    #   Reason: wrong size
+    #   Void Reason: pricing error
+    #   Return Reason: defective
+    #
+    # Stored as the cleaned reason string verbatim (case-preserved
+    # because some prompt cashiers to use the customer's exact
+    # wording). ``None`` when the receipt is not a refund / void OR
+    # is a refund with no reason printed.
+    #
+    # Recognised inline shapes:
+    # * ``Refund - <reason>`` / ``Refund: <reason>`` (single line,
+    #   reason follows separator)
+    # * ``Reason: <reason>`` / ``Reason - <reason>`` (bare reason
+    #   keyword anywhere on the receipt, only when refund_amount is
+    #   also populated to anchor it)
+    # * ``Void Reason: <reason>`` / ``Return Reason: <reason>`` /
+    #   ``Refund Reason: <reason>`` (compound keyword forms)
+    #
+    # Dashboards use this to bucket refunds by reason (damaged /
+    # wrong-size / customer-error / pricing / quality / etc) to
+    # surface operational problems.
+    refund_reason: str | None = None
     # Loyalty / membership programme identifier printed for repeat
     # customers (``Member: 12345``, ``Loyalty #ABC-99``, ``Rewards
     # ID: 4477``). Stored as a string verbatim because programmes

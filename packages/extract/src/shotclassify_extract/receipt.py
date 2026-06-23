@@ -1387,6 +1387,151 @@ def _find_refund_amount(text: str) -> float | None:
     return None
 
 
+# Refund-reason extraction. When a POS system prompts the cashier
+# to enter a reason for a refund / void / return, the receipt
+# prints it as either:
+#
+#   "Refund - damaged goods"
+#   "Refund: wrong size"
+#   "Void Reason: pricing error"
+#   "Return Reason: defective"
+#   "Refund Reason: customer changed mind"
+#   "Reason: customer satisfaction"          (only when refund_amount
+#                                              is also present so the
+#                                              bare ``Reason`` keyword
+#                                              has anchor context)
+#
+# We extract the cleaned freeform string verbatim (case-preserved
+# because cashier-entered reasons often quote the customer's
+# exact wording).
+
+# Priority order (most-specific first): compound keyword forms
+# (``Refund Reason:`` / ``Void Reason:`` / ``Return Reason:``)
+# beat the bare ``Reason:`` keyword which in turn beats the
+# inline ``Refund - reason`` form. This ensures a receipt that
+# prints both ``Refund 12.50`` AND ``Refund Reason: damaged``
+# resolves to the explicit reason line.
+_REFUND_REASON_COMPOUND = re.compile(
+    r"(?:(?<=\n)|(?<=^)|(?<=[^a-zA-Z]))"
+    r"(?:refund|void|return|cancel(?:lation|led)?|reversal)"
+    r"\s+reason\s*[:\-]\s*"
+    r"(?P<reason>[^\n\r]+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_REFUND_REASON_BARE = re.compile(
+    r"(?:(?<=\n)|(?<=^)|(?<=[^a-zA-Z]))"
+    r"reason\s*[:\-]\s*"
+    r"(?P<reason>[^\n\r]+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Inline refund-with-reason form: the refund keyword + separator +
+# free-form reason on the SAME line. Excludes lines that contain a
+# numeric amount because those are the ``Refund 12.50`` totals line.
+# Examples that should match:
+#   Refund - damaged goods
+#   REFUND: wrong size
+#   Void: pricing error
+#   Return: defective merchandise
+# Examples that should NOT match:
+#   Refund 12.50
+#   REFUND: $12.50
+#   Refund Amount: -25.00
+_REFUND_REASON_INLINE = re.compile(
+    r"(?:(?<=\n)|(?<=^)|(?<=[^a-zA-Z]))"
+    r"(?:refund|void(?:ed)?|return(?:ed)?|cancel(?:lation|led)?|reversal)"
+    r"\s*[:\-]\s*"
+    r"(?P<reason>[^\n\r]+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _clean_reason(raw: str) -> str | None:
+    """Trim and validate a captured reason string.
+
+    Returns ``None`` when the cleaned reason is:
+      * empty after stripping whitespace / punctuation
+      * a pure number (the ``Refund: 12.50`` total line leaks
+        through to us; we filter)
+      * a currency-amount shape (``$12.50``, ``-25.00``)
+      * the literal word ``transaction`` / ``sale`` / ``payment``
+        (these are status words that follow ``Void``/``Cancel`` on
+        a totals line)
+    """
+    if not raw:
+        return None
+    cleaned = raw.strip().rstrip(".,;:")
+    if not cleaned:
+        return None
+    # Reject if the cleaned text is just a number or currency amount.
+    if re.match(r"^[-]?[$€£¥]?\s*\d+(?:[.,]\d{1,3})?$", cleaned):
+        return None
+    # Reject status words that follow Void/Cancel on totals lines.
+    status_only = {
+        "transaction", "sale", "payment", "amount", "total",
+    }
+    if cleaned.lower() in status_only:
+        return None
+    # Reject overly-long captures (likely OCR noise picking up the
+    # next line). Real reasons are typically 1..80 characters.
+    if len(cleaned) > 120:
+        return None
+    return cleaned
+
+
+def _find_refund_reason(text: str, has_refund_amount: bool) -> str | None:
+    """Return the refund / void / return reason, or None.
+
+    The ``has_refund_amount`` flag controls whether the bare
+    ``Reason:`` keyword counts as evidence -- without an
+    anchoring refund amount on the same receipt, the bare
+    keyword is too generic (a receipt for a normal sale may
+    print "Reason: subscription renewal" alongside a charge
+    description and we don't want that to misfire as a refund).
+
+    Priority order:
+    1. Compound keyword forms (``Refund Reason:`` /
+       ``Void Reason:`` / ``Return Reason:``) -- the
+       most-specific signal.
+    2. Bare ``Reason:`` keyword (ONLY when has_refund_amount is True).
+    3. Inline ``Refund - <reason>`` / ``Void: <reason>`` form
+       (the same-line refund keyword followed by a reason).
+
+    Last-match-wins within each priority tier so a receipt that
+    prints both a refund total line AND a follow-up reason line
+    captures the reason from the dedicated line.
+    """
+    if not text:
+        return None
+    # 1) Compound keyword forms beat everything else.
+    matches = list(_REFUND_REASON_COMPOUND.finditer(text))
+    if matches:
+        for m in reversed(matches):
+            cleaned = _clean_reason(m.group("reason"))
+            if cleaned is not None:
+                return cleaned
+    # 2) Bare ``Reason:`` keyword -- only when a refund amount is
+    #    also present (avoid false-positives on normal sales).
+    if has_refund_amount:
+        matches = list(_REFUND_REASON_BARE.finditer(text))
+        if matches:
+            for m in reversed(matches):
+                cleaned = _clean_reason(m.group("reason"))
+                if cleaned is not None:
+                    return cleaned
+    # 3) Inline ``Refund - <reason>`` form. We only try this when no
+    #    higher-priority match landed -- and we have to discriminate
+    #    "Refund - damaged goods" (reason!) from "Refund: $12.50"
+    #    (amount masquerading as reason). The _clean_reason helper
+    #    catches the amount case via the pure-number check.
+    matches = list(_REFUND_REASON_INLINE.finditer(text))
+    if matches:
+        for m in reversed(matches):
+            cleaned = _clean_reason(m.group("reason"))
+            if cleaned is not None:
+                return cleaned
+    return None
+
+
 # Loyalty / membership / store / register identifier extraction.
 # Receipts carry three logically distinct identifiers in addition to
 # the order / invoice number already covered:
@@ -2009,6 +2154,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
     tax = _find_amount_after(text, "tax") or _find_amount_after(text, "vat")
     tip = _find_tip(text)
     total = _find_amount_after(text, "total")
+    refund_amount = _find_refund_amount(text)
     return ReceiptFields(
         vendor=_guess_vendor(text),
         date=_guess_date(text),
@@ -2023,7 +2169,8 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         order_number=_find_order_number(text),
         tax_mode=_detect_tax_mode(text),
         party_size=_detect_party_size(text),
-        refund_amount=_find_refund_amount(text),
+        refund_amount=refund_amount,
+        refund_reason=_find_refund_reason(text, refund_amount is not None),
         loyalty_id=_find_loyalty_id(text),
         store_id=_find_store_id(text),
         register_id=_find_register_id(text),
@@ -2052,7 +2199,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
     for f in (
         "vendor", "date", "subtotal", "tax", "tip", "discount", "total",
         "currency", "payment_method", "order_number", "tax_mode",
-        "party_size", "refund_amount", "loyalty_id", "store_id",
+        "party_size", "refund_amount", "refund_reason", "loyalty_id", "store_id",
         "register_id", "cashier", "server", "signature",
         "service_charge", "delivery_fee", "tendered", "change",
         "rounding", "gift_card_applied", "promo_code", "points_earned",
