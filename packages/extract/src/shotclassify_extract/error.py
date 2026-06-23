@@ -508,6 +508,30 @@ def parse_swift_crash(text: str) -> tuple[str, str, str | None, int | None] | No
     return _parse_swift_crash(text)
 
 
+def parse_vue_error(text: str) -> tuple[str, str, str | None, int | None] | None:
+    """Return ``(exception, message, file or None, line or None)`` for
+    a Vue.js component error, or ``None`` when no Vue signature is
+    present.
+
+    Detection requires the ``[Vue warn]:`` prefix combined with a
+    recognised Vue slot (``Error in v-on handler``, ``Error in
+    mounted hook``, ``Error in render``, ``Error in callback for
+    watcher``, ``Unhandled error during execution``, or
+    ``Hydration <kind> mismatch``). Without the prefix the wording
+    alone is too generic to discriminate from prose so we never
+    tag as Vue.
+
+    The exception slot prefers the quoted inner exception (``"TypeError:
+    foo"``) when present; otherwise the slot name itself becomes the
+    exception class (``HydrationNodeMismatch`` / ``VueUnhandledError(...)``).
+    The file slot is the innermost ``.vue`` component file from the
+    ``found in`` tree, falling back to ``<ComponentTag>`` when no
+    file path is printed. Line is always ``None`` because Vue's
+    warn handler doesn't print per-frame line numbers.
+    """
+    return _parse_vue_error(text)
+
+
 def parse_kotlin_coroutine(
     text: str,
 ) -> tuple[str | None, str | None, str | None, int | None] | None:
@@ -2134,6 +2158,258 @@ def _nest_likely_cause(exception: str | None, message: str | None) -> str | None
     return None
 
 
+# Vue.js component error shapes. Vue's warnHandler / errorHandler
+# (and the default console output in dev mode) emit messages in a
+# very characteristic format:
+#
+#   [Vue warn]: Error in v-on handler: "TypeError: Cannot read properties of undefined (reading 'x')"
+#     at <Button onClick=fn> at <HelloWorld>
+#
+#   [Vue warn]: Error in render: "ReferenceError: foo is not defined"
+#     found in
+#
+#     ---> <HelloWorld> at src/components/HelloWorld.vue
+#            <App>
+#              <Root>
+#
+#   [Vue warn]: Error in callback for watcher "count": "TypeError: ..."
+#     found in
+#       ---> <Counter> at src/components/Counter.vue
+#
+#   [Vue warn]: Error in mounted hook: "TypeError: Cannot read properties of null"
+#     found in
+#       ---> <App>
+#
+# Vue 3 also emits:
+#   [Vue warn]: Unhandled error during execution of mounted hook
+#     at <App>
+#   [Vue warn]: Hydration node mismatch: ...
+#
+# The ``[Vue warn]:`` prefix is the unambiguous discriminator -- no
+# other JS framework prints that bracketed prefix. The ``Error in
+# <slot>`` shape names which Vue lifecycle slot blew up
+# (v-on handler / render / mounted hook / created hook / updated
+# hook / callback for watcher / setup / etc) so dashboards can
+# group errors by component lifecycle phase.
+_VUE_PRELUDE = re.compile(
+    r"\[Vue\s+warn\]\s*:\s*(?P<body>[^\n]+)",
+    re.IGNORECASE,
+)
+# The ``Error in <slot>`` slot identifies the failing lifecycle
+# hook / handler. Recognised slots include the canonical Vue
+# lifecycle hooks plus the broader ``v-on``, ``render``, ``setup``,
+# ``watcher``, ``hydration``, and ``directive`` slots. The slot
+# name is captured verbatim so dashboards can group by
+# ``v-on handler`` vs ``mounted hook`` vs ``render`` etc.
+_VUE_SLOT = re.compile(
+    r"Error\s+in\s+(?P<slot>"
+    r"v-on\s+handler"
+    r"|render(?:\s+function)?"
+    r"|setup\s+function"
+    r"|render"
+    r"|callback\s+for\s+watcher(?:\s+\"[^\"]*\")?"
+    r"|directive\s+\w+\s+hook(?:\s+\"[^\"]*\")?"
+    r"|(?:beforeCreate|created|beforeMount|mounted|beforeUpdate|updated|"
+    r"activated|deactivated|beforeUnmount|unmounted|"
+    r"beforeDestroy|destroyed|errorCaptured|renderTracked|renderTriggered|"
+    r"serverPrefetch)\s+hook"
+    r")\s*:\s*(?P<rest>.*)",
+    re.IGNORECASE,
+)
+# Quoted-string error message: ``"TypeError: foo is not defined"`` --
+# the inner exception class + message is what dashboards want as
+# the exception slot. The prefix is optional so the bare ``"Error:
+# foo"`` shape also lands as exc="Error".
+_VUE_QUOTED_ERROR = re.compile(
+    r"\"(?P<exc>(?:[A-Z][A-Za-z]*?)?(?:Error|Exception|Warning))\s*:\s*(?P<msg>[^\"]*)\""
+)
+# Component path / file location from the ``found in`` block:
+#   ---> <HelloWorld> at src/components/HelloWorld.vue
+# Vue prints the source file alongside the component tag in the
+# ``found in`` chain. We pull the INNERMOST component (first ``--->``
+# pointer) because that's the leaf where the error originated.
+_VUE_COMPONENT_FILE = re.compile(
+    r"--->?\s+<\w+>\s+at\s+(?P<file>[\w./\-]+\.vue)",
+    re.IGNORECASE,
+)
+# Component tag without file path: ``<HelloWorld>`` or ``<App>``.
+# Fallback when no file path is printed. Two shapes accepted: the
+# ``---> <Tag>`` arrow-prefixed entry inside the ``found in`` tree
+# AND the bare ``at <Tag>`` indent-prefixed entry from Vue 3's
+# Unhandled error handler.
+_VUE_COMPONENT_TAG = re.compile(
+    r"(?:--->?|\bat)\s+<(?P<tag>\w+)>",
+)
+# Unhandled error during execution shape (Vue 3 default handler).
+_VUE_UNHANDLED = re.compile(
+    r"Unhandled\s+error\s+during\s+execution\s+of\s+"
+    r"(?P<slot>[\w\s\-]+?(?:\s+hook|\s+handler|\s+watcher|\s+effect)?)\s*(?:[\.:]|$)",
+    re.IGNORECASE,
+)
+# Hydration mismatch shape (Vue 3 SSR/SSG).
+_VUE_HYDRATION = re.compile(
+    r"Hydration\s+(?P<kind>node|text|class|style|attribute|children)\s+mismatch",
+    re.IGNORECASE,
+)
+
+
+def _parse_vue_error(
+    text: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    """Return (exception, message, file, line) for a Vue.js error, or None.
+
+    Detection requires the ``[Vue warn]:`` prefix combined with a
+    recognised Vue slot (``Error in v-on handler``, ``Error in
+    mounted hook``, ``Error in render``, ``Unhandled error during
+    execution``, ``Hydration <kind> mismatch``). Without the prefix
+    we never tag as Vue because the slot wording alone is too
+    generic to discriminate from prose.
+
+    The exception slot is pulled from the quoted-string error inside
+    the warning body (``"TypeError: x is not defined"``) when present;
+    otherwise the slot name itself becomes the exception (``v-on
+    handler error`` / ``mounted hook error`` / ``hydration mismatch``).
+
+    The file slot is the innermost component file from the ``found
+    in`` tree (``src/components/HelloWorld.vue``). When no file is
+    printed, fall back to ``<ComponentTag>`` so dashboards still
+    have a triage anchor. Line is None because Vue's warn handler
+    doesn't print line numbers per-frame.
+
+    Returns None when the prefix is absent so the caller can fall
+    through to the generic Node branch (a vanilla JS error caught
+    by Vue's errorHandler that doesn't go through ``[Vue warn]``
+    looks like a Node error and should tag as such).
+    """
+    if not text:
+        return None
+    prelude = _VUE_PRELUDE.search(text)
+    if prelude is None:
+        return None
+    body = prelude.group("body")
+
+    # Identify the slot. Three families: standard ``Error in <slot>``
+    # shape, ``Unhandled error during execution of <slot>`` (Vue 3
+    # default handler), or ``Hydration <kind> mismatch`` (SSR/SSG).
+    slot_match = _VUE_SLOT.search(body)
+    unhandled_match = _VUE_UNHANDLED.search(body) if slot_match is None else None
+    hydration_match = (
+        _VUE_HYDRATION.search(body)
+        if (slot_match is None and unhandled_match is None)
+        else None
+    )
+
+    if slot_match is None and unhandled_match is None and hydration_match is None:
+        return None
+
+    # Determine exception + message.
+    exc: str
+    msg: str | None
+    if hydration_match is not None:
+        # ``Hydration node mismatch`` / ``Hydration text mismatch`` etc.
+        kind = hydration_match.group("kind").lower()
+        exc = f"Hydration{kind.capitalize()}Mismatch"
+        # Capture the rest of the body (after the mismatch keyword)
+        # as the message, trimmed.
+        rest = body[hydration_match.end():].strip(" :.")
+        msg = rest or None
+    elif unhandled_match is not None:
+        # ``Unhandled error during execution of mounted hook``.
+        slot = unhandled_match.group("slot").strip()
+        # Normalise multi-space -> single space.
+        slot = re.sub(r"\s+", " ", slot)
+        exc = f"VueUnhandledError({slot})"
+        # No quoted inner error in this shape; the slot phrase IS
+        # the diagnostic. Capture the optional trailing message from
+        # the rest of the body if anything follows the slot keyword.
+        tail = body[unhandled_match.end():].strip(" :.")
+        msg = tail or None
+    else:
+        assert slot_match is not None  # narrowed
+        slot = slot_match.group("slot").strip()
+        # Normalise multi-space -> single space for stable storage.
+        slot = re.sub(r"\s+", " ", slot)
+        rest = slot_match.group("rest") or ""
+        # Look for a quoted inner exception in the slot's rest tail
+        # OR in the broader text (Vue often line-wraps the quoted
+        # message so the closing quote is on a continuation line).
+        quoted = _VUE_QUOTED_ERROR.search(rest) or _VUE_QUOTED_ERROR.search(text)
+        if quoted is not None:
+            exc = quoted.group("exc")
+            msg = (
+                f"Error in {slot}: " + quoted.group("msg").strip()
+            ).strip()
+        else:
+            # No quoted inner exception -- the slot phrase becomes the
+            # exception slot. The body tail becomes the message.
+            exc_tag = re.sub(r"\s+", "", slot.title()).replace("-", "")
+            exc = f"VueError({slot})" if not exc_tag else f"Vue{exc_tag}Error"
+            msg = rest.strip(" :.\"") or None
+
+    # File slot: innermost component file from the ``found in`` tree.
+    file_match = _VUE_COMPONENT_FILE.search(text)
+    file_: str | None
+    if file_match is not None:
+        file_ = file_match.group("file").strip()
+    else:
+        # No .vue file path -- fall back to the leaf component tag.
+        tag_match = _VUE_COMPONENT_TAG.search(text)
+        if tag_match is not None:
+            file_ = f"<{tag_match.group('tag')}>"
+        else:
+            file_ = None
+
+    return exc, msg or "", file_, None
+
+
+def _vue_likely_cause(exception: str | None, message: str | None) -> str | None:
+    """Return operator-friendly hints for common Vue.js errors."""
+    exc = (exception or "").lower()
+    msg = (message or "").lower()
+    # Hydration mismatches first (most specific class).
+    if "hydration" in exc:
+        return (
+            "SSR / client rendered output differs; check for non-deterministic "
+            "data (Date.now, Math.random, window-only refs) inside render."
+        )
+    # Inner exception class hints (when quoted with a meaningful tail)
+    # checked FIRST so a TypeError with "undefined" surfaces the
+    # optional-chaining hint instead of the generic slot hint.
+    if "typeerror" in exc:
+        if "undefined" in msg or "null" in msg:
+            return "Property access on undefined / null reactive value; check optional chaining."
+    if "referenceerror" in exc:
+        return "Variable not defined in template scope; check data / computed / props names."
+    if "rangeerror" in exc:
+        return "Numeric / iteration overflow; check recursive watchers or v-for keys."
+    # Lifecycle / slot-specific causes pulled from the slot phrase.
+    if "v-on handler" in msg or "v-on handler" in exc:
+        return "Event handler threw; check guard logic and bound function refs."
+    if "render" in msg.split(":", 1)[0] or "vuerender" in exc:
+        return "Render function threw; check template bindings and component props."
+    if "watcher" in msg or "callback for watcher" in msg:
+        return "Watcher callback threw; check side-effect inside the watch handler."
+    if "mounted hook" in msg or "vuemounted" in exc:
+        return "Mounted hook threw; check refs / DOM access deferred to $nextTick."
+    if "created hook" in msg or "vuecreated" in exc:
+        return "Created hook threw; check data initialisation / API calls in setup."
+    if "setup function" in msg or "vuesetup" in exc:
+        return "setup() composition function threw; check ref / reactive init."
+    if "beforeunmount" in msg or "vuebeforeunmount" in exc:
+        return "beforeUnmount hook threw; check cleanup of listeners / timers."
+    if "directive" in msg:
+        return "Custom directive hook threw; check bind / inserted / componentUpdated."
+    if "errorcaptured" in msg or "vueerrorcaptured" in exc:
+        return "errorCaptured hook threw; the error handler itself failed."
+    # Generic Vue-unhandled / fallthrough.
+    if "vueunhandlederror" in exc or "unhandled error" in msg:
+        return "Vue caught an unhandled error; provide app.config.errorHandler for triage."
+    # Fallback TypeError when no undefined/null hint.
+    if "typeerror" in exc:
+        return "Type mismatch; check prop types vs component contract."
+    return "Vue component error; inspect the component tree and the failing lifecycle hook."
+
+
 # AWS Lambda / boto3 client error shapes. The botocore library is
 # the standard AWS Python SDK and prints errors using a distinctive
 # message format that embeds both the AWS error code AND the API
@@ -2477,6 +2753,31 @@ def parse_error_text(text: str) -> ErrorFields:
             exception=exc,
             message=msg,
             likely_cause=_nest_likely_cause(exc, msg),
+            file=file_,
+            line=line_,
+        )
+    elif _parse_vue_error(text) is not None:
+        # Vue.js component error. Placed BEFORE the generic Node
+        # branch because Vue runs on the JS runtime and a Vue
+        # capture often includes a JS stack tail (``at Component
+        # (file.vue:N:M)``) that the bare _JS_AT would steal. The
+        # discriminator is the literal ``[Vue warn]:`` prefix
+        # combined with one of: ``Error in <lifecycle> hook``,
+        # ``Error in v-on handler``, ``Error in render``, ``Error
+        # in callback for watcher``, ``Unhandled error during
+        # execution``, or ``Hydration <kind> mismatch``. We tag
+        # ``framework='vue'`` so dashboards group all Vue runtime
+        # errors together regardless of which lifecycle slot blew
+        # up; the slot itself is preserved in the message so per-
+        # lifecycle filtering still works.
+        vue_hit = _parse_vue_error(text)
+        assert vue_hit is not None  # narrowed by the elif guard
+        exc, msg, file_, line_ = vue_hit
+        return ErrorFields(
+            framework="vue",
+            exception=exc,
+            message=msg,
+            likely_cause=_vue_likely_cause(exc, msg),
             file=file_,
             line=line_,
         )

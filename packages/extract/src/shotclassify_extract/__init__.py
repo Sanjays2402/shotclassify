@@ -54,6 +54,7 @@ from .error import (
     parse_sql_error,
     parse_swift_crash,
     parse_syntax_caret,
+    parse_vue_error,
 )
 from .error_fingerprints import extract_error_fingerprints
 from .fx_pairs import extract_fx_pairs
@@ -111,6 +112,7 @@ __all__ = [
     "parse_spring_whitelabel",
     "parse_swift_crash",
     "parse_syntax_caret",
+    "parse_vue_error",
     "parse_beam_crash",
     "extract_error_fingerprints",
     "extract_fx_pairs",
