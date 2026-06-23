@@ -218,15 +218,240 @@ def enrich_document(existing: DocumentFields | None, ocr: OCRResult) -> Document
 
     Preserves all caller-supplied fields verbatim. Backfills
     ``page_info`` only when the caller did not supply one.
+    Backfills ``headings`` when the caller's list is empty (we
+    never override an LLM-supplied outline because the model may
+    have surfaced a richer structure than the regex can detect).
     """
     text = ocr.text or ""
     parsed_page_info = _find_page_info(text)
+    parsed_headings = extract_headings(text)
     if existing is None:
-        return DocumentFields(page_info=parsed_page_info)
+        return DocumentFields(
+            page_info=parsed_page_info,
+            headings=parsed_headings,
+        )
     merged = existing.model_copy()
     if merged.page_info is None and parsed_page_info is not None:
         merged.page_info = parsed_page_info
+    if not merged.headings and parsed_headings:
+        merged.headings = parsed_headings
     return merged
 
 
-__all__ = ["enrich_document", "_find_page_info"]
+# Heading-hierarchy extraction. Multi-page document captures (slide
+# decks, scanned reports, wiki pages, technical contracts) almost
+# always use a tiered heading structure that dashboards want to
+# surface as a document outline.
+#
+# Recognised shapes (priority order, first-match-wins per line):
+#
+# 1. Markdown ATX headers:
+#       # Title              -> {level: 1, text: "Title"}
+#       ## Section           -> {level: 2, text: "Section"}
+#       ### Subsection       -> {level: 3, text: "Subsection"}
+#       #### #####  ######   -> 4 / 5 / 6
+#    The hash run must be 1..6 (CommonMark spec), followed by at
+#    least one space, followed by the heading text. The optional
+#    trailing closing hash run (``# Title #``) is stripped.
+#
+# 2. Markdown setext headers (the text line followed by a divider):
+#       Title                -> {level: 1, text: "Title"}
+#       =====                  (h1)
+#
+#       Section              -> {level: 2, text: "Section"}
+#       -----                  (h2)
+#    The divider must be at least 3 chars of the same character,
+#    must sit on its own line, and must immediately follow the
+#    heading line (no blank line between).
+#
+# 3. Numbered headers (technical-doc / contract convention):
+#       1. Chapter           -> h1 (1 segment)
+#       1.1 Section          -> h2 (2 segments)
+#       1.1.1 Subsection     -> h3 (3 segments)
+#       2.3.4.5 Detail       -> h4 (max 6 segments capped at h6)
+#    The numbering pattern is N(.N)*\s+TEXT where N is 1..999
+#    (real-world contracts rarely exceed 999 sections at any
+#    level) and TEXT is the heading body. Trailing colon or
+#    period after the number is accepted (``1.1: Section`` /
+#    ``1.1. Section``).
+#
+# Safety:
+# * Setext divider chars require >=3 to discriminate from
+#   markdown horizontal rules (which are usually 3+ of *_-).
+# * Numbered headings reject when the body looks like prose with
+#   more than 80 chars (long sentences with a leading list number
+#   are usually list items, not headings).
+# * ATX headings reject when the body contains markdown emphasis
+#   markers (`_foo_` / `**bar**`) at the start because those look
+#   like comments or formatted prose, not heading titles.
+# * Blank-line padding is not enforced (real OCR loses some
+#   blank lines) but consecutive numbered items at the SAME level
+#   without descending sub-numbering are still treated as headings
+#   because a contract's TOC is a series of `1.` lines.
+#
+# Output is a list of ``{"level": int, "text": str}`` dicts sorted
+# by source-text appearance order. Cap 100 entries because real
+# documents rarely have more outline entries than this.
+
+_MAX_HEADINGS = 100
+
+# Markdown ATX heading: 1..6 hash chars + space + text. Trailing
+# closing hash run is optional. ``\Z`` would be safer than ``$``
+# for trailing whitespace tolerance but ``re.MULTILINE`` + ``$``
+# matches end-of-line which is what we want.
+_HEADING_ATX_RE = re.compile(
+    r"(?m)^(?P<hashes>#{1,6})\s+(?P<text>.+?)(?:\s+#+)?\s*$",
+)
+
+# Numbered heading: 1..6 dot-separated integers + space + text.
+# The colon / period separator after the number is accepted. We
+# accept up to 10 segments (more than ever seen in real captures)
+# and cap the resulting level at 6 (HTML h6 maximum) downstream.
+_HEADING_NUMBERED_RE = re.compile(
+    r"(?m)^(?P<num>\d{1,3}(?:\.\d{1,3}){0,9})\.?:?\s+(?P<text>.+?)\s*$",
+)
+
+# Setext divider: 3+ chars of the SAME character (= or -) on its
+# own line. The backreference ``\1`` enforces same-character runs
+# so a mixed divider like ``=-=-=`` rejects (otherwise the
+# alternation would match each char independently).
+_HEADING_SETEXT_DIVIDER_RE = re.compile(
+    r"^(?P<char>=|-)\1{2,}\s*$",
+)
+
+
+def _level_for_numbered(num: str) -> int:
+    """Return heading level from a dot-separated number string.
+
+    ``1`` -> 1, ``1.1`` -> 2, ``1.1.1`` -> 3, etc. Capped at 6
+    to mirror HTML's h6 maximum.
+    """
+    depth = num.count(".") + 1
+    return min(depth, 6)
+
+
+def _clean_heading_text(text: str) -> str:
+    """Normalise heading text: strip trailing markup / whitespace."""
+    # Strip trailing closing-ATX hash run if anywhere in raw form.
+    cleaned = re.sub(r"\s+#+\s*$", "", text)
+    # Collapse internal whitespace runs to a single space for
+    # stable storage. OCR sometimes produces multi-space gaps in
+    # heading text that confuse string-equality in dashboards.
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    # Strip trailing colon / period -- these are heading-terminator
+    # punctuation, not part of the heading text.
+    cleaned = cleaned.rstrip(":.").rstrip()
+    return cleaned
+
+
+def extract_headings(text: str) -> list[dict[str, int | str]]:
+    """Return list of detected document headings in source-text order.
+
+    Walks the OCR text scanning for ATX / setext / numbered heading
+    shapes. Each match yields a ``{"level": int, "text": str}``
+    dict where level is 1..6.
+
+    See the module-level catalogue comment for full priority rules
+    and the safety constraints applied to each shape.
+    """
+    if not text or not isinstance(text, str):
+        return []
+
+    # Per-line scan so we can correlate a setext divider on line N
+    # with the heading text on line N-1. We index by line offset so
+    # the final dict-list is sorted by appearance order.
+    lines = text.split("\n")
+
+    # First pass: collect (offset, level, text) tuples by walking the
+    # ATX + setext + numbered matchers per line. Spans already claimed
+    # by ATX or setext are excluded from the numbered matcher so a
+    # ``## 1.1 Section`` doesn't double-tag.
+    claimed_lines: set[int] = set()
+    hits: list[tuple[int, int, str]] = []
+
+    # ATX walk -- one match per line because ``^`` is line-anchored.
+    for m in _HEADING_ATX_RE.finditer(text):
+        # Compute line index for this match.
+        line_idx = text[: m.start()].count("\n")
+        if line_idx in claimed_lines:
+            continue
+        level = len(m.group("hashes"))
+        heading_text = _clean_heading_text(m.group("text"))
+        if not heading_text:
+            continue
+        hits.append((m.start(), level, heading_text))
+        claimed_lines.add(line_idx)
+
+    # Setext walk -- find each divider line and look at the
+    # immediately-preceding line for the heading text.
+    for i in range(1, len(lines)):
+        divider = lines[i]
+        m = _HEADING_SETEXT_DIVIDER_RE.match(divider)
+        if m is None:
+            continue
+        prev_line = lines[i - 1].rstrip()
+        if not prev_line.strip():
+            continue
+        if (i - 1) in claimed_lines:
+            continue
+        # Reject when the previous line is itself a divider (run of
+        # =/- that we don't want to pair).
+        if _HEADING_SETEXT_DIVIDER_RE.match(prev_line):
+            continue
+        # Reject when previous line looks like a list item or other
+        # non-heading structure (preserve real titles).
+        if re.match(r"^\s*[-*+]\s+", prev_line):
+            continue
+        # Compute offset of the previous line in the original text
+        # so the sort by appearance is stable.
+        offset = sum(len(line) + 1 for line in lines[: i - 1])
+        char = m.group("char")
+        level = 1 if char == "=" else 2
+        heading_text = _clean_heading_text(prev_line)
+        if not heading_text:
+            continue
+        hits.append((offset, level, heading_text))
+        claimed_lines.add(i - 1)
+        # Also claim the divider line itself.
+        claimed_lines.add(i)
+
+    # Numbered walk -- excludes lines already claimed by ATX / setext.
+    for m in _HEADING_NUMBERED_RE.finditer(text):
+        line_idx = text[: m.start()].count("\n")
+        if line_idx in claimed_lines:
+            continue
+        num = m.group("num")
+        body = m.group("text").strip()
+        # Reject when the body looks like prose (>80 chars are
+        # usually list items / long sentences, not headings).
+        if len(body) > 80:
+            continue
+        # Reject when the body itself starts with a hash (avoids
+        # double-counting ATX-inside-numbered).
+        if body.startswith("#"):
+            continue
+        # Reject decimal numerics like ``1.5 kg`` / ``2.3 million``
+        # where the body is a unit / quantity tag rather than a
+        # heading title -- the body must START WITH A LETTER (or
+        # opening quote) to qualify.
+        if not body or not (body[0].isalpha() or body[0] in "\"'(["):
+            continue
+        level = _level_for_numbered(num)
+        heading_text = _clean_heading_text(body)
+        if not heading_text:
+            continue
+        hits.append((m.start(), level, heading_text))
+        claimed_lines.add(line_idx)
+
+    # Sort by source-text offset so the outline reads top-to-bottom.
+    hits.sort(key=lambda triple: triple[0])
+
+    # Materialise into the public dict shape, capped at the maximum.
+    out: list[dict[str, int | str]] = [
+        {"level": level, "text": heading_text}
+        for _, level, heading_text in hits[:_MAX_HEADINGS]
+    ]
+    return out
+
+
+__all__ = ["enrich_document", "_find_page_info", "extract_headings"]

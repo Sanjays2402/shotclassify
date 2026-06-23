@@ -36,7 +36,7 @@ from .code import (
 from .credit_cards import extract_credit_cards
 from .crypto import extract_crypto
 from .discord_ids import extract_discord_ids
-from .document import enrich_document
+from .document import enrich_document, extract_headings
 from .emails import extract_emails
 from .emojis import extract_emojis
 from .error import (
@@ -82,6 +82,7 @@ __all__ = [
     "enrich",
     "enrich_receipt",
     "enrich_document",
+    "extract_headings",
     "parse_receipt_text",
     "detect_docstring",
     "detect_fence_language",

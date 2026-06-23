@@ -1671,6 +1671,36 @@ class DocumentFields(BaseModel):
     # rely on slide-counter overlays from the presenter view rather
     # than a printed footer).
     page_info: dict[str, int | str | bool | None] | None = None
+    # Heading-hierarchy detection for document captures. Slide
+    # decks, scanned reports, wiki pages, and contracts almost
+    # always use a tiered heading structure (H1 chapter title,
+    # H2 section, H3 subsection, etc.) that dashboards want to
+    # surface as a document outline.
+    #
+    # Stored as a list of ``{"level": int, "text": str}`` dicts
+    # where ``level`` is 1..6 (mirroring HTML h1..h6) and ``text``
+    # is the heading line with markup / numbering stripped.
+    #
+    # Recognised shapes:
+    # * Markdown ATX:  ``# Heading`` (h1), ``## Heading`` (h2),
+    #   ``### Heading`` (h3), etc. up to ``###### Heading`` (h6).
+    # * Markdown setext: a line of text followed by ``===`` (h1)
+    #   or ``---`` (h2) on the next line.
+    # * Numbered: ``1. Chapter`` (h1), ``1.1 Section`` (h2),
+    #   ``1.1.1 Subsection`` (h3). Depth = number of dot-separated
+    #   segments. ``2.3.4.5 Detail`` -> h4.
+    # * Capitalised standalone line that is short (3..80 chars),
+    #   sits with blank lines around it, contains no trailing
+    #   punctuation, and is followed by body text. Tagged as h1
+    #   for the FIRST such block when no other heading shape is
+    #   present (this is the conservative title-detection rule
+    #   most slide decks rely on).
+    #
+    # Empty list when no recognised heading shape is present
+    # (typical for single-paragraph captures). Order preserves
+    # source-text appearance so dashboards render the outline
+    # top-to-bottom.
+    headings: list[dict[str, int | str]] = Field(default_factory=list)
 
 
 class UIMockupFields(BaseModel):
