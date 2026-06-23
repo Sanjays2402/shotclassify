@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (132 features tracked, 120 complete)
+## Roadmap (132 features tracked, 125 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -202,6 +202,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 100. [x] Extract: cross-category emoji-density tally into `raw["emoji_density"]` (single float in [0.0, 1.0] representing share of non-whitespace chars participating in emoji codepoint sequence; numerator counts every base emoji codepoint PLUS modifier glue (skin-tone/variation-selector/ZWJ+next-base) so ZWJ family contributes 7 codepoints not 1; denominator excludes whitespace because OCR captures vary wildly in whitespace preservation; returns None for empty/non-string text (no signal), 0.0 for non-emoji content (legitimate "no emoji" signal distinct from None), float >0.0 when at least one emoji codepoint appears, clipped to [0.0, 1.0] defensively, rounded to 3 decimal places for stable storage; pipeline writes density even when raw["emojis"] empty because density=0.0 lets dashboards filter "emoji-free vs emoji-heavy" consistently; reuses _is_base_emoji / _is_skin_tone / _VARIATION_SELECTORS / _ZWJ from extract_emojis so codepoint-detection logic stays in one place).
 
 
+### Done in tick 25 (5 features)
+131. [x] Receipt: lottery / scratch-card draw line detection into `ReceiptFields.lottery` (list of `{game, ticket_id, draw_date, amount}` dicts; curated 30+ game catalogue covering US Powerball / Mega Millions / Pick 3-4-5 / Cash 5 / Take 5 / Lucky-for-Life / Win-for-Life / Hot Lotto / Megabucks / SuperLotto / Quinto / Keno / Bingo + UK National Lottery / EuroMillions / Thunderball / Lucky Dip / Set for Life / Health / Postcode Lottery + CA Lotto Max / Lotto 6/49 + AU Oz Lotto + scratch family Scratch Off / Scratchers / Scratchcard / Instant Win + bare ALL-CAPS LOTTO / LOTTERY fallbacks; multi-word forms ordered longest-first so ``Mega Millions`` beats bare ``Mega``, ``Powerball Plus`` beats ``Powerball``, ``Win for Life`` beats ``Life``; two compiled regexes -- case-insensitive for proper game names AND case-SENSITIVE for bare LOTTO/LOTTERY so lowercase prose ("won the lottery") doesn't fire; plural/suffix variations Scratch Offs / Scratchers / Scratchcards normalised to catalogue canonical via prefix-match fallback in _canonical_lottery_game; ticket-id captured from #4231 or Ticket: 98765 / Ticket No. 4231 / Serial 12345 forms; draw_date captured from Draw 11/04/24 / Drawing 2024-06-15 / Draw Date: 11/04/24 / Draw Fri 14/06 / weekday-prefixed shapes; amount positive float when present (bare integer NOT captured because ambiguous with play count); lines >200 chars rejected as OCR noise; amount 0 < n < 10_000 bounded; per-line scan with 20-entry cap; LLM wire-format updated).
+151. [x] Receipt: cancellation-policy notice extraction (new `ReceiptFields.cancellation_policy` dict with `{kind, deadline_hours, deadline_date, fee, notice}`; 4 kinds free/fee/deadline/none; recognised shapes ordered most-specific FIRST: NO-CANCELLATIONS family checked first so Non-refundable-after-Dec-1 lands as deadline not none, Cancellation-fee with both amount AND duration, $25 cancellation fee applies form, Free cancellation with hour-deadline / date-deadline / bare, Cancel keyword + duration / date, Non-refundable / Non-changeable with date, bare Non-refundable with negative lookahead, Cancellation policy: generic fallback; hour normalisation via _HOURS_PER_UNIT (hour/hr/h->1, day/d->24, week/wk->168, month/mo->720); date capture preserves printed form verbatim (Dec 1 / December 15 2024 / 2024-12-31 / 04/15/2024 / check-in / check-out / arrival / departure); fee validation 0 < fee < 100_000 rejects OCR noise; LLM wire-format updated; enrich_receipt backfills None value from regex pass).
+150. [x] Error: React error boundary parsing (new framework='react'; detection requires one of: canonical React 16+ wrapper "The above error occurred in the <Component> component" / legacy React 15 "React will try to recreate this component tree" / suggestion footer "Consider adding an error boundary to your tree" / typed lifecycle methods componentDidCatch / getDerivedStateFromError combined with React-vocabulary anchor on same text; React-vocab catalogue React/JSX/ReactDOM/useState/useEffect/hooks?/render()/component tree/boundary/StrictMode/ErrorBoundary; exception slot prefers typed inner exception with optional Uncaught/Unhandled prefix stripped, falls back to ReactRenderError(<Component>) for wrapper-only branch or ReactBoundaryError(method) for lifecycle-only; file slot innermost component-tree entry's (at file:line), falls back to <Component> form; placed BEFORE Node branch because React JS stack tail would otherwise be stolen by _JS_AT, placed AFTER Vue because [Vue warn]: is more specific; 20-cause _react_likely_cause catalogue: typed-exception hints checked FIRST (TypeError+undefined -> optional chaining, TypeError+is-not-function -> destructured handler, ReferenceError, RangeError+infinite-render, SyntaxError -> JSX), then message body hints (minified React decoder URL, infinite re-render, hook rules, invalid hook call, setState-during-render, object-as-child, missing key, React.Children.only, Context.Consumer, lifecycle handlers, no-boundary); public parse_react_error_boundary alias exported).
+148. [x] Code: cyclomatic-complexity outlier flag in CodeFields.complexity (each complexity entry now carries additional outlier: bool field; True for the SINGLE highest-complexity function when: 2+ functions detected AND top complexity >= 10 (McCabe threshold) AND top STRICTLY greater than next-highest (no tie); single-function snippets never flag because no useful outlier-vs-baseline contrast; 10-floor avoids "highest-of-trivially-low" cases; strict-greater rule avoids arbitrarily picking between two equally-complex functions; when unique winner exists, flag attaches to first-seen occurrence for deterministic placement; pairs with existing extract_complexity per-function score (#138); schema + all existing complexity tests updated to include the new field).
+135. [x] Chat: bot / app / integration message detection into ChatFields.bot_messages (list of {sender, badge, platform, text} dicts; recognised shapes per platform: Slack uppercase APP/BOT/INTEGRATION badge right after sender name, Discord BOT + em-dash separator with trailing rest-of-line consumed so body extraction picks up actual message next line, Telegram sender-ending-in-Bot suffix with - bot tail, Teams parenthesised (Bot)/(App)/(Integration) badge; four canonical badge tags app/bot/integration; platform inference based on which matcher fired; detection priority Discord > Teams > Telegram > Slack with span-claim defence so higher-priority match consumes the line; sender names 1..32 chars; channel-header words explicitly rejected (CHANNEL/DIRECT/MESSAGES/MENTIONS/REACTIONS/THREADS/PINNED/SLACKBOT/WORKSPACE/WORKFLOW/ANNOUNCEMENTS); Telegram matcher requires sender to END in Bot so prose "bot" doesn't false-positive; body extractor skips leading [/( so OCR metadata doesn't get treated as message body; body capped at 200 chars; LLM wire-format updated; enrich_chat dedupes on (sender, badge, text) triple; capped at 30 entries; distinct from messages (which mixes humans and bots) and mentions (platform-agnostic chat-only)).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -225,9 +233,9 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 120. [ ] Receipt: customer-name / address-block extraction for shipping receipts (e-commerce captures include `Ship To: Alice Smith / 123 Main St / Springfield, IL 62704` blocks into new `ReceiptFields.ship_to`).
 122. [ ] Extract: cross-category trading-strategy/position notation into `raw["positions"]` (`5 ETH @ $3500 long`, `+0.5 BTC short @ 67000`, `100 AAPL @ 175 call $200 strike` from trading-app screenshots).
 123. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce; pairs with existing #80 which is the same idea but with concrete catalogue scope).
-131. [ ] Receipt: lottery / scratch-card draw line detection into `ReceiptFields.lottery` (US convenience-store receipts often print `LOTTO #4231 Powerball 12345 Draw 11/04/24` lines as separate items).
+131. [x] Receipt: lottery / scratch-card draw line detection into `ReceiptFields.lottery`. Shipped in tick 25.
 132. [ ] Chart: legend-color-to-series mapping into `ChartFields.legend_map` (legends often print `■ Q1 ■ Q2 ■ Q3 ■ Q4` with coloured swatches -- surface a list of `{color, series}` dicts).
-135. [ ] Chat: bot vs human message detection into `ChatFields.bot_messages` (Slack/Discord bot integrations are tagged with `APP` / `BOT` badges that should be surfaced separately so dashboards can filter automated vs human messages).
+135. [x] Chat: bot vs human message detection into `ChatFields.bot_messages`. Shipped in tick 25.
 137. [x] Document: heading-hierarchy detection into `DocumentFields.headings` (list of `{level, text}` dicts from H1/H2/H3 style headings in document captures -- useful for outlining slide decks / docs / wiki pages). Shipped in tick 24.
 139. [ ] Chart: error-bar / confidence-interval detection into `ChartFields.has_error_bars` (bool flag indicating the chart shows uncertainty intervals).
 142. [ ] Chat: reply-with-photo / reply-with-video marker into `ChatFields.media_replies` (Slack/Discord rendering of attachment-in-reply differs from regular attachment block).
@@ -235,10 +243,10 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 145. [x] Receipt: estimated-arrival / delivery-eta extraction into `ReceiptFields.delivery_eta` (DoorDash / Uber Eats / Amazon receipts print `Arriving by 8:45 PM` / `Delivery: Today 6-7 PM` / `Estimated arrival: Wed Jun 10`; useful for "this purchase arrived late" analytics). Shipped in tick 24.
 146. [x] Extract: cross-category color-hex extractor into `raw["colors"]` (CSS / Tailwind / Figma screenshots reference `#FF5733` / `rgb(255,87,51)` / `hsl(11, 100%, 60%)` / `oklch(0.8 0.1 30)` -- surface as list of `{model, value}` dicts for design-system tooling). Shipped in tick 24.
 147. [ ] Chat: link-preview block detection into `ChatFields.link_previews` (Slack/Discord/Teams render OG-card previews below shared URLs with title + description + thumbnail thumbprint -- surface as list of `{title, description, source_url}` dicts).
-148. [ ] Code: cyclomatic-complexity outlier flag in CodeFields.complexity (when a snippet has multiple functions, flag the function with the highest complexity as `outlier: true` to highlight refactor candidates; pairs with #138).
+148. [x] Code: cyclomatic-complexity outlier flag in CodeFields.complexity. Shipped in tick 25.
 149. [ ] PII redact: phone-number redaction mode upgrade (existing `phone` regex uses `[REDACTED:phone]` placeholder; refine to the `<PHONE>` stub form for consistency with #56 design notes).
-150. [ ] Error: React error boundary parsing (new framework='react'; recognise `componentDidCatch` / `getDerivedStateFromError` / `The above error occurred in the <App> component` / `Consider adding an error boundary` patterns with component-path tail; React 16+ error-boundary console output).
-151. [ ] Receipt: cancellation-policy notice extraction (new `ReceiptFields.cancellation_policy` -- hotel / Airbnb / flight receipts often print `Cancellation: Free until 24h before` / `Non-refundable after Dec 1` / `Cancel before 48h for full refund` policy footers; useful for "this trip is locked in" analytics).
+150. [x] Error: React error boundary parsing (framework='react'). Shipped in tick 25.
+151. [x] Receipt: cancellation-policy notice extraction into `ReceiptFields.cancellation_policy`. Shipped in tick 25.
 152. [ ] Chart: legend swatch color mapping into `ChartFields.legend_map` (legends print `■ Q1 ■ Q2 ■ Q3 ■ Q4` with coloured square swatches that OCR captures preserve as `■`/`◆`/`●` glyphs -- pair colour to series label).
 153. [ ] Code: SQL injection / unsafe query detection into `CodeFields.unsafe_queries` (recognise `cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")` f-string concatenation + `"SELECT * FROM users WHERE id = " + str(uid)` string concat + `query = "..."; cursor.execute(query)` after-the-fact concatenation; surface line offset + flagged pattern; pairs with existing dialect detection).
 154. [ ] Chat: app-integration card detection into `ChatFields.app_cards` (Slack-style rendered cards from GitHub / Linear / Jira / Figma / Asana integrations with `<App>` author + title + footer link; surface as list of `{app, title, link}` dicts; distinct from raw["urls"] because it carries the structured card context).
@@ -1504,6 +1512,87 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
       runs because the original ``(=|-){3,}`` alternation
       matched each char independently and ``=-=-=`` would
       have qualified. Caught by test_setext_mixed_chars_not_setext.
+
+- 2026-06-23 16:09 PT (tick 25, Cake): 5 features.
+  - 0565647 feat(extract/receipt): lottery / scratch-card draw line detection into ReceiptFields.lottery
+  - 3625fb3 feat(extract/receipt): cancellation-policy notice extraction into ReceiptFields.cancellation_policy
+  - bcdd4f1 feat(extract/error): React error boundary parsing (framework='react')
+  - 7ccf0e5 feat(extract/code): cyclomatic-complexity outlier flag in CodeFields.complexity
+  - 43268d6 feat(extract/chat): bot / app / integration message detection into ChatFields.bot_messages
+  - Gate: ruff at baseline 536 (one I001 fixup on the
+    complexity-outlier test file folded via --fixup +
+    --autosquash into the outlier commit before push) +
+    pytest 6045 passed / 3 skipped in 549.44s. 236 new tests
+    across the 5 features (73 + 56 + 46 + 20 + 41). New
+    ReceiptFields shipped: lottery (list[dict]),
+    cancellation_policy (dict). New ChatFields shipped:
+    bot_messages (list[dict]). CodeFields.complexity dicts
+    extended with outlier: bool field. New error framework
+    tag: react. LLM wire format in classify/client.py updated
+    for lottery / cancellation_policy / bot_messages. Roadmap
+    backlog stays at 29 open with five tick-25 items marked
+    done.
+    Notable design decisions:
+    * Lottery game catalogue uses TWO regexes -- case-
+      insensitive for proper game names (Powerball / Mega
+      Millions etc) and case-SENSITIVE for bare LOTTO /
+      LOTTERY fallbacks. The case-sensitive guard rejects
+      lowercase prose "won the lottery" while still
+      catching ALL-CAPS POS-terminal output. Caught by
+      test_lowercase_lottery_rejected failing on first run
+      with the unified IGNORECASE flag.
+    * Lottery canonical-name lookup needed a prefix-match
+      fallback after exact + collapsed lookups because the
+      catalogue uses ``Scratch Off`` but the regex matches
+      ``Scratch Offs`` (the ``Off?s?`` plural). Without the
+      fallback the plural variation would land verbatim
+      instead of normalising to ``Scratch Off``.
+    * Cancellation-policy bare ``Non-refundable`` matcher
+      uses a negative lookahead ``(?!\\s+(?:after|past|beyond|from))``
+      so a ``Non-refundable after Dec 1`` correctly lands
+      as deadline kind (not none). The deadline-with-date
+      matcher runs BEFORE the bare-none matcher in the
+      catalogue. Caught by test_deadline_beats_bare_non_refundable.
+    * React parser placed BEFORE Node branch but AFTER Vue
+      because Vue's [Vue warn]: prefix is more specific than
+      React's "The above error occurred" wrapper. Without
+      this ordering a Vue capture with an attached React
+      vocabulary anchor would mis-tag as react.
+    * React _REACT_VOCAB regex needed a workaround for the
+      ``render()`` token because the bare word-boundary regex
+      ``\\b(?:...|render\\(\\)|...)\\b`` fails on the trailing
+      ``)`` (non-word boundary). Restructured to
+      ``(?:\\b(?:...)\\b|render\\(\\))`` so the parens-tail
+      bypasses the word-boundary requirement.
+    * React inner-exception regex updated to accept optional
+      ``Uncaught`` / ``Unhandled`` prefix because real React
+      console traces frequently print ``Uncaught Error: ...``
+      not bare ``Error: ...``. Caught by
+      test_full_react_console_dump failing on first run.
+    * Complexity outlier uses STRICT-GREATER comparison
+      against second-highest score (not >=) so two functions
+      both at complexity 12 don't arbitrarily anoint one as
+      the outlier. The 10-floor threshold avoids flagging
+      "highest-of-trivially-low" cases where every function
+      has complexity 1-3.
+    * Bot-message matcher priority Discord > Teams >
+      Telegram > Slack with span-claim defence: each higher-
+      priority match claims the span so subsequent matchers
+      won't re-match the same line. Without this a Discord
+      ``GitHub BOT — Today`` would also fire the Slack
+      ``GitHub BOT`` matcher and double-count.
+    * Discord BOT regex consumes the trailing rest-of-line
+      ``[—–-][^\\n]*`` so the body extractor (which reads the
+      next line after the match) picks up the actual message
+      body, not the timestamp tail. Caught by
+      test_discord_mee6_bot which expected the body to be
+      "Welcome to the server!" not "Today at 3:14 PM".
+    * Telegram bot-suffix matcher requires the sender to END
+      in "Bot" because Telegram's bot-naming API mandates the
+      suffix. Without this constraint a prose mention of
+      "bot" with any leading capitalised word would false-
+      positive (TelegramBot - bot matches but Welcome - bot
+      doesn't).
     * Document numbered-heading regex expanded from
       ``{0,5}`` to ``{0,9}`` segments accepted then capped
       at level 6 downstream. Caught by
