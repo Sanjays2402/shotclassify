@@ -28,6 +28,7 @@ from .slack_ids import extract_slack_ids
 from .social import extract_social
 from .stripe_ids import extract_stripe_ids
 from .timezones import extract_timezones
+from .twilio_ids import extract_twilio_ids
 from .urls import extract_urls
 from .uuids import extract_uuids
 
@@ -411,5 +412,28 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if fx_pairs:
         out.raw = dict(out.raw or {})
         out.raw["fx_pairs"] = fx_pairs
+
+    # Cross-category: stash Twilio SIDs (account / SMS / MMS / call /
+    # recording / WhatsApp / conference / conversation / messaging
+    # service / phone number / TaskRouter worker / etc) found in the
+    # OCR text under raw["twilio_ids"]. SIDs surface on Twilio Console
+    # URLs, code-snippet captures of Twilio SDK calls, error-log
+    # captures of failing webhook payloads, and developer chat
+    # captures debugging an SMS / call failure. Each entry is a
+    # {kind, id} dict so downstream consumers don't have to maintain
+    # their own two-letter prefix table.
+    #
+    # The matcher requires a two-letter ALL-CAPS prefix from the
+    # recognised catalogue followed by exactly 32 LOWERCASE hex
+    # chars. Lowercase-only on the tail keeps random uppercase
+    # MD5/SHA hashes that happen to start with one of our prefixes
+    # from misfiring. Distinct from raw["stripe_ids"] (typed prefix
+    # + underscore + alphanumeric) and raw["slack_ids"] (single
+    # uppercase letter + 8..10 uppercase-alphanumeric) -- Twilio
+    # uses two-letter prefix + 32-lowercase-hex.
+    twilio_ids = extract_twilio_ids(text)
+    if twilio_ids:
+        out.raw = dict(out.raw or {})
+        out.raw["twilio_ids"] = twilio_ids
 
     return out
