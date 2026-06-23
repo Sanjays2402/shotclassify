@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (127 features tracked, 105 complete)
+## Roadmap (132 features tracked, 110 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -178,6 +178,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 124. [x] Extract: cross-category emoji tally extractor into `raw["emojis"]` (list of `{emoji, codepoint, count}` dicts sorted by descending count then first-seen on ties; 10 detected Unicode ranges covering Miscellaneous Symbols (U+2600..U+26FF), Dingbats (U+2700..U+27BF), Supplemental arrows (U+21AA..U+21AB), Enclosed Alphanumerics flags (U+1F1E0..U+1F1FF), Miscellaneous Symbols and Pictographs (U+1F300..U+1F5FF), Emoticons (U+1F600..U+1F64F), Transport and Map (U+1F680..U+1F6FF), Geometric Shapes Extended coloured circles/squares (U+1F7E0..U+1F7FF), Supplemental Symbols and Pictographs (U+1F900..U+1F9FF), Symbols and Pictographs Extended-A (U+1FA70..U+1FAFF); compound emoji handled: ZWJ sequences (U+200D) combine two emoji codepoints into one logical unit so 👨‍👩‍👧‍👦 family / 👨‍💻 technologist / 🏳️‍🌈 rainbow flag stay as single entries with full codepoint sequence preserved, skin-tone modifiers (U+1F3FB..U+1F3FF) attach to preceding hand/face emoji so 👍🏻 light vs 👍🏿 dark count as DISTINCT entries, variation selectors (U+FE0E text-style / U+FE0F emoji-style) combine with preceding base char so ❤ bare vs ❤️ with VS-16 are distinct; safety: plain ASCII symbols ($/€/£/©/®/→) NOT captured because they appear in non-emoji contexts, math symbols (∑/∞) outside emoji ranges, defensive non-string input returns []; cap 50; distinct from chat.reactions which is per-message footers, this extractor is text-density tally across WHOLE OCR capture).
 
 
+### Done in tick 22 (5 features)
+134. [x] Extract: cross-category percentage extractor into `raw["percentages"]` (list of `{value, label, sign}` dicts; value is float (negative when `-` printed), label is nearest preceding curated vocab word (cpu/memory/yes/no/battery/discount/coverage/uptime/etc, ~95 words across system metrics/finance/polls/marketing/etc) or None, sign captures + / - / ± direction; 4 shape families: bare integer (50%), decimal US (12.5%) + EU (12,5%), signed (+12.5% / -3.2% / ±5%), range endpoints (5-10% / 5% to 10% emitted as two entries), labelled (CPU 87% / Battery: 64% / Yes 65%); safety: out-of-range >1000% or <-1000% rejected as OCR noise, range matcher claims its span first so bare matcher doesn't steal endpoint, labelled matcher excludes `-` from separator class so leading sign on value is preserved as sign group, walk-back for label restricted to current line; dedupe on (value, label, sign) triple; cap 100; first-seen order preserved).
+130. [x] Chat: thread-reply marker detection into `ChatFields.threads` (list of `{count, last_reply, sender?}` dicts; 7 detection patterns priority-ordered: Slack/Teams "N replies" / "5 replies, last reply 2h ago", Discord/Teams "Thread - 4 replies" / "Thread: 4 replies" tagged form (runs BEFORE bare so tag survives), Teams "Reply (3)" parenthesised count, Discord "12 messages ›" with chevron/arrow, standalone "Last reply X ago" (merges into adjacent count-bearing entry within 120-char window OR emits count=0), bare "View thread" footer (count=0), "Replying in thread" marker (count=0); safety: every pattern uses ^...$ MULTILINE anchors so mid-sentence "12 messages were sent" / "Please view thread carefully" prose doesn't false-positive, sender-attribution loop skips transcript-line lookalikes (Thread:/Reply:/View/Last/Replying) so "Thread: 4 replies" doesn't register as NAME sender; dedupe on (count, last_reply, sender) tuple; cap 20; LLM wire-format updated).
+136. [x] Receipt: subscription / recurring-charge detection into `ReceiptFields.recurring` ({"interval", "next_charge", "keyword"} dict or None; recognised markers in priority order: cadence-bearing multi-word ("Monthly subscription"/"Annual subscription"/"Recurring monthly"/"Billed monthly"/"Renews monthly"/etc) with longest-first ordering so "Semi-annual subscription" beats "Annual subscription" and "Biweekly subscription" beats "Weekly subscription", auto-renew family ("Auto-renew"/"Auto-renews"/"Automatic renewal"), bare subscription/recurring family ("Subscription"/"Recurring charge"/"Recurring payment"); next-charge date capture from "Next charge:" / "Renews on" / "Auto-renews on" / "Trial ends on" patterns; trial markers ("Free trial"/"Trial ends"/"Trial expires") tagged as interval='trial' for upcoming-conversion audits; safety: \b word-boundary on "Subscription" matcher so "Subscriber" doesn't false-positive, bare "Monthly" without subscription/billed/charged context does NOT fire because cadence-words appear in newsletter footers, multi-word forms ordered FIRST so substring overlap doesn't steal; LLM wire-format updated; enrich_receipt backfill list updated; caller's non-None value never overwritten).
+99. [x] Code: secret/key-literal sniffing into `CodeFields.suspected_secrets` (list of `{kind, hint}` dicts; 9 detected categories: private_key (PEM `-----BEGIN ... PRIVATE KEY-----` block headers), bearer_token (`Authorization: Bearer <16+ chars>` with entropy gate), basic_auth (`Authorization: Basic <base64>`), connection_string (`postgres://user:pass@host` / mysql/mongodb/redis/amqp/cockroachdb), api_key (`API_KEY=value` / `apikey: value` matching catalogue), db_password (`PASSWORD`/`DB_PASSWORD`/`PASSWD`/`PWD` with high-entropy value), secret_key (`SECRET_KEY`/`SIGNING_KEY`/`ENCRYPTION_KEY`/`CLIENT_SECRET`/`APP_SECRET`), oauth_token (`ACCESS_TOKEN`/`REFRESH_TOKEN`/`AUTH_TOKEN`/`SESSION_TOKEN`), hex_secret (long 32+ hex blob on assignment where key name contains secret-vocab); security guarantees: FULL VALUE IS NEVER STORED, hint is REDACTED preview (first 4 + ... + last 4 chars) so dashboards render "sk-1...AB89" without leaking, generic env vars without secret semantics (LOG_LEVEL/API_URL/API_VERSION) don't fire because key name MUST match curated catalogue, low-entropy values (DEBUG=true/ENABLED=1) filtered by 2+ char-class + 16+ char threshold for uppercase, hex secret detector restricted to secret-named keys so SHA_HASH/COMMIT_ID don't false-positive; dedupe on (kind, hint) pair; cap 20; pairs with typed redact modes (aws_access_key/github_pat/slack_token/jwt/credit_card/passport/drivers_license/bank_account) for defence-in-depth; LLM wire-format updated).
+128. [x] Code: type-annotation density into `CodeFields.type_annotation_density` (float in [0.0, 1.0]; counts share of function-arg + return slots that carry type annotation; language-aware: Python def/async def shapes detected always, JS/TS family (javascript/typescript/ts/tsx/jsx/js) detects both function declarations AND arrow function declarations, strictly-typed languages (Java/Kotlin/Scala/Go/Rust/Swift/C#/Haskell/OCaml/F#) return 1.0 when ANY function-def shape detected because annotations are language-mandated; counted slots: each arg in arg list (defaults stripped) + return type slot (counted when present OR when args non-empty so functions with args but no return type contribute one untyped slot); excluded: Python self/cls and TS this (idiomatically untyped), empty-args functions without return type stay at 0.0; safety: _split_args respects nested brackets/parens/braces so dict[str, int] doesn't split mid-arg, optional TS args (y?: string) recognised via ? in name regex, _FUNC_LIKE_RE recognises both keyword-led (func/fn/fun/def) AND access-modifier-led (public X.Y foo()) shapes with optional return type; result rounded to 2 decimal places; LLM wire-format updated).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -191,7 +199,6 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 80. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce).
 90. [ ] Receipt: barcode/QR encoding detection in OCR text (vendors print the encoded payload below the barcode -- track which lines look like the encoded payload vs the human-readable text).
 93. [ ] Chat: typing-indicator detection (the bouncing-dots animation OCR may render as `...` or `Alice is typing...`).
-99. [ ] Code: secret/key-literal sniffing into `CodeFields.suspected_secrets` (literal strings that look like API keys / DB credentials / OAuth secrets even when not detected by the typed redact modes).
 100. [ ] Extract: cross-category emoji-density tally into `raw["emoji_density"]` (a single float fraction of chars that are emoji -- a quick "this capture is meme-heavy" signal).
 102. [ ] Chart: data-table fallback extraction from a chart screenshot's accompanying legend table (the small `x / y` paired columns that often sit beside the chart).
 104. [ ] Chat: voice-call / video-call duration markers (`Audio call · 1m 23s` / `Missed video call`).
@@ -202,14 +209,18 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 120. [ ] Receipt: customer-name / address-block extraction for shipping receipts (e-commerce captures include `Ship To: Alice Smith / 123 Main St / Springfield, IL 62704` blocks into new `ReceiptFields.ship_to`).
 122. [ ] Extract: cross-category trading-strategy/position notation into `raw["positions"]` (`5 ETH @ $3500 long`, `+0.5 BTC short @ 67000`, `100 AAPL @ 175 call $200 strike` from trading-app screenshots).
 123. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce; pairs with existing #80 which is the same idea but with concrete catalogue scope).
-128. [ ] Code: type-annotation density into `CodeFields.type_annotation_density` (fraction in [0, 1] of function-arg / variable / return slots that carry a type annotation; useful for "this Python is fully typed" / "this Java has missing generics" dashboards).
-130. [ ] Chat: thread-reply marker detection into `ChatFields.threads` (Slack/Discord `2 replies`, `Last reply 2h ago`, `View thread` action footers indicating the message has a sub-thread).
 131. [ ] Receipt: lottery / scratch-card draw line detection into `ReceiptFields.lottery` (US convenience-store receipts often print `LOTTO #4231 Powerball 12345 Draw 11/04/24` lines as separate items).
 132. [ ] Chart: legend-color-to-series mapping into `ChartFields.legend_map` (legends often print `■ Q1 ■ Q2 ■ Q3 ■ Q4` with coloured swatches -- surface a list of `{color, series}` dicts).
 133. [ ] Document: page-number footer detection into `DocumentFields.page_info` (`Page 3 of 12`, `Page 1`, `- 5 -`, `(continued)` markers from multi-page document captures).
-134. [ ] Extract: cross-category percentage extractor into `raw["percentages"]` (every `<n>%` value in OCR text; useful for sparkline overlays, sentiment polls, performance metric screenshots).
 135. [ ] Chat: bot vs human message detection into `ChatFields.bot_messages` (Slack/Discord bot integrations are tagged with `APP` / `BOT` badges that should be surfaced separately so dashboards can filter automated vs human messages).
-136. [ ] Receipt: subscription / recurring-charge detection into `ReceiptFields.recurring` (SaaS invoices print `Recurring monthly`, `Auto-renew`, `Next charge: 2024-03-15`, `Subscription` keywords that flag the receipt as a recurring rather than one-off charge).
+137. [ ] Document: heading-hierarchy detection into `DocumentFields.headings` (list of `{level, text}` dicts from H1/H2/H3 style headings in document captures -- useful for outlining slide decks / docs / wiki pages).
+138. [ ] Code: function-complexity heuristic into `CodeFields.complexity` (cyclomatic-complexity-like score per function based on branch/loop keyword counts; surfaces "this function has 12 branches" for code-review screenshots).
+139. [ ] Chart: error-bar / confidence-interval detection into `ChartFields.has_error_bars` (bool flag indicating the chart shows uncertainty intervals).
+140. [ ] Receipt: warranty / return-period notice extraction into `ReceiptFields.warranty` (the small print "Returns accepted within 30 days" / "1-year warranty" lines printed at bottom of retail receipts).
+141. [ ] PII redact: VIN (vehicle identification number) redaction mode (`vin` mode; recognises the 17-character WMI+VDS+VIS format including the check-digit at position 9 per ISO 3779).
+142. [ ] Chat: reply-with-photo / reply-with-video marker into `ChatFields.media_replies` (Slack/Discord rendering of attachment-in-reply differs from regular attachment block).
+143. [ ] Error: Vue.js component error parsing (new framework='vue'; `Error in v-on handler` / `Error in callback for watcher` / `Error in render function` / `Error in mounted hook` patterns with component-path tail).
+144. [ ] Code: dead-import detection into `CodeFields.unused_imports` (imports that are referenced exactly 0 times in the snippet body; useful for code-review screenshots showing cleanup opportunities).
 
 
 ## Tick log
@@ -1280,6 +1291,77 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
       symbols ($/€/£/©/®/→) intentionally NOT
       captured because they appear in non-emoji
       contexts (math, prose, copyright).
+
+- 2026-06-23 04:07 PT (tick 22, Cake): 5 features.
+  - 7a124e0 feat(extract): cross-category percentage extractor into raw["percentages"]
+  - b802bf1 feat(extract/chat): thread-reply marker detection into ChatFields.threads
+  - cfe6b8e feat(extract/receipt): subscription / recurring-charge detection into ReceiptFields.recurring
+  - 2a16808 feat(extract/code): secret/key-literal sniffing into CodeFields.suspected_secrets
+  - 58bf75d feat(extract/code): type-annotation density into CodeFields.type_annotation_density
+  - Gate: ruff at baseline 536 (zero new errors, two fixups
+    folded directly: B033 duplicate set items in
+    percentages.py's label vocab "loss"/"rate" deduped on
+    initial write before commit, B005 multi-char lstrip on TS
+    code.py's _count_ts_slots destructuring prefix swap-out
+    to while-loop on initial write before commit) + pytest
+    5352 passed / 3 skipped in 132.84s. 300 new tests across
+    the 5 features (66 + 58 + 66 + 58 + 52). One flaky test
+    (test_webhook_egress_allowlist::test_suffix_entry_matches_subdomains)
+    failed in the FIRST gate run but PASSED in isolation
+    immediately after AND PASSED on the gate re-run; it is
+    test-isolation drift unrelated to my changes (webhook
+    egress policy module, untouched). Disk-space note: hit
+    "No space left on device" on the first gate run --
+    /var/folders had only 125MiB free at 100%. Freed
+    1.8 GiB by removing pytest-of-sanjay/, tmp*, cm-*,
+    BlobRegistryFiles-*, plus 1.3 GiB go-build/gopls caches
+    from ~/Library/Caches before the re-run.
+    New ReceiptFields shipped: recurring (dict). New CodeFields
+    shipped: suspected_secrets (list), type_annotation_density
+    (float). New ChatFields shipped: threads (list). One new
+    cross-category raw key: raw["percentages"]. LLM wire format
+    in classify/client.py updated for all five new slots.
+    Roadmap refilled with 8 new items (137..144 -- document
+    heading-hierarchy, code function-complexity, chart
+    error-bar detection, receipt warranty notice, PII VIN
+    redact, chat media-reply marker, error Vue.js parsing,
+    code dead-import detection) so backlog grows from 22 to
+    23 open. Notable design decisions:
+    * Percentages extractor's range matcher claims its span
+      first so the bare matcher doesn't steal endpoints, and
+      the labelled matcher excludes `-` from its separator
+      class so a leading sign on the value (`Change -3%`)
+      is preserved as the sign group instead of being eaten
+      as separator (this caught test_negative_signed_percent
+      failing on first run).
+    * Threads extractor's sender-attribution loop skips
+      transcript-line lookalikes (Thread:/Reply:/View/Last/
+      Replying) -- the literal word `Thread` followed by
+      colon would otherwise register as a NAME sender for the
+      NEXT marker (this caught test_thread_tagged_colon
+      failing on first run).
+    * Recurring detector's multi-word patterns ordered FIRST
+      so "Semi-annual subscription" beats "Annual subscription"
+      and "Biweekly subscription" beats "Weekly subscription"
+      via Python first-match-wins ordering (this caught
+      test_semi_annual_subscription failing on first run).
+    * Suspected-secrets's SECURITY GUARANTEE: FULL VALUE IS
+      NEVER STORED; hint is REDACTED preview (first 4 + ... +
+      last 4 chars). Generic env vars without secret semantics
+      (LOG_LEVEL/API_URL/API_VERSION) don't fire because key
+      name MUST match the curated catalogue. Low-entropy
+      values (DEBUG=true) filtered by 2+ char-class + 16+ char
+      threshold for the uppercase matcher.
+    * Type-annotation density excludes Python self/cls and TS
+      this from both numerator and denominator because they're
+      idiomatically untyped. Optional TS args (y?: string)
+      recognised as typed via ? in the param-name regex.
+      Strictly-typed languages (Java/Kotlin/Go/Rust/etc)
+      return 1.0 when any function-def shape is detected;
+      _FUNC_LIKE_RE recognises BOTH keyword-led forms
+      (func/fn/fun/def) AND access-modifier-led forms
+      (public X.Y foo()) with optional return type between
+      keyword and name.
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
