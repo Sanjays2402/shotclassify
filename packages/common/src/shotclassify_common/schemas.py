@@ -74,6 +74,40 @@ class ReceiptLine(BaseModel):
     # to link a captured receipt back to the item catalogue without
     # forcing an LLM round trip.
     sku: str | None = None
+    # Line-item modifiers / customisations printed on the indented
+    # lines beneath the parent item. Restaurant POS systems print
+    # add-ons / removes / substitutions / extras directly under the
+    # item they belong to:
+    #
+    #   Burger                   12.00
+    #     + Add bacon              2.00
+    #     + Extra cheese           1.50
+    #     - No onions
+    #     * Substitute fries
+    #   Latte                     5.00
+    #     + Oat milk               0.75
+    #
+    # Each entry is a ``{"kind": str, "text": str, "price": float | None}``
+    # dict capturing one modifier line. The ``kind`` is one of:
+    #
+    #   ``add``   -- ``+ Add bacon`` / ``+ Extra cheese`` (the customer
+    #                added something to the standard item)
+    #   ``remove`` -- ``- No onions`` / ``- Hold the mayo`` (the customer
+    #                 removed something from the standard item)
+    #   ``sub``   -- ``* Substitute fries`` / ``Sub: side salad`` (the
+    #                customer swapped one component for another)
+    #   ``note``  -- bare text without a +/-/* prefix (a freeform note
+    #                like ``Well done`` or ``Cut in halves``)
+    #
+    # ``text`` is the cleaned modifier text with the prefix /
+    # punctuation stripped. ``price`` is the additional charge when
+    # printed on the modifier line (typical for add-on extras), or
+    # ``None`` for free customisations.
+    #
+    # Empty list for items without modifiers (every retail line and
+    # most restaurant base items). Capped at 10 modifiers per item
+    # (a single base item rarely has more in practice).
+    modifiers: list[dict] = Field(default_factory=list)
 
 
 class ReceiptFields(BaseModel):

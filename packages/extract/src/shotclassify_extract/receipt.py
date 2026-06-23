@@ -2004,9 +2004,144 @@ def _try_pct_off(line: str) -> ReceiptLine | None:
     return None
 
 
+# Line-item modifier / customisation detection. Restaurant POS
+# systems print add-ons / removes / substitutions on indented
+# lines beneath the item they belong to:
+#
+#   Burger                12.00
+#     + Add bacon          2.00
+#     - No onions
+#     * Substitute fries
+#
+# Recognised prefix markers (in priority order so the most
+# specific shape claims first):
+# * ``+`` / ``Add`` / ``Extra`` / ``With`` / ``w/`` -> kind="add"
+# * ``-`` / ``No`` / ``Without`` / ``w/o`` / ``Hold`` / ``Omit`` / ``Skip`` -> kind="remove"
+# * ``*`` / ``Sub`` / ``Substitute`` / ``Swap`` -> kind="sub"
+# * Otherwise: bare freeform text on an indented line -> kind="note"
+#
+# Price suffix (``+ Add bacon 2.00``) is captured into the ``price``
+# slot. Free customisations (``- No onions``) leave ``price=None``.
+
+_MOD_ADD_PREFIX_RE = re.compile(
+    r"^[+]\s+(?P<text>.+?)(?:\s+(?P<price>\d+(?:[.,]\d{2})))?\s*$",
+)
+_MOD_REMOVE_PREFIX_RE = re.compile(
+    r"^[-](?!\s*\d)\s+(?P<text>.+?)(?:\s+(?P<price>\d+(?:[.,]\d{2})))?\s*$",
+)
+_MOD_SUB_PREFIX_RE = re.compile(
+    r"^[*]\s+(?P<text>.+?)(?:\s+(?P<price>\d+(?:[.,]\d{2})))?\s*$",
+)
+# Word-prefix forms (no sigil, but distinctive keyword). The keyword
+# is consumed in the priority dispatch so a line ``Add bacon 2.00``
+# is captured as add-kind with text="bacon" price=2.00.
+_MOD_ADD_WORD_RE = re.compile(
+    r"^(?:add|extra|with|w/)\s+(?P<text>.+?)(?:\s+(?P<price>\d+(?:[.,]\d{2})))?\s*$",
+    re.IGNORECASE,
+)
+_MOD_REMOVE_WORD_RE = re.compile(
+    r"^(?:no|without|w/o|hold|omit|skip|less)\s+(?P<text>.+?)\s*$",
+    re.IGNORECASE,
+)
+_MOD_SUB_WORD_RE = re.compile(
+    r"^(?:sub|substitute|swap|replace)\s+(?P<text>.+?)\s*$",
+    re.IGNORECASE,
+)
+
+# Maximum number of modifiers attached per item. A single base
+# item rarely has more than a few customisations in practice.
+_MAX_MODIFIERS_PER_ITEM = 10
+
+
+def _parse_modifier_line(line: str, indented: bool) -> dict | None:
+    """Return a modifier dict for ``line`` or None if it isn't a
+    recognised modifier shape.
+
+    The ``indented`` flag tells us whether the source line was
+    indented in the original receipt text -- bare word-prefix
+    forms (``Add bacon``) ONLY count as modifiers when the line was
+    indented because the word ``Add`` could otherwise appear as
+    the start of a legitimate item name on a non-indented line.
+
+    Sigil-prefix forms (``+ Add bacon``, ``- No onions``,
+    ``* Substitute fries``) fire whether or not the line is
+    indented because the sigil itself is the distinctive signal.
+    """
+    if not line:
+        return None
+    cleaned = line.rstrip()
+    if not cleaned:
+        return None
+
+    # Sigil-prefix forms first (the sigil is the strongest signal).
+    m = _MOD_ADD_PREFIX_RE.match(cleaned)
+    if m:
+        text = m.group("text").strip().strip(".,:;-")
+        price_raw = m.group("price")
+        price = float(price_raw.replace(",", ".")) if price_raw else None
+        if text and 1 <= len(text) <= 80:
+            return {"kind": "add", "text": text, "price": price}
+
+    m = _MOD_REMOVE_PREFIX_RE.match(cleaned)
+    if m:
+        text = m.group("text").strip().strip(".,:;-")
+        price_raw = m.group("price")
+        price = float(price_raw.replace(",", ".")) if price_raw else None
+        if text and 1 <= len(text) <= 80:
+            return {"kind": "remove", "text": text, "price": price}
+
+    m = _MOD_SUB_PREFIX_RE.match(cleaned)
+    if m:
+        text = m.group("text").strip().strip(".,:;-")
+        price_raw = m.group("price")
+        price = float(price_raw.replace(",", ".")) if price_raw else None
+        if text and 1 <= len(text) <= 80:
+            return {"kind": "sub", "text": text, "price": price}
+
+    # Word-prefix forms require indentation so they don't false-
+    # positive on item names that start with the keyword
+    # ("Add Pizza Special").
+    if not indented:
+        return None
+
+    m = _MOD_ADD_WORD_RE.match(cleaned)
+    if m:
+        text = m.group("text").strip().strip(".,:;-")
+        price_raw = m.group("price")
+        price = float(price_raw.replace(",", ".")) if price_raw else None
+        if text and 1 <= len(text) <= 80:
+            return {"kind": "add", "text": text, "price": price}
+
+    m = _MOD_REMOVE_WORD_RE.match(cleaned)
+    if m:
+        text = m.group("text").strip().strip(".,:;-")
+        if text and 1 <= len(text) <= 80:
+            return {"kind": "remove", "text": text, "price": None}
+
+    m = _MOD_SUB_WORD_RE.match(cleaned)
+    if m:
+        text = m.group("text").strip().strip(".,:;-")
+        if text and 1 <= len(text) <= 80:
+            return {"kind": "sub", "text": text, "price": None}
+
+    # Bare indented note. Only count when the line is short enough to
+    # plausibly be a note (not the next item's description) and has
+    # no trailing price tail (a price would make it a regular item).
+    if re.search(r"\s\d+(?:[.,]\d{2})\s*$", cleaned):
+        return None
+    if 1 <= len(cleaned) <= 60:
+        return {"kind": "note", "text": cleaned.strip(), "price": None}
+
+    return None
+
+
 def _parse_items(text: str) -> list[ReceiptLine]:
     items: list[ReceiptLine] = []
     for raw in text.splitlines():
+        # Detect indentation BEFORE stripping so we can route
+        # indented lines to the modifier parser when no item-shape
+        # matches.
+        indented = bool(raw) and raw[0] in (" ", "\t")
         line = raw.strip()
         if not line:
             continue
@@ -2097,14 +2232,22 @@ def _parse_items(text: str) -> list[ReceiptLine]:
         # 3) Bare desc + price (original behaviour).
         m = re.search(r"^(.*?)\s+(\d+(?:[.,]\d{2}))$", line)
         if not m:
-            # The line had no recognisable price tail. If we extracted
-            # a SKU off the line and the leftover is non-empty
-            # (description-only line followed by a SKU keyword), we
-            # still want to attach the SKU to the most-recent item --
-            # treat this case the same as the SKU-only-line branch
-            # at the top.
+            # The line had no recognisable price tail. Two interpretation
+            # paths:
+            #
+            # 3a) SKU keyword on an item-less line attaches to the last
+            #     item (existing behaviour).
+            # 3b) Otherwise check if the line is a modifier shape
+            #     (+ Add bacon / - No onions / * Substitute fries /
+            #     bare indented note / Word-prefix Add bacon /
+            #     No onions / Sub fries) and attach to the last item.
             if sku is not None and items:
                 items[-1].sku = sku
+                continue
+            if items:
+                mod = _parse_modifier_line(line, indented)
+                if mod is not None and len(items[-1].modifiers) < _MAX_MODIFIERS_PER_ITEM:
+                    items[-1].modifiers.append(mod)
             continue
         desc = m.group(1).strip().strip(".:-")
         try:
@@ -2112,6 +2255,16 @@ def _parse_items(text: str) -> list[ReceiptLine]:
         except ValueError:
             continue
         if 0.01 <= price <= 9999 and 2 <= len(desc) <= 60:
+            # Before treating this as a fresh item, check if it's a
+            # modifier with a price tail (e.g. ``+ Add bacon 2.00``).
+            # Modifier lines with explicit sigils trump the
+            # base-item interpretation.
+            if items:
+                mod = _parse_modifier_line(line, indented)
+                if mod is not None and mod["kind"] in ("add", "remove", "sub") and \
+                   len(items[-1].modifiers) < _MAX_MODIFIERS_PER_ITEM:
+                    items[-1].modifiers.append(mod)
+                    continue
             items.append(ReceiptLine(description=desc, price=price, sku=sku))
     return items[:30]
 

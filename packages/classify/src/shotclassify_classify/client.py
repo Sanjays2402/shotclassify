@@ -100,6 +100,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
                 discount_pct=i.get("discount_pct"),
                 discount_amount=i.get("discount_amount"),
                 sku=i.get("sku"),
+                modifiers=i.get("modifiers") or [],
             )
             for i in (r.get("items") or [])
         ]
