@@ -1,9 +1,9 @@
 "use client";
 
 // Global key bindings outside of CommandPalette (Cmd-K) and ShortcutsHelp (?).
-// Single-key navigation (U / S / C) plus a "g t" sequence for scroll-to-top.
-// Mirrors Linear's behaviour: bare-letter shortcuts only fire when no input
-// is focused so typing in a search box never navigates away.
+// Single-key navigation (U / S / C / T) plus a "g t" sequence for
+// scroll-to-top. Mirrors Linear's behaviour: bare-letter shortcuts only fire
+// when no input is focused so typing in a search box never navigates away.
 
 import { useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
@@ -54,6 +54,10 @@ export default function HotKeys() {
         router.push("/shots");
       } else if (k === "c") {
         router.push("/calibration");
+      } else if (k === "t") {
+        // Cycle theme via the ThemeToggle component's event listener so
+        // the binding here doesn't need to duplicate persistence logic.
+        window.dispatchEvent(new Event("shotclassify:theme-cycle"));
       }
     }
     window.addEventListener("keydown", onKey);

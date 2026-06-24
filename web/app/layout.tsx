@@ -13,6 +13,8 @@ import PwaInstaller from "@/components/PwaInstaller";
 import NotificationBell from "@/components/NotificationBell";
 import ShortcutsHelp from "@/components/ShortcutsHelp";
 import ShortcutsHelpButton from "@/components/ShortcutsHelpButton";
+import ThemeToggle from "@/components/ThemeToggle";
+import { themeInitScript } from "@/lib/theme";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -62,6 +64,13 @@ export const viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${inter.variable} ${display.variable} ${mono.variable}`}>
+      <head>
+        {/* Run before hydration so the dim palette is on <html> before the
+            first paint. Avoids a chalk-cream flash for users on Dim. */}
+        <script
+          dangerouslySetInnerHTML={{ __html: themeInitScript }}
+        />
+      </head>
       <body>
         <HotKeys />
         <CommandPalette />
@@ -130,6 +139,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <QuotaMeter compact />
               <NotificationBell />
               <ShortcutsHelpButton />
+              <ThemeToggle />
               <span className="eyebrow hidden sm:inline">Press</span>
               <span className="kbd">U</span>
               <span className="eyebrow hidden sm:inline">to ingest</span>

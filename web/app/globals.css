@@ -40,6 +40,70 @@
   color-scheme: light;
 }
 
+/* Dim mode: inverts the chalk surface for late-night viewing while
+   keeping the felt-green / cue-yellow accent so the broadcast voice
+   stays recognisable. Applied via the [data-theme="dim"] attribute on
+   <html> -- written by lib/theme.ts before paint to avoid a flash. */
+html[data-theme="dim"] {
+  color-scheme: dark;
+  --color-chalk: #131617;
+  --color-chalk-2: #1A1E20;
+  --color-ink: #E8E2CC;
+  --color-ink-2: #C9C2A8;
+  --color-rule: rgba(232, 226, 204, 0.12);
+  --color-rule-dark: rgba(11, 15, 12, 0.28);
+  --color-felt: #14704A;
+  --color-felt-deep: #0F5236;
+  --color-felt-rail: #073322;
+  --color-conf-low: #8A8E89;
+}
+
+html[data-theme="dim"] body {
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(20, 112, 74, 0.10), transparent 60%),
+    var(--color-chalk);
+  color: var(--color-ink);
+}
+
+/* Card surfaces / panels need a hand-tuned dim backplate -- using
+   var(--color-chalk) wholesale washes everything out. */
+html[data-theme="dim"] .panel {
+  background: #1B1F21;
+  border-color: var(--color-rule);
+}
+html[data-theme="dim"] .tbl thead th {
+  background: #1F2426;
+  color: #A6A096;
+  border-bottom-color: var(--color-rule);
+}
+html[data-theme="dim"] .tbl tbody td {
+  border-bottom-color: var(--color-rule);
+}
+html[data-theme="dim"] .tbl tbody tr:hover {
+  background: rgba(20, 112, 74, 0.10);
+}
+html[data-theme="dim"] .eyebrow {
+  color: #8E867A;
+}
+html[data-theme="dim"] .kbd {
+  background: #232729;
+  color: #C9C2A8;
+  border-color: rgba(232, 226, 204, 0.18);
+}
+html[data-theme="dim"] .conf-bar {
+  background: rgba(232, 226, 204, 0.10);
+}
+html[data-theme="dim"] .btn-ghost {
+  color: var(--color-ink);
+  border-color: rgba(232, 226, 204, 0.18);
+}
+html[data-theme="dim"] .btn-ghost:hover {
+  background: rgba(232, 226, 204, 0.06);
+}
+html[data-theme="dim"] header[class*="border-b"] {
+  background: #161A1B !important;
+}
+
 html, body {
   background: var(--color-chalk);
   color: var(--color-ink);

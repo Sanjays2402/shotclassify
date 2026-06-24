@@ -68,6 +68,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
     label: "Scroll to top of page",
     hint: "Press G, then T",
   },
+  {
+    id: "theme",
+    scope: "global",
+    combo: { keys: ["T"], match: "t" },
+    label: "Cycle theme (Light / Dim / Auto)",
+  },
 ] as const;
 
 // A minimal, framework-free representation of a key event so the matcher is
