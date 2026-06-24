@@ -4932,6 +4932,234 @@ def extract_complexity(
     return results
 
 
+# Unsafe SQL query construction detection. We surface call sites
+# that build SQL via string interpolation / concatenation rather
+# than parameterised binds. Five recognised kinds:
+#
+# * fstring      -- Python f-string with SQL keyword
+# * template     -- JS/TS template literal with SQL keyword
+# * concat       -- string + concat patterns
+# * format       -- ``.format()`` / ``%`` / printf-style
+# * interpolate  -- PHP / Ruby ``"$var"`` double-quoted interpolation
+#
+# Detection is intentionally conservative -- we require BOTH a SQL
+# keyword (SELECT / INSERT / UPDATE / DELETE / DROP / etc.) AND
+# evidence of dynamic interpolation in the same call to fire. This
+# keeps random "tasks=10" / "format the input" prose from
+# false-positiving as a SQL injection site.
+
+_UNSAFE_SQL_KEYWORDS = (
+    "SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "CREATE",
+    "ALTER", "TRUNCATE", "MERGE", "REPLACE",
+)
+
+_UNSAFE_SQL_KEYWORDS_RE = re.compile(
+    r"\b(?:" + "|".join(_UNSAFE_SQL_KEYWORDS) + r")\b",
+    re.IGNORECASE,
+)
+
+# Python f-string with embedded ``{var}`` interpolation containing a
+# SQL keyword. Matches both single- and triple-quoted f-strings.
+# Body must contain at least one ``{...}`` interpolation hole AND a
+# SQL keyword to qualify. We use two patterns -- one for double-quoted,
+# one for single-quoted -- so embedded opposite-quote characters in
+# the body (e.g. f"VALUES ('{name}')") don't terminate the match.
+_UNSAFE_PY_FSTRING_DQ_RE = re.compile(
+    r'[fF]"([^"\n]{1,500}?)"',
+)
+_UNSAFE_PY_FSTRING_SQ_RE = re.compile(
+    r"[fF]'([^'\n]{1,500}?)'",
+)
+_UNSAFE_PY_FSTRING_TRIPLE_RE = re.compile(
+    r'[fF]"""(.+?)"""',
+    re.DOTALL,
+)
+_UNSAFE_PY_FSTRING_TRIPLE_SQ_RE = re.compile(
+    r"[fF]'''(.+?)'''",
+    re.DOTALL,
+)
+
+# JavaScript / TypeScript template literal: backtick-delimited string
+# containing ``${...}`` interpolation and a SQL keyword.
+_UNSAFE_JS_TEMPLATE_RE = re.compile(r"`([^`\n]{1,500}?)`")
+
+# String + concatenation: ``"SQL " + var`` shape. Captures both
+# Python and JS-style. Variable name is at least one identifier
+# char so an empty + doesn't match.
+_UNSAFE_CONCAT_RE = re.compile(
+    r'["\']([^"\'\n]*?\b(?:'
+    + "|".join(_UNSAFE_SQL_KEYWORDS)
+    + r')\b[^"\'\n]*?)["\']\s*\+\s*'
+    r"(?:str\()?[A-Za-z_$][\w.$]*",
+    re.IGNORECASE,
+)
+
+# ``.format()`` / ``%`` style. ``"SELECT ... WHERE x = %s" % var``
+# OR ``"SELECT ...".format(var)``. Two regexes per quote style so
+# embedded opposite-quote chars don't terminate the match.
+_UNSAFE_PY_FORMAT_DQ_RE = re.compile(
+    r'"([^"\n]*?\b(?:'
+    + "|".join(_UNSAFE_SQL_KEYWORDS)
+    + r')\b[^"\n]*?)"\s*\.\s*format\s*\(',
+    re.IGNORECASE,
+)
+_UNSAFE_PY_FORMAT_SQ_RE = re.compile(
+    r"'([^'\n]*?\b(?:"
+    + "|".join(_UNSAFE_SQL_KEYWORDS)
+    + r")\b[^'\n]*?)'\s*\.\s*format\s*\(",
+    re.IGNORECASE,
+)
+_UNSAFE_PY_PERCENT_DQ_RE = re.compile(
+    r'"([^"\n]*?\b(?:'
+    + "|".join(_UNSAFE_SQL_KEYWORDS)
+    + r')\b[^"\n]*?%[sd][^"\n]*?)"\s*%\s*[\w(]',
+    re.IGNORECASE,
+)
+_UNSAFE_PY_PERCENT_SQ_RE = re.compile(
+    r"'([^'\n]*?\b(?:"
+    + "|".join(_UNSAFE_SQL_KEYWORDS)
+    + r")\b[^'\n]*?%[sd][^'\n]*?)'\s*%\s*[\w(]",
+    re.IGNORECASE,
+)
+
+# PHP / Ruby ``"$var"`` double-quoted variable interpolation. Match a
+# double-quoted string containing a SQL keyword AND a ``$identifier``
+# or ``#{expr}`` interpolation token.
+_UNSAFE_INTERPOLATE_RE = re.compile(
+    r'"([^"\n]{0,500}?\b(?:'
+    + "|".join(_UNSAFE_SQL_KEYWORDS)
+    + r')\b[^"\n]{0,500}?(?:\$\w+|\$\{[^}]+\}|#\{[^}]+\})[^"\n]*?)"',
+    re.IGNORECASE,
+)
+
+
+def _has_sql_and_interpolation(body: str) -> bool:
+    """True when ``body`` contains BOTH a SQL keyword and a ``{...}`` hole."""
+    if not _UNSAFE_SQL_KEYWORDS_RE.search(body):
+        return False
+    return "{" in body and "}" in body
+
+
+def _has_sql_and_dollar_interpolation(body: str) -> bool:
+    """True when ``body`` contains BOTH a SQL keyword and a ``${...}`` hole."""
+    if not _UNSAFE_SQL_KEYWORDS_RE.search(body):
+        return False
+    return "${" in body
+
+
+def _truncate_snippet(snippet: str, max_len: int = 200) -> str:
+    snippet = snippet.strip()
+    if len(snippet) <= max_len:
+        return snippet
+    return snippet[:max_len - 3] + "..."
+
+
+def extract_unsafe_queries(
+    code: str, language: str | None = None
+) -> list[dict[str, str]]:
+    """Return list of unsafe SQL-construction call sites in ``code``.
+
+    Each entry is a ``{"kind", "language", "snippet"}`` dict.
+    ``kind`` is one of ``fstring`` / ``template`` / ``concat`` /
+    ``format`` / ``interpolate``. ``language`` is the detected
+    source language (or ``unknown`` when None). ``snippet`` is the
+    truncated unsafe construction call.
+
+    Detection requires BOTH a SQL keyword (SELECT / INSERT / etc.)
+    AND evidence of dynamic interpolation in the same construct.
+    Pure data and shell languages return [] unconditionally.
+    Capped at 50 entries.
+    """
+    if not code or not isinstance(code, str):
+        return []
+    lang = (language or "").lower()
+    # Pure-data and shell languages can't contain string-interpolation
+    # SQL construction sites. We use a narrower exclude set than
+    # _NO_IMPORT_LANGUAGES (which excludes ``sql`` itself) because the
+    # OCR language detector may tag a Python+SQL snippet as ``sql``
+    # when the SELECT keyword dominates the body -- we still want to
+    # scan that snippet for f-string / template / concat patterns.
+    if lang in {
+        "json", "csv", "tsv", "yaml", "yml", "xml", "ini", "toml",
+        "markdown", "md", "html", "text", "txt", "log",
+        "bash", "shell", "sh", "zsh", "fish", "powershell", "ps1",
+        "dockerfile", "make", "makefile",
+    }:
+        return []
+
+    out: list[dict[str, str]] = []
+    consumed: list[tuple[int, int]] = []
+
+    def _seen(s: int, e: int) -> bool:
+        for cs, ce in consumed:
+            if s < ce and e > cs:
+                return True
+        return False
+
+    def _add(kind: str, snippet: str, start: int, end: int) -> None:
+        if len(out) >= 50:
+            return
+        if _seen(start, end):
+            return
+        out.append(
+            {
+                "kind": kind,
+                "language": lang or "unknown",
+                "snippet": _truncate_snippet(snippet),
+            }
+        )
+        consumed.append((start, end))
+
+    # --- Python f-string (single/triple quoted) ---------------------
+    for m in _UNSAFE_PY_FSTRING_TRIPLE_RE.finditer(code):
+        body = m.group(1)
+        if _has_sql_and_interpolation(body):
+            _add("fstring", m.group(0), m.start(), m.end())
+
+    for m in _UNSAFE_PY_FSTRING_TRIPLE_SQ_RE.finditer(code):
+        body = m.group(1)
+        if _has_sql_and_interpolation(body):
+            _add("fstring", m.group(0), m.start(), m.end())
+
+    for m in _UNSAFE_PY_FSTRING_DQ_RE.finditer(code):
+        body = m.group(1)
+        if _has_sql_and_interpolation(body):
+            _add("fstring", m.group(0), m.start(), m.end())
+
+    for m in _UNSAFE_PY_FSTRING_SQ_RE.finditer(code):
+        body = m.group(1)
+        if _has_sql_and_interpolation(body):
+            _add("fstring", m.group(0), m.start(), m.end())
+
+    # --- JS / TS template literal -----------------------------------
+    for m in _UNSAFE_JS_TEMPLATE_RE.finditer(code):
+        body = m.group(1)
+        if _has_sql_and_dollar_interpolation(body):
+            _add("template", m.group(0), m.start(), m.end())
+
+    # --- + concatenation -------------------------------------------
+    for m in _UNSAFE_CONCAT_RE.finditer(code):
+        _add("concat", m.group(0), m.start(), m.end())
+
+    # --- .format() --------------------------------------------------
+    for m in _UNSAFE_PY_FORMAT_DQ_RE.finditer(code):
+        _add("format", m.group(0), m.start(), m.end())
+    for m in _UNSAFE_PY_FORMAT_SQ_RE.finditer(code):
+        _add("format", m.group(0), m.start(), m.end())
+
+    # --- % formatting (Python-style) -------------------------------
+    for m in _UNSAFE_PY_PERCENT_DQ_RE.finditer(code):
+        _add("format", m.group(0), m.start(), m.end())
+    for m in _UNSAFE_PY_PERCENT_SQ_RE.finditer(code):
+        _add("format", m.group(0), m.start(), m.end())
+
+    # --- PHP/Ruby double-quoted interpolation ----------------------
+    for m in _UNSAFE_INTERPOLATE_RE.finditer(code):
+        _add("interpolate", m.group(0), m.start(), m.end())
+
+    return out
+
+
 def detect_type_annotation_density(
     code: str, language: str | None = None
 ) -> float:
@@ -5283,6 +5511,18 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
     )
     if not complexity:
         complexity = extract_complexity(code, language)
+    # Unsafe SQL query construction sites. Caller-supplied list wins
+    # (preserved verbatim); otherwise scan the snippet for SQL
+    # construction patterns that interpolate user input (f-string /
+    # template literal / + concat / .format() / % / PHP-Ruby "$var").
+    # Returns an empty list when no recognised pattern is present.
+    unsafe_queries = (
+        list(existing.unsafe_queries)
+        if existing and existing.unsafe_queries
+        else []
+    )
+    if not unsafe_queries:
+        unsafe_queries = extract_unsafe_queries(code, language)
     return CodeFields(
         language=language,
         code=code,
@@ -5312,4 +5552,5 @@ def enrich_code(existing: CodeFields | None, ocr: OCRResult) -> CodeFields:
         type_annotation_density=type_annotation_density,
         unused_imports=unused_imports,
         complexity=complexity,
+        unsafe_queries=unsafe_queries,
     )

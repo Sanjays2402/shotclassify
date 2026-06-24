@@ -177,6 +177,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             ),
             unused_imports=c.get("unused_imports") or [],
             complexity=c.get("complexity") or [],
+            unsafe_queries=c.get("unsafe_queries") or [],
         )
     if e := fields_in.get("error"):
         fields.error = ErrorFields(

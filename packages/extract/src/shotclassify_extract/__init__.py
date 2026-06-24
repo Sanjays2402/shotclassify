@@ -31,6 +31,7 @@ from .code import (
     extract_suspected_secrets,
     extract_todo_authors,
     extract_todo_tickets,
+    extract_unsafe_queries,
     extract_unused_imports,
 )
 from .colors import extract_colors
@@ -163,4 +164,5 @@ __all__ = [
     "extract_unused_imports",
     "extract_complexity",
     "extract_colors",
+    "extract_unsafe_queries",
 ]

@@ -1474,6 +1474,44 @@ class CodeFields(BaseModel):
     # screenshots, surfacing potentially overcomplicated
     # functions for refactoring attention.
     complexity: list[dict[str, int | str | bool]] = Field(default_factory=list)
+    # SQL-injection-prone / unsafe query construction sites detected in
+    # the snippet. Many production bugs start as raw-string SQL
+    # concatenation that an attacker can manipulate to inject malicious
+    # statements:
+    #
+    #   # Python f-string concat (UNSAFE)
+    #   cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
+    #
+    #   # Python + string concatenation (UNSAFE)
+    #   cursor.execute("SELECT * FROM users WHERE id = " + str(uid))
+    #
+    #   # JS template literal (UNSAFE)
+    #   db.query(`SELECT * FROM users WHERE id = ${userId}`)
+    #
+    #   # JS + concatenation (UNSAFE)
+    #   db.query("SELECT * FROM users WHERE id = " + userId)
+    #
+    #   # PHP "$var" interpolation (UNSAFE)
+    #   $db->query("SELECT * FROM users WHERE id = $userId");
+    #
+    # Each entry is a ``{"kind": str, "language": str, "snippet": str}``
+    # dict. ``kind`` is the categorisation:
+    #
+    # * ``fstring``      -- Python f-string interpolation into SQL
+    # * ``template``     -- JS / TS template-literal interpolation
+    # * ``concat``       -- string + concatenation pattern
+    # * ``format``       -- ``.format()`` / ``%`` / printf-style
+    # * ``interpolate``  -- PHP / Ruby ``"$var"`` interpolation
+    #
+    # ``language`` is the detected source language tag. ``snippet`` is
+    # the truncated unsafe call (max 200 chars) with the SQL body
+    # preserved so dashboards can render the exact pattern.
+    #
+    # Empty list when no recognised unsafe pattern is present.
+    # Capped at 50 entries. Dashboards use this to flag "code-review:
+    # 3 SQL injection sites detected" annotations without forcing a
+    # full lint pass on every snippet.
+    unsafe_queries: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ErrorFields(BaseModel):
