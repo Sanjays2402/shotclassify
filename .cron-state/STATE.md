@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (132 features tracked, 125 complete)
+## Roadmap (137 features tracked, 130 complete)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -210,6 +210,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 135. [x] Chat: bot / app / integration message detection into ChatFields.bot_messages (list of {sender, badge, platform, text} dicts; recognised shapes per platform: Slack uppercase APP/BOT/INTEGRATION badge right after sender name, Discord BOT + em-dash separator with trailing rest-of-line consumed so body extraction picks up actual message next line, Telegram sender-ending-in-Bot suffix with - bot tail, Teams parenthesised (Bot)/(App)/(Integration) badge; four canonical badge tags app/bot/integration; platform inference based on which matcher fired; detection priority Discord > Teams > Telegram > Slack with span-claim defence so higher-priority match consumes the line; sender names 1..32 chars; channel-header words explicitly rejected (CHANNEL/DIRECT/MESSAGES/MENTIONS/REACTIONS/THREADS/PINNED/SLACKBOT/WORKSPACE/WORKFLOW/ANNOUNCEMENTS); Telegram matcher requires sender to END in Bot so prose "bot" doesn't false-positive; body extractor skips leading [/( so OCR metadata doesn't get treated as message body; body capped at 200 chars; LLM wire-format updated; enrich_chat dedupes on (sender, badge, text) triple; capped at 30 entries; distinct from messages (which mixes humans and bots) and mentions (platform-agnostic chat-only)).
 
 
+### Done in tick 26 (5 features)
+112. [x] Error: Sentry breadcrumb trail extraction into ErrorFields.breadcrumbs (new list of {category, message, level, timestamp} dicts; two recognised shapes -- TABLE form requires "Breadcrumbs" / "BREADCRUMBS" / "breadcrumb trail" / "Event breadcrumbs" header anchor followed by CATEGORY MESSAGE TIMESTAMP rows with 2+ space separators, JSON form requires no header because {"category":..., "message":..., "level":..., "timestamp":...} field combo is itself the anchor; 30 category vocab tags: navigation/http/ui.click/ui.input/ui.action/ui.gesture/ui.tap/ui.swipe/console/log/exception/query/db/sql/rpc/graphql/fetch/xhr/websocket/redirect/session/auth/info/warning/warn/error/debug/default/transaction/lifecycle; non-vocab categories reject; 7 level tags info/warning/warn/error/debug/critical/fatal with warn canonicalising to warning on both shapes; timestamps preserved verbatim because Sentry prints in local time; table separator requires 2+ spaces so single-space prose rejects; two consecutive blank lines terminate table section; JSON form de-dupes against table form on (category, message) pair; capped at 50 entries; enrich_error backfills when caller-supplied list empty, caller's non-empty value preserved verbatim; LLM wire-format updated).
+120. [x] Receipt: customer ship-to address-block extraction into ReceiptFields.ship_to (new dict {name, lines, city, state, postal_code, country}; 9 recognised header phrases case-insensitive: Ship To / Shipping Address / Shipping Info / Shipping Details / Shipped To / Deliver To / Delivery Address / Recipient / Mail To with : or - separator REQUIRED as anchor; postal-tail parsing -- 4 catalogued shapes US `City, STATE ZIP[+4]` / Canadian `City, PROV A1A 1A1` / UK `City POSTCODE` / Generic `City, 4-6digits`; country detection -- 60-name curated catalogue spanning North America / Europe / Asia-Pacific / Latin America / Middle East / Africa with trailing punctuation stripped; block-collection safety -- scan stops at first terminator-vocab line (Bill To / Subtotal / Total / Order # / Items / Payment / Invoice / etc) so bill-to block / totals never bleed in, single blank inside block also terminates, capped at 6 collected lines; name detection -- first line tested for Title-Case / ALL-CAPS start no digits length 1..60 rejected when contains street-suffix vocab so no-name shipment skipping straight to street still parses with name=None, apostrophes / hyphens / accented chars supported; LLM wire-format updated; enrich_receipt backfill tuple extended).
+153. [x] Code: SQL injection / unsafe query construction detection into CodeFields.unsafe_queries (new list of {kind, language, snippet} dicts surfacing SQL-construction call sites using string interpolation / concatenation instead of parameterised binds; 5 kinds: fstring (Python f-string with SQL keyword + {...} hole), template (JS/TS template literal with SQL keyword + ${...}), concat (string + concatenation), format (.format() and printf-style %), interpolate (PHP / Ruby "$var" / "#{expr}" double-quoted variable interpolation); detection requires BOTH a SQL keyword (SELECT/INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/TRUNCATE/MERGE/REPLACE) AND explicit interpolation evidence in same construct; quote-pair regex variants (DQ + SQ + triple-DQ + triple-SQ for f-string, DQ + SQ for format / percent) so embedded opposite-quote chars in SQL body don't terminate match; language gating: pure-data formats and shell langs return [] unconditionally but SQL is INTENTIONALLY NOT excluded because language detector commonly tags Python+SQL snippets as "sql" when SELECT dominates; snippet capped at 200 chars; 50-entry cap; LLM wire-format updated).
+122. [x] Extract: cross-category trading-position extractor into raw["positions"] (new module extract/positions.py; list of {side, size, symbol, price, kind} dicts capturing structured positions from trading-app screenshots; 4 recognised shapes in priority order to claim spans: OPTION (5 AAPL 175 CALL @ 2.50 with C/P short-form, kind tagged option, symbol stored combined), SIDED-AFTER (100 TSLA SHORT @ 250 with BUY/SELL aliases), SIDED-TRAILING (5 AAPL @ 175 long), BARE (100 AAPL @ 175 / +200 NVDA @ 925 / -100 TSLA @ 250 with leading +/- on qty implying long/short); symbol classification stock/crypto/option/futures: pair form X/Y or X-Y tagged crypto when base in catalogue or quote in {USD,USDT,USDC,EUR,GBP,BTC,ETH,BNB}, bare symbol tagged crypto when in curated ~80-coin catalogue, 2-5 letter uppercase otherwise tagged stock, futures contract suffix tagged futures; safety -- bare matcher rejects 1-char tickers, rejects common prose words FOR/BY/AT/EST/PST/GMT/UTC/ETA, lowercase symbols rejected, qty/price bounded 0..10M, @ separator REQUIRED, span-claim defence; thousand-grouped prices normalised; cap 50; pipeline integration cross-category).
+147. [x] Chat: link-preview / OG-card detection into ChatFields.link_previews (new list of {sender, domain, title, description, url} dicts capturing inline preview cards Slack / Discord / Teams / WhatsApp / Telegram render below shared URLs; detection -- walk lines in source order, for each line matching standalone-domain shape AND not containing inline body text treat as preview header candidate, next non-blank line must contain 3+ words to qualify as title, line after title is optional description, URL extracted from most recent http(s):// pattern in 5 lines preceding the preview block; domain canonicalisation www. prefix stripped lowercased; safety -- @-prefix email lines rejected, / or ./ or ~/ path lines rejected, 12-domain reject-list slack.com / discord.com / discord.gg / teams.microsoft.com / telegram.org / t.me / whatsapp.com / wa.me / etc (messaging-platform clients almost never appear as preview headers), transcript Sender: text lines explicitly rejected, lone domain lines skipped, 1- and 2-word titles rejected; sender attribution tracks most recent Sender: transcript line; enrich_chat wired with standard caller-supplied merged with OCR-parsed dedup on (domain, title) pattern; 20-entry cap; LLM wire-format updated; distinct from raw["urls"] and attachments).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -218,7 +226,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 54. [ ] Chart: percent annotations vs raw values heuristic (new `ChartFields.value_unit`: `%` / `count` / `currency` based on axis tick text).
 55. [ ] UI mockup: layout-style guess (new `UIMockupFields.layout_kind`: `dashboard` / `landing` / `form` / `settings` / `modal`).
 56. [ ] PII redact: phone-number redaction mode (`phone` mode; normalises to `<PHONE>` stub form). (Note: a tight `phone` regex already exists in redact.py with `[REDACTED:phone]` placeholder; this would refine to the `<PHONE>` stub form.)
-65. [ ] Chat: link preview block detection (the inline OG-card with title + description that platforms inline for shared URLs).
+65. [x] Chat: link preview block detection (the inline OG-card with title + description that platforms inline for shared URLs). Shipped in tick 26 as #147.
 71. [ ] Chart: pie-slice percent extraction from in-pie labels (new ChartFields.slices list of {label, percent}).
 80. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce).
 90. [ ] Receipt: barcode/QR encoding detection in OCR text (vendors print the encoded payload below the barcode -- track which lines look like the encoded payload vs the human-readable text).
@@ -227,11 +235,11 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 102. [ ] Chart: data-table fallback extraction from a chart screenshot's accompanying legend table (the small `x / y` paired columns that often sit beside the chart).
 104. [ ] Chat: voice-call / video-call duration markers (`Audio call · 1m 23s` / `Missed video call`).
 108. [ ] Code: license-header attribution chain detection (multi-license dual-licensed files that print BOTH `Licensed under MIT or Apache 2.0` shapes; expand `license` slot into a list when 2+ licenses signal).
-112. [ ] Error: Sentry breadcrumb trail extraction (the `Breadcrumbs` block above the stacktrace listing user actions and HTTP calls).
+112. [x] Error: Sentry breadcrumb trail extraction (the `Breadcrumbs` block above the stacktrace listing user actions and HTTP calls). Shipped in tick 26.
 114. [ ] Chart: axis-tick numeric range inference (parse the min..max tick labels into `ChartFields.axes` numeric range for sparkline-like analysis).
 117. [ ] Chat: read-receipt avatar-row detection (the row of small reactor avatars iMessage / Telegram shows below a popular message).
-120. [ ] Receipt: customer-name / address-block extraction for shipping receipts (e-commerce captures include `Ship To: Alice Smith / 123 Main St / Springfield, IL 62704` blocks into new `ReceiptFields.ship_to`).
-122. [ ] Extract: cross-category trading-strategy/position notation into `raw["positions"]` (`5 ETH @ $3500 long`, `+0.5 BTC short @ 67000`, `100 AAPL @ 175 call $200 strike` from trading-app screenshots).
+120. [x] Receipt: customer-name / address-block extraction for shipping receipts (e-commerce captures include `Ship To: Alice Smith / 123 Main St / Springfield, IL 62704` blocks into new `ReceiptFields.ship_to`). Shipped in tick 26.
+122. [x] Extract: cross-category trading-strategy/position notation into `raw["positions"]` (`5 ETH @ $3500 long`, `+0.5 BTC short @ 67000`, `100 AAPL @ 175 call $200 strike` from trading-app screenshots). Shipped in tick 26.
 123. [ ] Receipt: vendor logo / brand-name normalisation against the top-200 chain catalogue (Starbucks / 7-Eleven / etc -- standardise spelling variations OCR may produce; pairs with existing #80 which is the same idea but with concrete catalogue scope).
 131. [x] Receipt: lottery / scratch-card draw line detection into `ReceiptFields.lottery`. Shipped in tick 25.
 132. [ ] Chart: legend-color-to-series mapping into `ChartFields.legend_map` (legends often print `■ Q1 ■ Q2 ■ Q3 ■ Q4` with coloured swatches -- surface a list of `{color, series}` dicts).
@@ -242,13 +250,13 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 143. [x] Error: Vue.js component error parsing (new framework='vue'; `Error in v-on handler` / `Error in callback for watcher` / `Error in render function` / `Error in mounted hook` patterns with component-path tail). Shipped in tick 24.
 145. [x] Receipt: estimated-arrival / delivery-eta extraction into `ReceiptFields.delivery_eta` (DoorDash / Uber Eats / Amazon receipts print `Arriving by 8:45 PM` / `Delivery: Today 6-7 PM` / `Estimated arrival: Wed Jun 10`; useful for "this purchase arrived late" analytics). Shipped in tick 24.
 146. [x] Extract: cross-category color-hex extractor into `raw["colors"]` (CSS / Tailwind / Figma screenshots reference `#FF5733` / `rgb(255,87,51)` / `hsl(11, 100%, 60%)` / `oklch(0.8 0.1 30)` -- surface as list of `{model, value}` dicts for design-system tooling). Shipped in tick 24.
-147. [ ] Chat: link-preview block detection into `ChatFields.link_previews` (Slack/Discord/Teams render OG-card previews below shared URLs with title + description + thumbnail thumbprint -- surface as list of `{title, description, source_url}` dicts).
+147. [x] Chat: link-preview block detection into `ChatFields.link_previews` (Slack/Discord/Teams render OG-card previews below shared URLs with title + description + thumbnail thumbprint -- surface as list of `{title, description, source_url}` dicts). Shipped in tick 26.
 148. [x] Code: cyclomatic-complexity outlier flag in CodeFields.complexity. Shipped in tick 25.
 149. [ ] PII redact: phone-number redaction mode upgrade (existing `phone` regex uses `[REDACTED:phone]` placeholder; refine to the `<PHONE>` stub form for consistency with #56 design notes).
 150. [x] Error: React error boundary parsing (framework='react'). Shipped in tick 25.
 151. [x] Receipt: cancellation-policy notice extraction into `ReceiptFields.cancellation_policy`. Shipped in tick 25.
 152. [ ] Chart: legend swatch color mapping into `ChartFields.legend_map` (legends print `■ Q1 ■ Q2 ■ Q3 ■ Q4` with coloured square swatches that OCR captures preserve as `■`/`◆`/`●` glyphs -- pair colour to series label).
-153. [ ] Code: SQL injection / unsafe query detection into `CodeFields.unsafe_queries` (recognise `cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")` f-string concatenation + `"SELECT * FROM users WHERE id = " + str(uid)` string concat + `query = "..."; cursor.execute(query)` after-the-fact concatenation; surface line offset + flagged pattern; pairs with existing dialect detection).
+153. [x] Code: SQL injection / unsafe query detection into `CodeFields.unsafe_queries` (recognise `cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")` f-string concatenation + `"SELECT * FROM users WHERE id = " + str(uid)` string concat + `query = "..."; cursor.execute(query)` after-the-fact concatenation; surface line offset + flagged pattern; pairs with existing dialect detection). Shipped in tick 26.
 154. [ ] Chat: app-integration card detection into `ChatFields.app_cards` (Slack-style rendered cards from GitHub / Linear / Jira / Figma / Asana integrations with `<App>` author + title + footer link; surface as list of `{app, title, link}` dicts; distinct from raw["urls"] because it carries the structured card context).
 
 
@@ -1619,6 +1627,102 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
     * Pyright caught one ``str | int`` union type issue on
       ``"Hello" in out[0]["text"]`` -- wrapped in ``str()``
       cast for type-narrowing. No runtime change.
+
+- 2026-06-23 20:16 PT (tick 26, Cake): 5 features.
+  - fbeeae7 feat(extract/error): Sentry breadcrumb trail extraction into ErrorFields.breadcrumbs
+  - fbdcd51 feat(extract/receipt): customer ship-to address-block extraction into ReceiptFields.ship_to
+  - e3b7980 feat(extract/code): SQL injection / unsafe query construction detection into CodeFields.unsafe_queries
+  - aaaac53 feat(extract): cross-category trading-position extractor into raw["positions"]
+  - a31300b feat(extract/chat): link-preview / OG-card detection into ChatFields.link_previews
+  - Gate: ruff at baseline 536 (zero new errors after four
+    fixups folded via --fixup + --autosquash -- two I001
+    import-sort + one E501 line-too-long + one N802 capital
+    function name + two S608 noqa comments on intentionally-
+    unsafe-query test fixtures) + pytest 6269 passed / 3
+    skipped in 139.20s. 224 new tests across the 5 features
+    (51 + 47 + 47 + 46 + 33). New ErrorFields field:
+    breadcrumbs (list[dict]). New ReceiptFields field: ship_to
+    (dict). New CodeFields field: unsafe_queries (list[dict]).
+    New ChatFields field: link_previews (list[dict]). New
+    cross-category raw key: raw["positions"] (list[dict]).
+    LLM wire format in classify/client.py updated for all
+    four schema fields. Roadmap backlog drops from 29 to 24
+    open with five tick-26 items marked done; no new items
+    added this tick (backlog still well-stocked at 24).
+    Notable design decisions:
+    * Sentry breadcrumbs table-form requires the literal
+      "Breadcrumbs" / "BREADCRUMBS" / "breadcrumb trail" /
+      "Event breadcrumbs" header anchor as a discriminator
+      because random multi-column tables (e.g. cron schedules
+      / API endpoint catalogues) would otherwise false-
+      positive. JSON form doesn't need the anchor because
+      {"category":..., "message":..., "timestamp":...}
+      combo is itself the discriminator.
+    * Breadcrumbs categories are a curated 30-tag vocab list
+      so a row like "config  /path/to/file  10:00" never
+      lands -- "config" isn't a Sentry breadcrumb category.
+    * Ship-to header requires a separator (: or -) at end of
+      line because "I'm shipping to my friend later" prose
+      would otherwise false-positive on the words "Shipping
+      to" without the colon discriminator.
+    * Ship-to country catalogue is conservative (60 names)
+      because a follow-on prose line "United Healthcare"
+      could otherwise bleed in as country if we accepted
+      partial matches.
+    * Ship-to terminator vocab includes "Bill To" / "Order #"
+      / "Subtotal" etc. so the bill-to block immediately
+      below ship-to never bleeds in. Caught by
+      test_bill_to_terminates_block.
+    * Unsafe queries language gating uses a NARROWER exclude
+      set than _NO_IMPORT_LANGUAGES because the language
+      detector commonly tags Python+SQL snippets as "sql"
+      when SELECT dominates the body. We INTENTIONALLY don't
+      exclude "sql" so we still scan those captures for
+      f-string / template / concat patterns. Caught by
+      test_enrich_code_writes_unsafe_queries which initially
+      failed because the SELECT-heavy fixture was tagged
+      "sql" by detect_language and then short-circuited.
+    * Unsafe queries f-string regex uses quote-pair variants
+      (DQ + SQ + triple-DQ + triple-SQ) so embedded
+      opposite-quote chars in the SQL body don't terminate
+      the match. Caught by test_python_fstring_insert which
+      initially failed on f"INSERT INTO logs VALUES
+      ('{message}')" -- the original [^"'\n] character
+      class terminated on the inner single-quote.
+    * Unsafe queries S608 ruff fires on intentionally-unsafe
+      test fixtures (the strings the detector is verifying
+      it finds). Added # noqa: S608 on the two test fixtures
+      to keep the gate clean without dropping the test cases.
+    * Trading positions BARE matcher uses a reject-list of
+      common prose words (FOR / BY / AT / EST / PST / GMT /
+      UTC / ETA / etc.) because "5 FOR @ 2.50" prose would
+      otherwise tag as a long stock position in "FOR" with
+      qty 5 price 2.50. Caught by test_for_at_word_rejected.
+    * Trading positions OPTION matcher is tried FIRST so a
+      "5 AAPL 175 CALL @ 2.50" claim isn't also fired as
+      bare stock "5 AAPL @ <next-non-call-price>". Span-
+      claim defence enforces non-overlap.
+    * Trading positions crypto vs stock classification uses
+      the BASE asset (left side of pair) or the bare symbol
+      against the curated ~80-coin catalogue. Common stock
+      tickers shadowing crypto names (ETH stock vs ETH
+      crypto) are intentionally tagged as crypto because the
+      catalogue is high-precision.
+    * Link previews messaging-platform domain reject-list
+      (slack.com / discord.com / t.me / etc.) is needed
+      because those domains appear as client URLs in chat
+      metadata far more often than as preview headers. A
+      chat capture frequently shows "slack.com" in the
+      browser title bar above the actual conversation.
+    * Link previews title minimum 3 words rejects 1- and
+      2-word "titles" because those are almost always
+      sender names or status labels (e.g. "Alice" /
+      "Online now") sandwiched between domain-shaped lines.
+    * Link previews URL extraction looks BACKWARD up to 5
+      lines for the most recent http(s)://... URL because
+      the preview card sits BELOW the message body that
+      contained the original URL. Falls back to URL on the
+      domain line itself for Slack's bare-URL form.
 
 ## Risks / notes
 - Web UI work skipped again this tick -- Python-only shipping for speed.
