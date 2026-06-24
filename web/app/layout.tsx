@@ -14,6 +14,7 @@ import NotificationBell from "@/components/NotificationBell";
 import ShortcutsHelp from "@/components/ShortcutsHelp";
 import ShortcutsHelpButton from "@/components/ShortcutsHelpButton";
 import ThemeToggle from "@/components/ThemeToggle";
+import ScrollProgress from "@/components/ScrollProgress";
 import { themeInitScript } from "@/lib/theme";
 
 const inter = Inter({
@@ -75,6 +76,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <HotKeys />
         <CommandPalette />
         <ShortcutsHelp />
+        <ScrollProgress />
         <OnboardingTour />
         <PwaInstaller />
         <Ticker />
