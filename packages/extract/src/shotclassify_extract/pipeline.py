@@ -27,6 +27,7 @@ from .network import extract_network
 from .paths import extract_paths
 from .percentages import extract_percentages
 from .phones import extract_phones
+from .positions import extract_positions
 from .postal_codes import extract_postal_codes
 from .receipt import enrich_receipt
 from .slack_ids import extract_slack_ids
@@ -558,5 +559,32 @@ def enrich(category: Category, fields: ExtractedFields, ocr: OCRResult) -> Extra
     if colors:
         out.raw = dict(out.raw or {})
         out.raw["colors"] = colors
+
+    # Cross-category: stash trading positions / strategy notations
+    # found in the OCR text under raw["positions"]. Trading-app
+    # screenshots (Robinhood / Webull / Coinbase / Binance / Bybit /
+    # Kraken / IBKR / TastyTrade / Thinkorswim) print user positions
+    # in fairly consistent shapes across platforms:
+    #
+    #   100 AAPL @ 175.00           -- stock long
+    #   -100 TSLA @ 250.50          -- stock short (negative qty)
+    #   5 ETH @ $3500 long          -- crypto long
+    #   +0.5 BTC short @ 67000      -- crypto short
+    #   5 AAPL 175 CALL @ 2.50      -- option
+    #
+    # Each entry is a {side, size, symbol, price, kind} dict where
+    # side is long/short, size is the absolute position size,
+    # symbol is the uppercased ticker / pair, price is the per-unit
+    # price, kind is stock/crypto/option/futures.
+    #
+    # Distinct from raw["amounts"] (which is bare currency-amount
+    # extraction) because positions tie a quantity to a ticker --
+    # the structured form is required to compute P&L, position
+    # sizing, and risk metrics. Distinct from raw["fx_pairs"]
+    # which is currency-pair (no qty) for FX rate quotes.
+    positions = extract_positions(text)
+    if positions:
+        out.raw = dict(out.raw or {})
+        out.raw["positions"] = positions
 
     return out

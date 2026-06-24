@@ -72,6 +72,7 @@ from .paths import extract_paths
 from .percentages import extract_percentages
 from .phones import extract_phones
 from .pipeline import enrich
+from .positions import extract_positions
 from .postal_codes import extract_postal_codes
 from .receipt import enrich_receipt, parse_receipt_text
 from .slack_ids import extract_slack_ids
@@ -165,4 +166,5 @@ __all__ = [
     "extract_complexity",
     "extract_colors",
     "extract_unsafe_queries",
+    "extract_positions",
 ]
