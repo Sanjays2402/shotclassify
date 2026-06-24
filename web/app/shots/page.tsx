@@ -4,14 +4,16 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Scales, CaretLeft, CaretRight, Trash, Tag, CheckSquare, Square, Star } from "@phosphor-icons/react/dist/ssr";
+import { Scales, CaretLeft, CaretRight, Trash, Tag, CheckSquare, Square, Star, Crosshair } from "@phosphor-icons/react/dist/ssr";
 import { useSWRConfig } from "swr";
 import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
 import { SampleBadge } from "@/components/SampleBadge";
 import { ExportMenu } from "@/components/ExportMenu";
+import { EmptyState } from "@/components/EmptyState";
 import { SavedViewsBar, type SavedViewFilters } from "@/components/SavedViewsBar";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
+import { emptyCopyForList } from "@/lib/empty-state";
 import {
   CATEGORIES,
   LONG,
@@ -596,16 +598,65 @@ export default function ShotsPage() {
             </p>
           </div>
         ) : rows.length === 0 ? (
-          <div className="p-8 text-center">
-            <div className="eyebrow mb-2">No record</div>
-            <p className="text-sm opacity-70">
-              Nothing under that filter. Try widening the search or{" "}
-              <Link href="/upload" className="underline">
-                feed the model
-              </Link>
-              .
-            </p>
-          </div>
+          (() => {
+            const copy = emptyCopyForList("shots", {
+              q: qDebounced,
+              category: cat,
+              tag: tagDebounced,
+              min_conf: minConfPct > 0 ? minConfPct / 100 : 0,
+              since,
+              until,
+              pinnedOnly,
+            });
+            const filtered =
+              !!qDebounced ||
+              !!cat ||
+              !!tagDebounced ||
+              minConfPct > 0 ||
+              !!since ||
+              !!until ||
+              pinnedOnly;
+            return (
+              <EmptyState
+                variant="bare"
+                eyebrow={filtered ? "No matches" : "Box score"}
+                icon={<Crosshair size={26} weight="duotone" />}
+                title={copy.title}
+                body={copy.body}
+                primary={
+                  filtered
+                    ? {
+                        label: "Reset filters",
+                        kind: "cue",
+                        onClick: () => {
+                          setCat("");
+                          setQ("");
+                          setLimit(50);
+                          setSince("");
+                          setUntil("");
+                          setMinConfPct(0);
+                          setSort("new");
+                          setTag("");
+                          setPinnedOnly(false);
+                          setPage(0);
+                          setPicked([]);
+                        },
+                      }
+                    : {
+                        label: "Ingest a frame",
+                        href: "/upload",
+                        kind: "cue",
+                      }
+                }
+                secondary={
+                  filtered
+                    ? { label: "Ingest a frame", href: "/upload" }
+                    : { label: "Try the demo", href: "/demo" }
+                }
+                data-testid="shots-empty"
+              />
+            );
+          })()
         ) : (
           <div className="overflow-auto max-h-[70vh]">
             <table className="tbl">
