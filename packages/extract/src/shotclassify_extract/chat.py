@@ -2290,6 +2290,219 @@ def _extract_bot_messages(text: str) -> list[dict[str, str | None]]:
     return out[:_MAX_BOT_MESSAGES]
 
 
+# Link-preview / OG-card block detection. When a user pastes a URL
+# into Slack / Discord / Teams / WhatsApp / Telegram, the client
+# renders an inline preview card with the page's Open Graph metadata.
+# OCR captures preserve the card text but lose the box drawing /
+# Bold styling, so we look for the recognisable structure:
+#
+#   <DOMAIN-OR-URL-LINE>      e.g. "example.com" or "https://example.com/article"
+#   <TITLE-LINE>              the largest text (typically the headline)
+#   <DESCRIPTION-LINE>        optional smaller text below the title
+#
+# The discriminator is the DOMAIN line. We require:
+# * A standalone domain or short URL on its own line
+# * Followed by at least one non-blank line containing 3+ words
+#   (the title)
+# * Optionally followed by another non-blank line (the description)
+#
+# Common in chat captures so we anchor on the DOMAIN line shape
+# (no inline body text on the same line) to avoid false-positiving
+# on a regular ``check this https://example.com`` message line.
+
+# A standalone domain or URL line. Domain shape: 2+ labels separated
+# by dots, each 1+ alphanumeric / hyphen. Optionally prefixed by an
+# emoji / arrow / paperclip / pin glyph (Telegram / Discord shape).
+# Trailing punctuation tolerated.
+_LINK_PREVIEW_DOMAIN_RE = re.compile(
+    r"""(?P<prefix>📎|📌|🔗|➜|►|>|>)?\s*
+        (?:https?://)?
+        (?P<host>(?:www\.)?
+            (?:[A-Za-z][A-Za-z0-9\-]{0,62}\.){1,3}
+            [A-Za-z]{2,24}
+        )
+        (?:/[^\s]{0,200})?
+        [.,]?\s*$
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
+
+# Common false-positive: an email address looks like "@example.com"
+# at the start of a line. Block leading @-prefixed forms.
+_LINK_PREVIEW_EMAIL_REJECT = re.compile(r"^\s*@", re.MULTILINE)
+
+# Common false-positive: a file path ending in a tld-like extension.
+# Block paths starting with / or ./ or ~/.
+_LINK_PREVIEW_PATH_REJECT = re.compile(r"^\s*(?:[./~])", re.MULTILINE)
+
+# Domains to reject because they're almost never link-preview targets
+# (they're more often messaging-platform clients in chat metadata).
+_LINK_PREVIEW_DOMAIN_REJECT: frozenset[str] = frozenset({
+    "slack.com",
+    "discord.com",
+    "discord.gg",
+    "teams.microsoft.com",
+    "telegram.org",
+    "t.me",
+    "whatsapp.com",
+    "wa.me",
+    "imessage.com",
+    "messenger.com",
+    "fb.me",
+    "messages.google.com",
+})
+
+
+def _extract_link_previews(text: str) -> list[dict[str, str | None]]:
+    """Return link-preview / OG-card entries detected in ``text``.
+
+    Each entry is a ``{"sender", "domain", "title", "description",
+    "url"}`` dict.
+
+    Detection algorithm:
+    1. Walk lines in source order. For each non-blank line that
+       matches the domain-shape regex AND that line contains ONLY
+       the domain (no inline message body), treat it as a preview
+       header candidate.
+    2. The next non-blank line is the title. It must contain
+       at least 3 words to qualify (a single bare word is more
+       likely a sender name than a headline).
+    3. The line after the title is the optional description. It
+       must be non-blank and not match another preview-header
+       shape.
+    4. The URL is pulled from the most recent line containing
+       an ``http(s)://`` pattern that appears within 200 chars
+       before the preview block.
+
+    Safety:
+    * Lone domain lines without a following title are skipped.
+    * Lines starting with @ (email) or / (path) are rejected as
+      header candidates.
+    * Domain catalogue reject-list filters out messaging-platform
+      domains that almost never appear as preview headers.
+
+    Capped at 20 entries.
+    """
+    if not text:
+        return []
+    out: list[dict[str, str | None]] = []
+    lines = text.splitlines()
+    line_offsets: list[int] = []
+    pos = 0
+    for ln in text.splitlines(keepends=True):
+        line_offsets.append(pos)
+        pos += len(ln)
+
+    # Sender tracking: most recent ``Sender:`` line above each line
+    sender_re = re.compile(r"^(?P<sender>[A-Z][A-Za-z0-9 _\-]{1,24}):\s+\S")
+    sender_at_line: list[str | None] = []
+    current: str | None = None
+    for line in lines:
+        sm = sender_re.match(line)
+        if sm:
+            name = sm.group("sender").strip()
+            current = name
+        sender_at_line.append(current)
+
+    # URL extraction from text body around each preview
+    url_pattern = re.compile(r"https?://[^\s)]+")
+
+    i = 0
+    while i < len(lines) and len(out) < 20:
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+
+        # Skip transcript sender lines themselves -- they shouldn't
+        # be preview headers.
+        if sender_re.match(lines[i]):
+            i += 1
+            continue
+
+        # Test for domain shape
+        m = _LINK_PREVIEW_DOMAIN_RE.match(line)
+        if not m:
+            i += 1
+            continue
+
+        # Reject patterns
+        if _LINK_PREVIEW_EMAIL_REJECT.match(lines[i]):
+            i += 1
+            continue
+        if _LINK_PREVIEW_PATH_REJECT.match(lines[i]):
+            i += 1
+            continue
+
+        host = m.group("host").lower()
+        # Strip www. prefix for canonical domain
+        canonical_domain = host[4:] if host.startswith("www.") else host
+        if canonical_domain in _LINK_PREVIEW_DOMAIN_REJECT:
+            i += 1
+            continue
+
+        # Need a title -- next non-blank line.
+        j = i + 1
+        while j < len(lines) and not lines[j].strip():
+            j += 1
+        if j >= len(lines):
+            break
+        title_line = lines[j].strip()
+        # Title must contain at least 3 words to qualify
+        if len(title_line.split()) < 3:
+            i += 1
+            continue
+        # Title must not be itself a sender line or another domain
+        if sender_re.match(lines[j]):
+            i += 1
+            continue
+        m2 = _LINK_PREVIEW_DOMAIN_RE.match(title_line)
+        if m2 and len(title_line.split()) <= 2:
+            i += 1
+            continue
+        # Optional description
+        description: str | None = None
+        k = j + 1
+        while k < len(lines) and not lines[k].strip():
+            k += 1
+        if k < len(lines):
+            desc_line = lines[k].strip()
+            if (
+                desc_line
+                and not sender_re.match(lines[k])
+                and not _LINK_PREVIEW_DOMAIN_RE.match(desc_line)
+                and len(desc_line.split()) >= 2
+            ):
+                description = desc_line[:300]
+                k += 1
+
+        # URL: look for the most recent http(s)://... URL in the
+        # 5 lines before this preview block.
+        url: str | None = None
+        # Search backwards from line i-1 down to max(0, i-5)
+        url_search_start = max(0, i - 5)
+        url_search_text = "\n".join(lines[url_search_start:i])
+        url_matches = list(url_pattern.finditer(url_search_text))
+        if url_matches:
+            url = url_matches[-1].group(0).rstrip(".,;)")
+        # Also accept URL on the domain line itself (Slack form)
+        full_url_on_line = url_pattern.search(line)
+        if full_url_on_line:
+            url = full_url_on_line.group(0).rstrip(".,;)")
+
+        sender = sender_at_line[i] if i < len(sender_at_line) else None
+        out.append({
+            "sender": sender,
+            "domain": canonical_domain,
+            "title": title_line[:200],
+            "description": description,
+            "url": url,
+        })
+        i = k
+
+    return out
+
+
 def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
     text = ocr.text or ""
     platform = (existing.platform if existing and existing.platform else None) or _guess_platform(text)
@@ -2599,6 +2812,24 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         seen_bots.add(bk)
         bot_messages.append(b)
 
+    # Link-preview / OG-card blocks merged with any caller-supplied
+    # link_previews. De-dupes on the (domain, title) pair so an
+    # LLM-supplied preview plus the OCR-parsed identical preview
+    # collapses to one entry. Caller order preserved first.
+    link_previews: list[dict[str, str | None]] = (
+        list(existing.link_previews) if existing else []
+    )
+    seen_previews: set[tuple[str, str]] = set()
+    for lp in link_previews:
+        lpk = (lp.get("domain") or "", lp.get("title") or "")
+        seen_previews.add(lpk)
+    for lp in _extract_link_previews(text):
+        lpk = (lp.get("domain") or "", lp.get("title") or "")
+        if lpk in seen_previews:
+            continue
+        seen_previews.add(lpk)
+        link_previews.append(lp)
+
     return ChatFields(
         platform=platform,
         participants=participants,
@@ -2615,4 +2846,5 @@ def enrich_chat(existing: ChatFields | None, ocr: OCRResult) -> ChatFields:
         forwards=forwards,
         threads=threads,
         bot_messages=bot_messages,
+        link_previews=link_previews,
     )

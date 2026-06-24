@@ -206,6 +206,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             forwards=ch.get("forwards") or [],
             threads=ch.get("threads") or [],
             bot_messages=ch.get("bot_messages") or [],
+            link_previews=ch.get("link_previews") or [],
         )
     if m := fields_in.get("meme"):
         fields.meme = MemeFields(**{k: m.get(k) for k in MemeFields.model_fields})

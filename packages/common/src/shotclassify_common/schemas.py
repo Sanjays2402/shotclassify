@@ -1935,6 +1935,57 @@ class ChatFields(BaseModel):
     # * Identify which integrations a workspace uses (GitHub
     #   appears 5x, CircleCI 3x -> infer CI / VCS stack).
     bot_messages: list[dict[str, str | None]] = Field(default_factory=list)
+    # Link-preview / OG-card blocks detected in the screenshot. When a
+    # user pastes a URL into Slack / Discord / Teams / WhatsApp /
+    # Telegram, the client typically renders an inline preview card
+    # below the message body showing the page's Open Graph metadata:
+    #
+    #   Alice: check this out https://example.com/article
+    #
+    #   ┌──────────────────────────────────────┐
+    #   │ EXAMPLE.COM                          │
+    #   │ How LLMs Are Changing Search         │
+    #   │ A deep dive into the new search      │
+    #   │ landscape and what's coming next.    │
+    #   └──────────────────────────────────────┘
+    #
+    # OCR captures preserve the card text but lose the box drawing.
+    # The visible signature is: a domain / URL line followed by a
+    # title line followed by an optional description line. Each
+    # entry is a ``{"sender": str | None, "domain": str | None,
+    # "title": str, "description": str | None, "url": str | None}``
+    # dict.
+    #
+    # * ``sender`` is the speaker of the message that triggered the
+    #   preview (the nearest preceding ``Sender:`` line), or ``None``
+    #   for previews that sit outside a transcript.
+    # * ``domain`` is the parsed domain shown in the preview header
+    #   (``EXAMPLE.COM`` -> ``example.com``), or ``None`` when the
+    #   preview shows only a title.
+    # * ``title`` is the preview's headline (the largest text in
+    #   the card).
+    # * ``description`` is the preview's body text (the smaller
+    #   text below the title), or ``None`` when the card prints
+    #   only a title.
+    # * ``url`` is the source URL the preview was generated from
+    #   when extractable from the surrounding message body, or
+    #   ``None`` when only the card body is visible.
+    #
+    # Recognised shapes:
+    # * Slack: ``domain.com`` line + Bold title line + body line
+    # * Discord: ``Domain.com`` header + headline + description
+    # * Teams: ``> domain.com`` quoted + title + description
+    # * Telegram: ``📎 domain.com`` paperclip + title + description
+    # * WhatsApp: bare URL + title + description block
+    #
+    # Ordering preserves first-seen-in-OCR order. Capped at 20
+    # entries (a single screenshot rarely shows more than a handful
+    # of link previews). Distinct from ``raw["urls"]`` (which is
+    # the cross-category URL list) and from ``attachments`` (which
+    # is media files, not URL embeds). Dashboards use this to
+    # surface "this thread shares a lot of articles" annotations
+    # and to bias content-clustering by linked-source.
+    link_previews: list[dict[str, str | None]] = Field(default_factory=list)
 
 
 class MemeFields(BaseModel):
