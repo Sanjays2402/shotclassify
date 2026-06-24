@@ -23,8 +23,12 @@ pytestmark = pytest.mark.skipif(
 
 
 def _run_node(script: str, env: dict[str, str]) -> dict:
+    # Node 25 deprecated unconditional .ts imports via bare `node -e`. The
+    # webhooks contract test fixed this earlier by routing through `tsx`
+    # as a module loader; mirror that here so direct .ts imports survive
+    # the bump. `tsx` is bundled as a dev dependency of web/.
     proc = subprocess.run(
-        ["node", "--input-type=module", "-e", script],
+        ["node", "--import", "tsx", "--input-type=module", "-e", script],
         cwd=WEB,
         env={**os.environ, **env},
         capture_output=True,

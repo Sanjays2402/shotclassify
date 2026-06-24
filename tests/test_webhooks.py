@@ -88,12 +88,14 @@ Module.prototype.require = function(id) {
   return orig.apply(this, arguments);
 };
 const wh = await import('./lib/webhooks.ts');
+const ks = await import('./lib/keystore-core.ts');
 const h = await wh.createWebhook({ url: process.env.HOOK_URL, description: 'test' });
 const d = await wh.testFire(h);
-// Also exercise dispatchEvent path.
-await wh.dispatchEvent('classify.completed', { hello: 'world' });
+// dispatchEvent gained a workspace_id arg in a later tick; pass the same
+// default workspace createWebhook backfills so the fan-out finds the hook.
+await wh.dispatchEvent(ks.DEFAULT_WORKSPACE_ID, 'classify.completed', { hello: 'world' });
 // Give the fire-and-forget a moment to flush.
-await new Promise(r => setTimeout(r, 200));
+await new Promise(r => setTimeout(r, 400));
 const list = await wh.listDeliveries(h.id, 10);
 console.log(JSON.stringify({
   secret: h.secret,
@@ -105,6 +107,10 @@ console.log(JSON.stringify({
         env = {
             "SHOTCLASSIFY_STORE_DIR": str(tmp_path),
             "HOOK_URL": url,
+            # The SSRF guard added in a later tick rejects loopback URLs by
+            # default. This test deliberately points the webhook at a local
+            # listener, so flip the documented dev escape hatch.
+            "SHOTCLASSIFY_WEBHOOK_ALLOW_LOOPBACK": "1",
         }
         proc = subprocess.run(
             ["node", "--import", "tsx", "--input-type=module", "-e", script],
