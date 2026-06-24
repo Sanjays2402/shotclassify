@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (137 features tracked, 130 complete)
+## Roadmap (142 features tracked, 135 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -218,6 +218,14 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 147. [x] Chat: link-preview / OG-card detection into ChatFields.link_previews (new list of {sender, domain, title, description, url} dicts capturing inline preview cards Slack / Discord / Teams / WhatsApp / Telegram render below shared URLs; detection -- walk lines in source order, for each line matching standalone-domain shape AND not containing inline body text treat as preview header candidate, next non-blank line must contain 3+ words to qualify as title, line after title is optional description, URL extracted from most recent http(s):// pattern in 5 lines preceding the preview block; domain canonicalisation www. prefix stripped lowercased; safety -- @-prefix email lines rejected, / or ./ or ~/ path lines rejected, 12-domain reject-list slack.com / discord.com / discord.gg / teams.microsoft.com / telegram.org / t.me / whatsapp.com / wa.me / etc (messaging-platform clients almost never appear as preview headers), transcript Sender: text lines explicitly rejected, lone domain lines skipped, 1- and 2-word titles rejected; sender attribution tracks most recent Sender: transcript line; enrich_chat wired with standard caller-supplied merged with OCR-parsed dedup on (domain, title) pattern; 20-entry cap; LLM wire-format updated; distinct from raw["urls"] and attachments).
 
 
+### Done in tick 27 (5 features) -- FRONTEND override
+F1. [x] Web: keyboard-shortcuts help overlay opened by `?` (Linear / Raycast style) with platform-aware ⌘ / Ctrl glyph rendering, scoped grouping, and a sibling header chip. Catalogue lives in `lib/shortcuts.ts` as a single source of truth; `lib/shortcuts.test.mts` (15 tests) guards the matcher (bare-letter modifier rejection, mod+k Mac vs PC, shift+/ -> "?" alias, escape/enter name matching) and a multi-stroke sequence tracker (Linear-style `g t` -> scroll to top) covering window/reset/prefix semantics. `components/HotKeys.tsx` rewritten to feed every keydown into the tracker first before falling through to bare-letter nav (U / S / C / T).
+F2. [x] Web: reusable `<EmptyState>` panel + filter-aware shots empty-state. `components/EmptyState.tsx` standardises the eyebrow + felt-green icon well + h-display title + body + cue-yellow primary CTA + ghost secondary CTA pattern with two variants (panel / bare). `lib/empty-state.ts` is the pure copy helper -- `hasActiveFilters` / `describeFilters` / `emptyCopyForList(noun, filters)` swap "No shots yet" vs "No shots match that filter · Active: class receipt · >=85% confidence" based on whether the caller has filters applied. `lib/empty-state.test.mts` (9 tests) guards every filter slot, 32-char query truncation, single-sided vs double-sided date ranges, and the two title flavours. `app/shots/page.tsx` swaps its inline empty div for the component, with a one-click "Reset filters" CTA on the filtered branch.
+F3. [x] Web: `<ConfBadge>` semantic confidence pill with tiered colours + a11y label, replacing raw `pct()` spans in the feed and shots table. `lib/confidence.ts` is the pure helper module -- `confTier` (0.55 / 0.8 thresholds matching the existing palette), `TIER_LABEL`, `confAriaLabel` ("92.0 percent. High confidence."), `confDisplay` (clamped formatting), `confTokenName` (--color-conf-{high,mid,low} mapping), `confTooltip` (two-decimal hover hint). `components/ConfBadge.tsx` renders three sizes (sm / md / lg) and two variants (ghost transparent + tier-coloured border / solid filled background) with a tier-coloured dot glyph and `aria-label` for AT users. `lib/confidence.test.mts` (8 tests). Wired into `components/Feed.tsx` and `app/shots/page.tsx`'s confidence column.
+F4. [x] Web: dim theme toggle with localStorage persistence + flash-free pre-paint init. New `html[data-theme="dim"]` block in `globals.css` re-skins chalk-cream surface to a warm dark backplate while keeping felt-green and cue-yellow accents (panel / table / eyebrow / kbd / conf-bar / btn-ghost / header all override). `lib/theme.ts` exposes Light / Dim / Auto modes (`parseStoredMode` schema-safe parse, `resolveTheme` explicit-wins-over-system, `nextMode` cycle, `themeInitScript` runs in `<head>` BEFORE hydration so dim users never see a chalk-cream flash). `components/ThemeToggle.tsx` is the header chip -- left-click cycles modes, right-click opens a popover menu, matchMedia listener tracks live OS prefers-color-scheme flips. `lib/theme.test.mts` (11 tests) covers parse fallback, resolution matrix, cycle, init-script across four state combinations. Wired into `app/layout.tsx`. New "T" shortcut in `lib/shortcuts.ts` dispatches a custom event the toggle listens for.
+F5. [x] Web: top-edge scroll-progress bar + back-to-top floating chip (Linear / Vercel style). `lib/scroll-progress.ts` is the pure math -- `scrollProgress` returns 0..1 clamped (defends against macOS / iOS rubber-band overscroll + non-finite inputs + non-scrollable short pages), `backToTopVisible` toggles past a 600px default threshold. `components/ScrollProgress.tsx` coalesces scroll + resize events through `requestAnimationFrame` with passive listeners so the wheel firehose never blocks the compositor; the 3px bar is a felt-green-to-cue-yellow gradient with an 80ms smooth width transition; the 44px FAB fades + scales in at the bottom-right with 200ms transitions and respects `prefers-reduced-motion`. `lib/scroll-progress.test.mts` (7 tests). Wired into `app/layout.tsx`.
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -258,6 +266,28 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 152. [ ] Chart: legend swatch color mapping into `ChartFields.legend_map` (legends print `■ Q1 ■ Q2 ■ Q3 ■ Q4` with coloured square swatches that OCR captures preserve as `■`/`◆`/`●` glyphs -- pair colour to series label).
 153. [x] Code: SQL injection / unsafe query detection into `CodeFields.unsafe_queries` (recognise `cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")` f-string concatenation + `"SELECT * FROM users WHERE id = " + str(uid)` string concat + `query = "..."; cursor.execute(query)` after-the-fact concatenation; surface line offset + flagged pattern; pairs with existing dialect detection). Shipped in tick 26.
 154. [ ] Chat: app-integration card detection into `ChatFields.app_cards` (Slack-style rendered cards from GitHub / Linear / Jira / Figma / Asana integrations with `<App>` author + title + footer link; surface as list of `{app, title, link}` dicts; distinct from raw["urls"] because it carries the structured card context).
+
+### Frontend backlog (override active since 2026-06-23)
+F6.  [ ] Web: reuse `<EmptyState>` on `/notifications` (filter-aware), `/webhooks` list page, `/admin/seats`, and the `/digest` empty branch -- four pages still use bespoke "no rows" markup that should consolidate on the canonical component now that it exists.
+F7.  [ ] Web: skeleton loader system -- replace the `h-8 animate-pulse` ad-hoc skeleton rows in `/shots` with a `<Skeleton>` primitive (variants: text-line, chip, panel-row) so loading-state shimmer matches across pages instead of each page rolling its own animate-pulse div.
+F8.  [ ] Web: toast / inline-flash notification primitive replacing the per-page `bulkFlash` / `flash` state machines in `/shots`, `/webhooks`, `/admin/seats`, and saved views. Single `<Toaster>` mounted in `layout.tsx`, imperative `toast.success/error/info` API, auto-dismiss + a11y `role="status"`.
+F9.  [ ] Web: shot detail keyboard nav -- left/right arrows jump to prev/next shot in the most recent shots list, `j`/`k` cycle, `e` opens the umpire (correct) panel, `t` opens the tag editor (matching the new Linear-style discoverable shortcut catalogue).
+F10. [ ] Web: shot-thumbnail grid view for `/shots` as a viewing-mode toggle next to the existing table (radio: table / grid / compact). Grid cards show the OCR thumbnail, chip, conf-badge, and a hover overlay with file + timestamp. Existing filters apply unchanged.
+F11. [ ] Web: per-row inline preview drawer on `/shots` (click a row -> expand a vertical drawer below it with the OCR text, conf distribution mini-chart, and rationale -- without leaving the list). Toggle with the chevron the row already shows in the ID column.
+F12. [ ] Web: confidence histogram strip in `/stats` -- a 9-band bar chart of "shots in each 10% confidence bin" so users can spot the model's distribution shape at a glance. Reuses the existing recharts setup from `/shots/[id]` and `<ConfBadge>` colour tokens.
+F13. [ ] Web: command-palette categories / facets -- typing `class:receipt` or `>90%` in the palette filters the shot search by category / min-conf without leaving the modal. Pure UI; reuses existing `/api/history` query params.
+F14. [ ] Web: per-category color legend hover affordance -- mousing over a `<Chip>` shows a tiny popover with: count this week, mean confidence, P95 latency, "view in shots" link. Pure UI on top of the existing stats query.
+F15. [ ] Web: pinned shots quick-bar -- a horizontally scrolling row of pinned-shot thumbnails at the top of `/` (Live page) so users can jump back to their starred work without browsing all shots. Empty state hides the bar.
+F16. [ ] Web: confidence-trend sparkline on `/stats` -- a thin line chart showing rolling-24h mean confidence over the last 14 days, with a felt-green-to-cue-yellow gradient stroke matching `<ScrollProgress>`.
+F17. [ ] Web: in-app changelog / "what's new" popover triggered by clicking the version pill in the header. Pulls from a static `/web/lib/changelog.ts` array (date + title + body). Auto-shows once after each version bump (localStorage seen-version pointer).
+F18. [ ] Web: shot detail "copy as JSON" / "copy as Markdown" buttons -- adjacent to the existing ShareActions, exports the structured fields + rationale + OCR for paste-into-issue workflows. Pure clipboard API, no new endpoints.
+F19. [ ] Web: dark-mode-aware recharts theming -- every recharts surface (`/shots/[id]`, `/calibration`, future trend charts) needs to invert axis stroke + tooltip background under `[data-theme="dim"]`. Currently they render with hard-coded light tokens.
+F20. [ ] Web: keyboard-driven filter chips on `/shots` -- pressing `Tab` cycles focus through the filter chips (class / tag / pinned / etc) instead of jumping straight to the OCR search box. Pairs with the new `?` shortcut help so users discover the flow.
+F21. [ ] Web: live counter ticker color-pulse when a new classification lands -- the `<Ticker>` row briefly glows cue-yellow when its number ticks up so users notice live activity without watching it constantly. Pure CSS animation tied to the `useSWR` revalidate hook.
+F22. [ ] Web: collapsible side rail on the shot detail page -- the right column (OCR / rationale / pin / umpire / tags / frame) becomes overwhelming on long shots. Add a fold-up handle that collapses each subsection with smooth max-height animation + remembered state per slot in localStorage.
+F23. [ ] Web: API key creation modal polish -- the existing `/keys` page wraps the create flow in inline cards; replace with a focused modal (using the same chalk-surface + felt-green icon-well pattern from `<EmptyState>`) so the new key + scopes selection feels intentional.
+F24. [ ] Web: filter-summary breadcrumb above the shots table -- a slim row showing "Class: receipt · Tag: #important · since: 2026-01-01" as removable pills (click an `x` on each to clear that filter individually). Pairs with `describeFilters` from the new empty-state helper.
+F25. [ ] Web: PWA offline shell + offline-aware error state -- expand `/offline/page.tsx` to a proper offline UI (cached list of recently viewed shots, a "you're offline" banner across all routes when the service-worker reports disconnect).
 
 
 ## Tick log
@@ -1724,8 +1754,86 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
       contained the original URL. Falls back to URL on the
       domain line itself for Slack's bare-URL form.
 
+- 2026-06-24 00:54 PT (tick 27, Cake): 5 features -- FIRST tick under the
+  FRONTEND OVERRIDE (set 2026-06-23 in shotclassify-20min-prompt.md). Pure
+  Next.js / web/ work; no Python schema changes this tick.
+  - 4cba253 feat(web): keyboard shortcuts help overlay with `?` trigger
+  - d7f714e feat(web): EmptyState component + filter-aware shots empty-state
+  - 5537df5 feat(web): ConfBadge semantic confidence pill with tiered colors and a11y label
+  - c218fbc feat(web): dim theme toggle with localStorage persistence + flash-free init
+  - 5e33b04 feat(web): scroll progress bar + back-to-top FAB
+  - 0874945 chore(tests): unblock node-subprocess web tests under Node 25 + new SSRF guard
+  - Gate: ruff at baseline 536 (zero new errors -- my work was
+    all in web/ TypeScript which ruff doesn't scan) + pytest
+    6272 passed / 0 failed in 124.18s + web `npm test`
+    162 passed / 0 failed in 44.8s. Two pre-existing Python
+    test failures (test_webhook_dispatch_signs_and_delivers
+    + test_api_keystore_create_verify_delete) blocked the
+    gate -- both predated this tick (reproducible on
+    3cc0df1) and were caused by Node 25 deprecating bare
+    `.ts` imports via `node --input-type=module -e` PLUS
+    the SSRF guard rejecting the test's 127.0.0.1 listener.
+    Fixed in 0874945 by routing through `node --import tsx`
+    and setting SHOTCLASSIFY_WEBHOOK_ALLOW_LOOPBACK=1 and
+    threading DEFAULT_WORKSPACE_ID through dispatchEvent.
+    Five frontend slices ship:
+    * F1: `?` keyboard shortcuts help overlay (Linear /
+      Raycast style). Catalogue in lib/shortcuts.ts with
+      platform-aware ⌘/Ctrl glyph rendering + multi-stroke
+      sequence tracker for `g t` (scroll to top).
+    * F2: Reusable `<EmptyState>` panel + filter-aware
+      `/shots` empty state with one-click "Reset filters"
+      when filters are active.
+    * F3: `<ConfBadge>` semantic confidence pill replacing
+      raw pct() spans in feed + shots table. Tiered colours,
+      proper aria-label ("92.0 percent. High confidence.").
+    * F4: Dim theme toggle (Light / Dim / Auto) with
+      localStorage persistence + pre-paint init script so
+      dim users never see a chalk-cream flash.
+    * F5: Top-edge scroll-progress bar + back-to-top FAB
+      with prefers-reduced-motion support.
+    50 new vitest-style tests (15 + 9 + 8 + 11 + 7) across
+    five pure-helper lib modules (shortcuts / empty-state
+    / confidence / theme / scroll-progress). Plus the
+    plumbing fix (tests/test_web_api_keys.py + test_webhooks.py).
+    Roadmap backlog gains 20 frontend follow-ups (F6-F25)
+    spanning EmptyState rollout to other pages, skeleton
+    loaders, toast primitive, shot detail keyboard nav,
+    grid view, inline preview drawer, stats sparkline +
+    histogram, command-palette facets, dark-mode-aware
+    recharts, etc. -- five-six ticks of work pre-loaded.
+    Notable design decisions:
+    * Frontend override flagged at the top of STATE.md
+      header so future ticks see it immediately.
+    * `lib/shortcuts.ts` matcher is pure / DOM-free so it
+      can be unit-tested without jsdom. Same for theme,
+      empty-state, confidence, scroll-progress.
+    * Pre-paint theme init script lives in a stringified
+      module export so a Next.js Server Component can
+      dangerouslySetInnerHTML it into `<head>` before
+      hydration -- the only way to avoid a chalk-cream
+      flash for dim users.
+    * The "T" hotkey dispatches a custom
+      `shotclassify:theme-cycle` event the ThemeToggle
+      listens for, so the binding doesn't need to
+      duplicate persistence logic.
+    * Multi-stroke sequence tracker (`g t`) trims its
+      buffer to the longest still-prefix-of-some-sequence
+      tail so wrong keys don't force a 1.2s timeout wait
+      before the next sequence can start.
+    * ConfBadge `ghost` variant uses a translucent
+      tier-coloured background + 1px tier-coloured
+      border + tier-coloured TEXT so the tier signal is
+      visually triple-encoded (dot glyph + border + text).
+      `solid` variant is the louder filled chip.
+
 ## Risks / notes
-- Web UI work skipped again this tick -- Python-only shipping for speed.
+- Web UI work resumed under the FRONTEND OVERRIDE (set 2026-06-23 in
+  shotclassify-20min-prompt.md). Every tick now ships 5 frontend slices
+  until the override is removed. Roadmap refilled with 20 frontend
+  follow-ups (F6..F25) on tick 27 -- skeleton loaders, toast primitive,
+  shot detail keyboard nav, grid view, inline preview, stats charts,
+  command-palette facets, dark-mode-aware recharts, etc.
 - API / middleware features still deferred because of TestClient bootstrap cost.
 - raw["urls"], raw["paths"], raw["network"], raw["emails"], and
   raw["identifiers"] are all populated cross-category from the same
