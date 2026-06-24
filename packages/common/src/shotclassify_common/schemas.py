@@ -696,6 +696,42 @@ class ReceiptFields(BaseModel):
     # ``None`` for retail / food / fuel receipts that have no
     # cancellation context (the typical case).
     cancellation_policy: dict[str, str | int | float | None] | None = None
+    # Customer ship-to address block printed on shipping receipts /
+    # invoices / e-commerce captures. Most online retailers (Amazon,
+    # Shopify, eBay, Etsy, ePOS, Square Online) print a "Ship To:"
+    # block at the top or bottom of the order confirmation:
+    #
+    #   Ship To:
+    #   Alice Smith
+    #   123 Main St
+    #   Apt 4B
+    #   Springfield, IL 62704
+    #   United States
+    #
+    # Stored as a ``{"name": str | None, "lines": list[str],
+    # "city": str | None, "state": str | None, "postal_code": str |
+    # None, "country": str | None}`` dict.
+    #
+    # * ``name`` is the recipient's display name (line immediately
+    #   after the "Ship To:" header). ``None`` when no obvious
+    #   name line is present (some receipts print only the address).
+    # * ``lines`` is the cleaned list of address lines in source
+    #   order (street + unit + city/state line + country). Empty
+    #   when no recognised address content sits below the header.
+    # * ``city`` / ``state`` / ``postal_code`` / ``country`` are
+    #   parsed from the final lines when the trailing line matches a
+    #   recognised pattern (``City, STATE ZIP`` for US, ``City
+    #   POSTCODE`` for UK / Canada, etc.). ``None`` when the line
+    #   shape doesn't match any catalogue.
+    #
+    # ``None`` when the receipt prints no recognised ship-to block
+    # (typical for in-person retail / dine-in restaurant receipts).
+    # Distinct from ``store_id`` (the merchant location identifier)
+    # because ``ship_to`` is the CUSTOMER-side destination address.
+    # Dashboards use this to surface "this purchase ships to a
+    # commercial address" / "this purchase ships to a PO Box" /
+    # geographic distribution annotations without re-OCR.
+    ship_to: dict[str, str | list[str] | None] | None = None
     items: list[ReceiptLine] = Field(default_factory=list)
 
 

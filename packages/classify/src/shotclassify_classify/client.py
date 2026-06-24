@@ -142,6 +142,7 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             delivery_eta=r.get("delivery_eta"),
             lottery=r.get("lottery") or [],
             cancellation_policy=r.get("cancellation_policy"),
+            ship_to=r.get("ship_to"),
             items=items,
         )
     if c := fields_in.get("code"):

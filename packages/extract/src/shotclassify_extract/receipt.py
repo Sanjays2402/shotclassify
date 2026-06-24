@@ -3687,6 +3687,317 @@ def _find_cancellation_policy(
     return None
 
 
+# Ship-To address-block detection. E-commerce / shipping captures
+# (Amazon, Shopify, eBay, Etsy, Square Online, ePOS) print a
+# "Ship To:" / "Shipping Address:" / "Deliver To:" / "Recipient:"
+# block at the top or bottom of the receipt with the customer's
+# name + multi-line postal address.
+#
+# Recognised header phrases (most specific first):
+_SHIP_TO_HEADER_RE = re.compile(
+    r"^[ \t]*(?:"
+    r"Ship\s*To"
+    r"|Shipping\s*Address"
+    r"|Shipping\s*Info"
+    r"|Shipping\s*Details"
+    r"|Shipped\s*To"
+    r"|Deliver\s*To"
+    r"|Delivery\s*Address"
+    r"|Recipient"
+    r"|Mail\s*To"
+    r")[ \t]*[:\-][ \t]*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+# US tail: ``City, STATE ZIP`` or ``City, STATE ZIP+4``
+_SHIP_US_TAIL_RE = re.compile(
+    r"^(?P<city>[A-Z][A-Za-z .'\-]+?),\s*"
+    r"(?P<state>[A-Z]{2})\s+"
+    r"(?P<zip>\d{5}(?:-\d{4})?)\s*$",
+)
+# UK tail: ``City POSTCODE`` or ``City, POSTCODE``
+_SHIP_UK_TAIL_RE = re.compile(
+    r"^(?P<city>[A-Z][A-Za-z .'\-]+?)[,\s]+"
+    r"(?P<postal>[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\s*$",
+)
+# Canadian tail: ``City, PROV POSTAL`` where postal is A1A 1A1
+_SHIP_CA_TAIL_RE = re.compile(
+    r"^(?P<city>[A-Z][A-Za-z .'\-]+?),\s*"
+    r"(?P<state>[A-Z]{2})\s+"
+    r"(?P<postal>[A-Z]\d[A-Z]\s*\d[A-Z]\d)\s*$",
+)
+# Generic ``City, POSTAL`` (Australia / France / German PLZ etc.)
+_SHIP_GENERIC_TAIL_RE = re.compile(
+    r"^(?P<city>[A-Z][A-Za-z .'\-]+?)[,\s]+"
+    r"(?P<postal>\d{4,6})\s*$",
+)
+# Country line: a single capitalised word(s) line, typical bottom of
+# the ship-to block. We accept country names from a tiny known catalogue
+# to avoid bleeding the FIRST POST-ADDRESS prose line into the block.
+_SHIP_COUNTRY_NAMES: tuple[str, ...] = (
+    "United States",
+    "United States of America",
+    "USA",
+    "U.S.A.",
+    "U.S.",
+    "US",
+    "Canada",
+    "United Kingdom",
+    "U.K.",
+    "UK",
+    "Great Britain",
+    "Australia",
+    "New Zealand",
+    "Ireland",
+    "Germany",
+    "Deutschland",
+    "France",
+    "Italy",
+    "Spain",
+    "España",
+    "Netherlands",
+    "Belgium",
+    "Switzerland",
+    "Sweden",
+    "Norway",
+    "Denmark",
+    "Finland",
+    "Austria",
+    "Poland",
+    "Portugal",
+    "Mexico",
+    "México",
+    "Brazil",
+    "Brasil",
+    "Argentina",
+    "Chile",
+    "Colombia",
+    "Japan",
+    "South Korea",
+    "Korea",
+    "China",
+    "India",
+    "Singapore",
+    "Hong Kong",
+    "Taiwan",
+    "Thailand",
+    "Vietnam",
+    "Philippines",
+    "Indonesia",
+    "Malaysia",
+    "United Arab Emirates",
+    "UAE",
+    "Saudi Arabia",
+    "Israel",
+    "South Africa",
+    "Egypt",
+    "Nigeria",
+    "Kenya",
+)
+
+
+def _is_country_line(line: str) -> bool:
+    """True when ``line`` matches the curated country catalogue."""
+    s = line.strip().rstrip(".,;")
+    if not s:
+        return False
+    lower = s.lower()
+    for c in _SHIP_COUNTRY_NAMES:
+        if c.lower().rstrip(".,;") == lower:
+            return True
+    return False
+
+
+def _looks_like_terminator(line: str) -> bool:
+    """True when ``line`` shouldn't continue the ship-to block.
+
+    Receipts after the ship-to block usually print "Bill To:",
+    "Order #", "Subtotal:", "Items:" etc. -- any of these terminates
+    the block scan.
+    """
+    s = line.strip().lower()
+    if not s:
+        return True
+    terminator_words = (
+        "bill to",
+        "billing address",
+        "billing info",
+        "subtotal",
+        "total",
+        "tax",
+        "shipping cost",
+        "shipping method",
+        "tracking",
+        "order #",
+        "order number",
+        "order date",
+        "items",
+        "payment",
+        "invoice",
+        "note:",
+        "notes:",
+        "gift message",
+        "customer:",
+        "delivery date",
+        "delivery method",
+    )
+    for tw in terminator_words:
+        if s.startswith(tw):
+            return True
+    return False
+
+
+def _looks_like_name(line: str) -> bool:
+    """True when ``line`` looks like a recipient's name.
+
+    A name is a short (1..60 chars) line containing only letters,
+    spaces, apostrophes, hyphens, periods. No digits. Title-case
+    or ALL CAPS.
+    """
+    s = line.strip()
+    if not s or len(s) > 60:
+        return False
+    if any(c.isdigit() for c in s):
+        return False
+    # Must look like a name (Title Case or ALL CAPS); allow accented
+    # letters via isalpha
+    if not re.match(r"^[A-Z][A-Za-zÀ-ÿ' .\-]{0,58}$", s):
+        return False
+    # Reject lines that look like address tokens (street suffixes etc.)
+    tokens = s.split()
+    if any(
+        t.lower().rstrip(",.")
+        in {
+            "street",
+            "road",
+            "avenue",
+            "ave",
+            "ave.",
+            "st",
+            "st.",
+            "rd",
+            "rd.",
+            "blvd",
+            "boulevard",
+            "drive",
+            "dr",
+            "dr.",
+            "way",
+            "court",
+            "ct",
+            "ct.",
+            "lane",
+            "ln",
+            "place",
+            "pl",
+            "circle",
+            "cir",
+            "highway",
+            "hwy",
+            "suite",
+            "ste",
+            "apt",
+            "apartment",
+            "unit",
+            "floor",
+            "fl",
+            "p.o.",
+        }
+        for t in tokens
+    ):
+        return False
+    return True
+
+
+def _find_ship_to(text: str) -> dict[str, str | list[str] | None] | None:
+    """Return the recognised ship-to address block, or None.
+
+    Walks for a recognised ``Ship To:`` header, then collects up to
+    6 non-blank non-terminator lines beneath it. The first line is
+    treated as the recipient ``name`` when it satisfies
+    ``_looks_like_name``; subsequent lines populate ``lines``. The
+    final line is checked against the US / UK / Canada / generic
+    postal-tail regexes to populate ``city`` / ``state`` /
+    ``postal_code``. A country line (from the curated catalogue)
+    populates ``country`` and terminates collection.
+    """
+    if not text:
+        return None
+    header = _SHIP_TO_HEADER_RE.search(text)
+    if not header:
+        return None
+    tail = text[header.end():]
+    raw_lines = tail.splitlines()
+    # Skip a single leading blank.
+    while raw_lines and not raw_lines[0].strip():
+        raw_lines.pop(0)
+    collected: list[str] = []
+    country: str | None = None
+    for raw in raw_lines[:10]:
+        cleaned = raw.strip()
+        if not cleaned:
+            # blank inside block stops the scan unless we haven't found
+            # anything yet
+            if collected:
+                break
+            continue
+        if _looks_like_terminator(cleaned):
+            break
+        if _is_country_line(cleaned):
+            country = cleaned.rstrip(".,;")
+            collected.append(cleaned)
+            break
+        if len(collected) >= 6:
+            break
+        collected.append(cleaned)
+    if not collected:
+        return None
+    # Pull name out when the first line looks like one
+    name: str | None = None
+    lines = list(collected)
+    if _looks_like_name(lines[0]):
+        name = lines[0]
+        lines = lines[1:]
+    # Parse postal tail from the last non-country line
+    city: str | None = None
+    state: str | None = None
+    postal: str | None = None
+    parse_target = list(lines)
+    if country and parse_target and parse_target[-1] == country:
+        parse_target = parse_target[:-1]
+    if parse_target:
+        last = parse_target[-1]
+        for re_pattern in (
+            _SHIP_US_TAIL_RE,
+            _SHIP_CA_TAIL_RE,
+            _SHIP_UK_TAIL_RE,
+            _SHIP_GENERIC_TAIL_RE,
+        ):
+            m = re_pattern.match(last)
+            if not m:
+                continue
+            city = m.group("city").strip()
+            if "state" in m.groupdict():
+                state = m.group("state")
+            if "zip" in m.groupdict():
+                postal = m.group("zip")
+            elif "postal" in m.groupdict():
+                postal = m.group("postal")
+            break
+    result: dict[str, str | list[str] | None] = {
+        "name": name,
+        "lines": lines,
+        "city": city,
+        "state": state,
+        "postal_code": postal,
+        "country": country,
+    }
+    # Empty payload safety: if we collected only a country line that
+    # was stripped to nothing, return None.
+    if not lines and not name:
+        return None
+    return result
+
+
 def parse_receipt_text(text: str) -> ReceiptFields:
     subtotal = _find_amount_after(text, "subtotal")
     tax = _find_amount_after(text, "tax") or _find_amount_after(text, "vat")
@@ -3732,6 +4043,7 @@ def parse_receipt_text(text: str) -> ReceiptFields:
         delivery_eta=_find_delivery_eta(text),
         lottery=_find_lottery(text),
         cancellation_policy=_find_cancellation_policy(text),
+        ship_to=_find_ship_to(text),
         items=_parse_items(text),
     )
 
@@ -3749,7 +4061,7 @@ def enrich_receipt(existing: ReceiptFields | None, ocr: OCRResult) -> ReceiptFie
         "service_charge", "delivery_fee", "tendered", "change",
         "rounding", "gift_card_applied", "promo_code", "points_earned",
         "tip_url", "recurring", "warranty", "delivery_eta",
-        "cancellation_policy",
+        "cancellation_policy", "ship_to",
     ):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
