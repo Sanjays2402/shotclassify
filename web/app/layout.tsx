@@ -11,6 +11,8 @@ import OnboardingTour from "@/components/OnboardingTour";
 import AuthMenu from "@/components/AuthMenu";
 import PwaInstaller from "@/components/PwaInstaller";
 import NotificationBell from "@/components/NotificationBell";
+import ShortcutsHelp from "@/components/ShortcutsHelp";
+import ShortcutsHelpButton from "@/components/ShortcutsHelpButton";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -63,6 +65,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <HotKeys />
         <CommandPalette />
+        <ShortcutsHelp />
         <OnboardingTour />
         <PwaInstaller />
         <Ticker />
@@ -126,6 +129,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <CommandPaletteButton />
               <QuotaMeter compact />
               <NotificationBell />
+              <ShortcutsHelpButton />
               <span className="eyebrow hidden sm:inline">Press</span>
               <span className="kbd">U</span>
               <span className="eyebrow hidden sm:inline">to ingest</span>
