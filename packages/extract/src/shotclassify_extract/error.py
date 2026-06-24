@@ -3345,12 +3345,240 @@ def parse_error_text(text: str) -> ErrorFields:
     )
 
 
+# Sentry / Bugsnag / Rollbar breadcrumb trail. Sentry's UI prints a
+# "Breadcrumbs" table above the stacktrace with one row per event:
+#
+#   Breadcrumbs
+#   navigation     /home -> /checkout                10:42:01
+#   http           GET /api/cart 200                 10:42:03
+#   ui.click       button#submit                     10:42:08
+#   console        warning  Form validation skipped  10:42:09
+#   exception      TypeError: undefined is not ...   10:42:09
+#
+# Sentry JSON / SDK form:
+#
+#   {
+#     "category": "navigation",
+#     "level": "info",
+#     "message": "/home -> /checkout",
+#     "timestamp": "2024-01-15T10:42:01Z"
+#   }
+#
+# We accept TABLE form (the most common OCR shape from Sentry's UI)
+# and JSON form (when the capture pasted the SDK payload). The
+# category and level vocabularies match Sentry's documented set so
+# random multi-column tables don't false-positive as breadcrumbs.
+_BREADCRUMB_HEADER_RE = re.compile(
+    r"^\s*(?:Breadcrumbs|BREADCRUMBS|breadcrumb\s+trail|Event\s+breadcrumbs)\s*:?\s*$",
+    re.MULTILINE,
+)
+_BREADCRUMB_CATEGORIES = (
+    "navigation",
+    "http",
+    "ui.click",
+    "ui.input",
+    "ui.action",
+    "ui.gesture",
+    "ui.tap",
+    "ui.swipe",
+    "console",
+    "log",
+    "exception",
+    "query",
+    "db",
+    "sql",
+    "rpc",
+    "graphql",
+    "fetch",
+    "xhr",
+    "websocket",
+    "redirect",
+    "session",
+    "auth",
+    "info",
+    "warning",
+    "warn",
+    "error",
+    "debug",
+    "default",
+    "transaction",
+    "lifecycle",
+)
+_BREADCRUMB_LEVELS = ("info", "warning", "warn", "error", "debug", "critical", "fatal")
+# Table row: category (one of vocab) then 2+ spaces then message then
+# optional trailing time. Allows leading column gutters.
+_BREADCRUMB_ROW_RE = re.compile(
+    r"^\s*(?P<cat>"
+    + "|".join(re.escape(c) for c in _BREADCRUMB_CATEGORIES)
+    + r")\b"
+    + r"\s{2,}"
+    + r"(?P<body>.+?)"
+    + r"(?:\s{2,}(?P<ts>\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp][Mm])?"
+    r"|\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?))?"
+    + r"\s*$",
+    re.MULTILINE,
+)
+# JSON form for a single SDK-emitted breadcrumb: a JSON-ish object
+# with category + (message or data). Match the four standard fields.
+_BREADCRUMB_JSON_CATEGORY = re.compile(r'"category"\s*:\s*"([^"]+)"')
+_BREADCRUMB_JSON_MESSAGE = re.compile(r'"message"\s*:\s*"((?:\\.|[^"\\])*)"')
+_BREADCRUMB_JSON_LEVEL = re.compile(r'"level"\s*:\s*"([^"]+)"')
+_BREADCRUMB_JSON_TIMESTAMP = re.compile(r'"timestamp"\s*:\s*"([^"]+)"')
+
+
+def _split_level_from_body(body: str) -> tuple[str | None, str]:
+    """Split a leading ``info|warning|error|...`` level prefix off body.
+
+    Sentry table rows print ``console  warning  Form validation skipped``
+    where ``warning`` is the entry's level. Return ``(level, message)``
+    with the level stripped from the message, or ``(None, body)`` when
+    no level prefix matches.
+    """
+    stripped = body.lstrip()
+    for lvl in _BREADCRUMB_LEVELS:
+        if stripped.lower().startswith(lvl + " ") or stripped.lower().startswith(
+            lvl + "\t"
+        ):
+            rest = stripped[len(lvl):].lstrip()
+            canonical = "warning" if lvl == "warn" else lvl
+            return canonical, rest
+    return None, body.strip()
+
+
+def extract_breadcrumbs(text: str) -> list[dict[str, str | None]]:
+    """Extract Sentry-style breadcrumb entries from ``text``.
+
+    Returns a list of ``{"category", "message", "level",
+    "timestamp"}`` dicts in source-text order. Two recognised
+    shapes:
+
+    * Table form (Sentry / Bugsnag UI dumps): ``Breadcrumbs``
+      header line followed by rows ``CATEGORY  MESSAGE  TIME``.
+      Header is required to anchor the table so a random
+      multi-column document doesn't false-positive.
+    * JSON form (SDK payload pasted into the capture): one or
+      more inline ``{"category": "...", "message": "...",
+      "level": "...", "timestamp": "..."}`` objects. Header
+      not required because the JSON shape itself is the anchor.
+
+    Capped at 50 entries.
+    """
+    if not text or not isinstance(text, str):
+        return []
+
+    out: list[dict[str, str | None]] = []
+    consumed: list[tuple[int, int]] = []
+
+    def _push(entry: dict[str, str | None], offset: int) -> None:
+        if len(out) >= 50:
+            return
+        out.append(entry)
+        consumed.append((offset, offset + 1))
+
+    # --- JSON-form pass --------------------------------------------
+    # We walk every "category" key; for each, we look for nearby
+    # "message" / "level" / "timestamp" keys within a small window
+    # (the same JSON object should sit inside ~400 chars).
+    for cat_match in _BREADCRUMB_JSON_CATEGORY.finditer(text):
+        category = cat_match.group(1)
+        if category not in _BREADCRUMB_CATEGORIES:
+            continue
+        # Look backwards 50 chars + forwards 400 chars for sibling
+        # fields. This conservative window keeps us inside a single
+        # JSON object even when the source is OCR-mangled.
+        start = max(0, cat_match.start() - 50)
+        end = min(len(text), cat_match.end() + 400)
+        window = text[start:end]
+        msg_m = _BREADCRUMB_JSON_MESSAGE.search(window)
+        lvl_m = _BREADCRUMB_JSON_LEVEL.search(window)
+        ts_m = _BREADCRUMB_JSON_TIMESTAMP.search(window)
+        message = msg_m.group(1) if msg_m else ""
+        # JSON unescape \" \n \t common sequences
+        message = (
+            message.replace('\\"', '"')
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace("\\\\", "\\")
+        )
+        level = lvl_m.group(1) if lvl_m else None
+        if level == "warn":
+            level = "warning"
+        timestamp = ts_m.group(1) if ts_m else None
+        entry: dict[str, str | None] = {
+            "category": category,
+            "message": message,
+            "level": level,
+            "timestamp": timestamp,
+        }
+        _push(entry, cat_match.start())
+
+    # --- Table-form pass -------------------------------------------
+    header = _BREADCRUMB_HEADER_RE.search(text)
+    if header:
+        # Scan rows starting from the line after the header. Stop on
+        # 2+ consecutive blank lines (end of table) or end of text.
+        tail = text[header.end():]
+        blank_run = 0
+        for line in tail.splitlines():
+            if not line.strip():
+                blank_run += 1
+                if blank_run >= 2:
+                    break
+                continue
+            blank_run = 0
+            row = _BREADCRUMB_ROW_RE.match(line)
+            if not row:
+                continue
+            cat = row.group("cat")
+            body = row.group("body").strip()
+            ts = row.group("ts")
+            level, message = _split_level_from_body(body)
+            # Skip empty-message rows (likely garbage)
+            if not message:
+                continue
+            entry = {
+                "category": cat,
+                "message": message,
+                "level": level,
+                "timestamp": ts.strip() if ts else None,
+            }
+            # De-dupe against JSON-form entries already captured. Two
+            # entries collide when their (category, message) matches;
+            # the JSON form is preferred because it carries level +
+            # timestamp explicitly.
+            dup = False
+            for existing in out:
+                if (
+                    existing.get("category") == entry["category"]
+                    and existing.get("message") == entry["message"]
+                ):
+                    dup = True
+                    break
+            if dup:
+                continue
+            _push(entry, header.end())
+            if len(out) >= 50:
+                break
+
+    return out
+
+
 def enrich_error(existing: ErrorFields | None, ocr: OCRResult) -> ErrorFields:
-    parsed = parse_error_text(ocr.text or "")
+    text = ocr.text or ""
+    parsed = parse_error_text(text)
+    breadcrumbs = extract_breadcrumbs(text)
     if existing is None:
+        if breadcrumbs:
+            parsed = parsed.model_copy(update={"breadcrumbs": breadcrumbs})
         return parsed
     merged = existing.model_copy()
     for f in ("framework", "exception", "message", "likely_cause", "file", "line"):
         if getattr(merged, f) in (None, "", 0):
             setattr(merged, f, getattr(parsed, f))
+    # Backfill breadcrumbs when the caller didn't supply any. We
+    # never override a non-empty caller-supplied breadcrumb list
+    # because the LLM may have richer structured data than the
+    # regex pass can pull out of OCR-mangled text.
+    if not merged.breadcrumbs:
+        merged.breadcrumbs = breadcrumbs
     return merged

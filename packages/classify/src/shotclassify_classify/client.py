@@ -178,7 +178,15 @@ def _parse_llm_payload(payload: dict[str, Any]) -> tuple[Classification, Extract
             complexity=c.get("complexity") or [],
         )
     if e := fields_in.get("error"):
-        fields.error = ErrorFields(**{k: e.get(k) for k in ErrorFields.model_fields})
+        fields.error = ErrorFields(
+            framework=e.get("framework"),
+            exception=e.get("exception"),
+            message=e.get("message"),
+            likely_cause=e.get("likely_cause"),
+            file=e.get("file"),
+            line=e.get("line"),
+            breadcrumbs=e.get("breadcrumbs") or [],
+        )
     if ch := fields_in.get("chat"):
         fields.chat = ChatFields(
             platform=ch.get("platform"),

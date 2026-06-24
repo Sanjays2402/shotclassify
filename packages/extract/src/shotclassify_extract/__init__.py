@@ -42,6 +42,7 @@ from .emails import extract_emails
 from .emojis import extract_emoji_density, extract_emojis
 from .error import (
     enrich_error,
+    extract_breadcrumbs,
     parse_apollo_error,
     parse_beam_crash,
     parse_error_text,
@@ -118,6 +119,7 @@ __all__ = [
     "parse_syntax_caret",
     "parse_vue_error",
     "parse_beam_crash",
+    "extract_breadcrumbs",
     "extract_error_fingerprints",
     "extract_fx_pairs",
     "enrich_chat",

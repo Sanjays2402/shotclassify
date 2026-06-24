@@ -1447,6 +1447,39 @@ class ErrorFields(BaseModel):
     likely_cause: str | None = None
     file: str | None = None
     line: int | None = None
+    # Sentry-style breadcrumb trail printed above the stacktrace in
+    # Sentry / Bugsnag / Rollbar / Honeybadger error captures.
+    # Breadcrumbs are the sequence of user actions, HTTP calls, log
+    # entries, and navigation events that led up to the exception --
+    # they're the most useful debugging context after the stacktrace
+    # itself.
+    #
+    # Sentry's UI prints them as a table:
+    #
+    #   Breadcrumbs
+    #   navigation     /home -> /checkout                 10:42:01
+    #   http           GET /api/cart 200                  10:42:03
+    #   ui.click       button#submit                      10:42:08
+    #   console        warning  Form validation skipped   10:42:09
+    #   exception      TypeError: undefined is not ...    10:42:09
+    #
+    # Each entry is a ``{"category": str, "message": str,
+    # "level": str | None, "timestamp": str | None}`` dict. Recognised
+    # category tags include ``navigation`` / ``http`` / ``ui.click`` /
+    # ``ui.input`` / ``console`` / ``log`` / ``exception`` / ``query``
+    # / ``rpc`` / ``info`` / ``warning`` / ``error`` / ``debug`` /
+    # ``default``.
+    #
+    # Recognised level tags include ``info`` / ``warning`` /
+    # ``error`` / ``debug`` / ``critical`` / ``fatal``. Timestamps
+    # are preserved verbatim (Sentry prints in local time so we
+    # don't attempt normalisation).
+    #
+    # Ordering preserves source-text appearance (oldest action
+    # first, exception last) so dashboards can replay the trail.
+    # Capped at 50 entries. Empty list when no recognised
+    # breadcrumb block is present.
+    breadcrumbs: list[dict[str, str | None]] = Field(default_factory=list)
 
 
 class ChatFields(BaseModel):
