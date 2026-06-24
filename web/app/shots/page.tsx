@@ -8,6 +8,7 @@ import { Scales, CaretLeft, CaretRight, Trash, Tag, CheckSquare, Square, Star, C
 import { useSWRConfig } from "swr";
 import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
+import { ConfBadge } from "@/components/ConfBadge";
 import { SampleBadge } from "@/components/SampleBadge";
 import { ExportMenu } from "@/components/ExportMenu";
 import { EmptyState } from "@/components/EmptyState";
@@ -749,12 +750,13 @@ export default function ShotsPage() {
                     </td>
                     <td>
                       <div className="flex items-center gap-2 min-w-[180px]">
-                        <span
-                          className="num text-[12px] w-[52px]"
-                          style={{ color: confColor(r.confidence) }}
-                        >
-                          {pct(r.confidence, 1)}
-                        </span>
+                        <ConfBadge
+                          score={r.confidence}
+                          size="sm"
+                          variant="ghost"
+                          digits={1}
+                          className="w-[68px] justify-center"
+                        />
                         <div
                           className="flex-1"
                           style={{ ["--bar" as any]: confColor(r.confidence) }}

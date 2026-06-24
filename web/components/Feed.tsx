@@ -4,7 +4,8 @@ import useSWR from "swr";
 import Link from "next/link";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import { Chip } from "./Chip";
-import { confColor, ms, pct, type Category } from "@/lib/categories";
+import { ConfBadge } from "./ConfBadge";
+import { ms, type Category } from "@/lib/categories";
 import { makeSampleShots } from "@/lib/sample";
 
 type Row = {
@@ -98,12 +99,13 @@ export default function Feed({ limit = 18 }: { limit?: number }) {
                   </div>
                 </div>
                 <Chip cat={r.primary_category} />
-                <span
-                  className="num text-[12px] w-[60px] text-right"
-                  style={{ color: confColor(r.confidence) }}
-                  title={`${pct(r.confidence, 2)} confidence`}
-                >
-                  {pct(r.confidence, 1)}
+                <span className="w-[78px] flex justify-end">
+                  <ConfBadge
+                    score={r.confidence}
+                    size="sm"
+                    variant="ghost"
+                    digits={1}
+                  />
                 </span>
                 <span className="num text-[11px] opacity-70 w-[60px] text-right">
                   {ms(r.elapsed_ms ?? 0)}
