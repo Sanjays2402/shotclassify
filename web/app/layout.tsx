@@ -16,6 +16,7 @@ import ShortcutsHelpButton from "@/components/ShortcutsHelpButton";
 import ThemeToggle from "@/components/ThemeToggle";
 import ScrollProgress from "@/components/ScrollProgress";
 import Toaster from "@/components/Toaster";
+import WhatsNew from "@/components/WhatsNew";
 import { themeInitScript } from "@/lib/theme";
 
 const inter = Inter({
@@ -102,8 +103,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               >
                 SHOTCLASSIFY
               </span>
-              <span className="eyebrow ml-2">v0.1</span>
             </Link>
+            <WhatsNew />
             <nav className="flex items-center gap-4">
               <NavLink href="/">Live</NavLink>
               <NavLink href="/demo">Demo</NavLink>
