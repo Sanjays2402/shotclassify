@@ -21,6 +21,7 @@ import { UmpireControls } from "@/components/UmpireControls";
 import LabelTagsEditor from "@/components/LabelTagsEditor";
 import ShareActions from "@/components/ShareActions";
 import CopyExportButtons from "@/components/CopyExportButtons";
+import { useChartTheme } from "@/components/useChartTheme";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import {
   CATEGORIES,
@@ -70,6 +71,7 @@ export default function ShotDetail({
   const { mutate: globalMutate } = useSWRConfig();
   const [pinBusy, setPinBusy] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const chart = useChartTheme();
   useEffect(() => setMounted(true), []);
   const { data, error, isLoading } = useSWR<Detail>(
     ENDPOINTS.historyItem(id),
@@ -232,28 +234,21 @@ export default function ShotDetail({
             {mounted && (
             <ResponsiveContainer>
               <BarChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
-                <CartesianGrid stroke="rgba(11,15,12,0.08)" vertical={false} />
+                <CartesianGrid stroke={chart.gridStroke} vertical={false} />
                 <XAxis
                   dataKey="name"
-                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }}
-                  stroke="rgba(11,15,12,0.4)"
+                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: chart.tickFill }}
+                  stroke={chart.axisStroke}
                 />
                 <YAxis
-                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }}
-                  stroke="rgba(11,15,12,0.4)"
+                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: chart.tickFill }}
+                  stroke={chart.axisStroke}
                   domain={[0, 100]}
                   unit="%"
                 />
                 <Tooltip
-                  cursor={{ fill: "rgba(14,92,58,0.06)" }}
-                  contentStyle={{
-                    background: "var(--color-ink)",
-                    border: "1px solid #000",
-                    borderRadius: 3,
-                    color: "var(--color-chalk)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
-                  }}
+                  cursor={{ fill: chart.cursorFill }}
+                  contentStyle={chart.tooltip}
                   formatter={(v: any) => [`${v}%`, "score"]}
                 />
                 <Bar dataKey="score" radius={[2, 2, 0, 0]}>

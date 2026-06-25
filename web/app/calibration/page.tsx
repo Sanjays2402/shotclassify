@@ -15,11 +15,13 @@ import {
   Bar,
 } from "recharts";
 import { SampleBadge } from "@/components/SampleBadge";
+import { useChartTheme } from "@/components/useChartTheme";
 import { sampleReliability } from "@/lib/sample";
 
 export default function CalibrationPage() {
   const data = useMemo(() => sampleReliability(), []);
   const [mounted, setMounted] = useState(false);
+  const ct = useChartTheme();
   useEffect(() => setMounted(true), []);
 
   // Expected Calibration Error.
@@ -30,7 +32,7 @@ export default function CalibrationPage() {
   const brier = 0.072; // placeholder until exposed by API
   const logloss = 0.281;
 
-  const chart = data.map((d) => ({
+  const chart_ = data.map((d) => ({
     conf: +(d.conf * 100).toFixed(0),
     acc: +(d.acc * 100).toFixed(1),
     n: d.n,
@@ -59,23 +61,23 @@ export default function CalibrationPage() {
           <div style={{ width: "100%", height: 340 }}>
             {mounted && (
             <ResponsiveContainer>
-              <ComposedChart data={chart} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
-                <CartesianGrid stroke="rgba(11,15,12,0.08)" />
+              <ComposedChart data={chart_} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+                <CartesianGrid stroke={ct.gridStroke} />
                 <XAxis
                   dataKey="conf"
                   type="number"
                   domain={[0, 100]}
                   tickCount={11}
                   unit="%"
-                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }}
-                  stroke="rgba(11,15,12,0.5)"
+                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: ct.tickFill }}
+                  stroke={ct.axisStroke}
                   label={{
                     value: "Predicted confidence",
                     position: "insideBottom",
                     offset: -2,
                     fontSize: 11,
                     fontFamily: "var(--font-mono)",
-                    fill: "rgba(11,15,12,0.6)",
+                    fill: ct.tickFill,
                   }}
                 />
                 <YAxis
@@ -83,24 +85,17 @@ export default function CalibrationPage() {
                   domain={[0, 100]}
                   tickCount={6}
                   unit="%"
-                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }}
-                  stroke="rgba(11,15,12,0.5)"
+                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: ct.tickFill }}
+                  stroke={ct.axisStroke}
                 />
                 <YAxis
                   yAxisId="right"
                   orientation="right"
-                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }}
-                  stroke="rgba(11,15,12,0.3)"
+                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: ct.tickFill }}
+                  stroke={ct.axisStrokeFaint}
                 />
                 <Tooltip
-                  contentStyle={{
-                    background: "var(--color-ink)",
-                    border: "1px solid #000",
-                    borderRadius: 3,
-                    color: "var(--color-chalk)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
-                  }}
+                  contentStyle={ct.tooltip}
                 />
                 <ReferenceLine
                   yAxisId="left"
@@ -108,7 +103,7 @@ export default function CalibrationPage() {
                     { x: 0, y: 0 },
                     { x: 100, y: 100 },
                   ]}
-                  stroke="rgba(11,15,12,0.35)"
+                  stroke={ct.referenceStroke}
                   strokeDasharray="3 3"
                 />
                 <Bar

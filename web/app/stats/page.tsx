@@ -25,6 +25,7 @@ import {
 } from "@phosphor-icons/react/dist/ssr";
 import { Chip } from "@/components/Chip";
 import { SampleBadge } from "@/components/SampleBadge";
+import { useChartTheme } from "@/components/useChartTheme";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import { CATEGORIES, LONG, SHORT, ms, pct, type Category } from "@/lib/categories";
 
@@ -113,6 +114,7 @@ function Stat({
 export default function StatsPage() {
   const [hours, setHours] = useState(24);
   const [mounted, setMounted] = useState(false);
+  const ct = useChartTheme();
   useEffect(() => setMounted(true), []);
 
   const { data, error, isLoading } = useSWR<Aggregate>(
@@ -228,28 +230,21 @@ export default function StatsPage() {
                     <stop offset="100%" stopColor="var(--color-felt)" stopOpacity={0.05} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid stroke="rgba(11,15,12,0.08)" vertical={false} />
+                <CartesianGrid stroke={ct.gridStroke} vertical={false} />
                 <XAxis
                   dataKey="name"
-                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }}
-                  stroke="rgba(11,15,12,0.4)"
+                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: ct.tickFill }}
+                  stroke={ct.axisStroke}
                   interval="preserveStartEnd"
                 />
                 <YAxis
-                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }}
-                  stroke="rgba(11,15,12,0.4)"
+                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: ct.tickFill }}
+                  stroke={ct.axisStroke}
                   allowDecimals={false}
                 />
                 <Tooltip
-                  cursor={{ fill: "rgba(14,92,58,0.06)" }}
-                  contentStyle={{
-                    background: "var(--color-ink)",
-                    border: "1px solid #000",
-                    borderRadius: 3,
-                    color: "var(--color-chalk)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
-                  }}
+                  cursor={{ fill: ct.cursorFill }}
+                  contentStyle={ct.tooltip}
                 />
                 <Area
                   type="monotone"
@@ -282,27 +277,20 @@ export default function StatsPage() {
                   data={perClassChart}
                   margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
                 >
-                  <CartesianGrid stroke="rgba(11,15,12,0.08)" vertical={false} />
+                  <CartesianGrid stroke={ct.gridStroke} vertical={false} />
                   <XAxis
                     dataKey="name"
-                    tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }}
-                    stroke="rgba(11,15,12,0.4)"
+                    tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: ct.tickFill }}
+                    stroke={ct.axisStroke}
                   />
                   <YAxis
-                    tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }}
-                    stroke="rgba(11,15,12,0.4)"
+                    tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: ct.tickFill }}
+                    stroke={ct.axisStroke}
                     allowDecimals={false}
                   />
                   <Tooltip
-                    cursor={{ fill: "rgba(14,92,58,0.06)" }}
-                    contentStyle={{
-                      background: "var(--color-ink)",
-                      border: "1px solid #000",
-                      borderRadius: 3,
-                      color: "var(--color-chalk)",
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 11,
-                    }}
+                    cursor={{ fill: ct.cursorFill }}
+                    contentStyle={ct.tooltip}
                   />
                   <Bar dataKey="count" radius={[2, 2, 0, 0]}>
                     {perClassChart.map((d) => (
@@ -356,27 +344,20 @@ export default function StatsPage() {
                   data={confHistChart}
                   margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
                 >
-                  <CartesianGrid stroke="rgba(11,15,12,0.08)" vertical={false} />
+                  <CartesianGrid stroke={ct.gridStroke} vertical={false} />
                   <XAxis
                     dataKey="name"
-                    tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }}
-                    stroke="rgba(11,15,12,0.4)"
+                    tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: ct.tickFill }}
+                    stroke={ct.axisStroke}
                   />
                   <YAxis
-                    tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }}
-                    stroke="rgba(11,15,12,0.4)"
+                    tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: ct.tickFill }}
+                    stroke={ct.axisStroke}
                     allowDecimals={false}
                   />
                   <Tooltip
-                    cursor={{ fill: "rgba(14,92,58,0.06)" }}
-                    contentStyle={{
-                      background: "var(--color-ink)",
-                      border: "1px solid #000",
-                      borderRadius: 3,
-                      color: "var(--color-chalk)",
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 11,
-                    }}
+                    cursor={{ fill: ct.cursorFill }}
+                    contentStyle={ct.tooltip}
                   />
                   <Bar dataKey="count" radius={[2, 2, 0, 0]}>
                     {confHistChart.map((d) => (
