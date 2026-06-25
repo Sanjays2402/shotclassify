@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (147 features tracked, 140 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (155 features tracked, 145 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -302,20 +302,52 @@ F26. [ ] Web: shot-detail keyboard nav (the unfinished F9) PLUS prev/next chevro
 F27. [ ] Web: confidence-trend sparkline on `/stats` (the F16 idea) -- rolling 24h mean confidence over 14 days; reuse the now-theme-aware recharts setup + `useChartTheme()`.
 F28. [ ] Web: per-row inline preview drawer on `/shots` (the F11 idea), now that table/grid/compact modes exist -- expand a drawer under a table row with OCR + mini conf chart + rationale.
 F29. [ ] Web: grid-view density + sort affordances -- the new `<ShotGrid>` could grow a 2/3/4-column density control and honour the existing sort dropdown's order visibly (currently inherits it silently).
-F30. [ ] Web: empty-state for the pinned quick-bar's "View all" target -- `/shots?pinned=true` should actually READ the `pinned` URL param on load (today the page ignores query params). Wire `useSearchParams` -> initial filter state on /shots so all the stats/pinned deep-links land pre-filtered.
-F31. [ ] Web: theme-aware sparkline/zero-line tokens -- extend `lib/chart-theme.ts` with a `positiveStroke`/`negativeStroke`/`zeroLine` set for future trend charts so red/green deltas stay legible under dim.
-F32. [ ] Web: command-palette recent-shots section -- show the last few viewed shots (localStorage MRU) above search results when the query is empty.
+F30. [x] Web: shots list reads deep-link query params on load -- shipped tick 30. `lib/shots-deeplink.ts` validates category/q/tag/min_conf/since/until/sort/pinned; applied once on mount under a Suspense boundary, then the query string is cleared. Stats chips + pinned quick-bar deep-links now land pre-filtered.
+F31. [x] Web: theme-aware sparkline/zero-line tokens -- shipped tick 30. `lib/chart-theme.ts` gained positiveStroke/negativeStroke/positiveFill/negativeFill/zeroLine (light + brightened-dim) + deltaStroke()/deltaFill() helpers.
+F32. [x] Web: command-palette recent-shots section -- shipped tick 30. `lib/recent-shots.ts` MRU ring; shot-detail records real visits, palette shows "Recently viewed" above search when the query is empty.
 F33. [ ] Web: filter breadcrumb on `/notifications` + `/webhooks` lists -- reuse `<FilterBreadcrumb>` + a small adapter so the consolidation theme continues.
-F34. [ ] Web: stat-card hover detail on the `/stats` top KPIs (Lifetime / Mean conf / P95 / Corrections) -- a popover (reuse the CategoryLegendChip pattern) explaining how each is computed + the window it covers.
+F34. [x] Web: stat-card hover detail on the `/stats` top KPIs -- shipped tick 30. `lib/stat-explainers.ts` + `<StatInfoPopover>` "?" affordance on each of the 4 KPI cards (definition / how-computed / window scope).
 F35. [ ] Web: "copy as JSON/Markdown" extended to multi-select on `/shots` -- bulk export the current selection via the existing `lib/shot-export.ts` serializers.
-F36. [ ] Web: keyboard shortcut `v` on `/shots` to cycle the new view mode (table/grid/compact), registered in the shortcut catalogue + help overlay.
+F36. [x] Web: keyboard shortcut `v` on `/shots` to cycle the new view mode (table/grid/compact) -- shipped tick 30. Registered in the shortcut catalogue under the `shots` scope so it appears in the `?` help overlay's "On the shots list" section; input-guarded + modifier-safe.
 F37. [ ] Web: skeleton loaders for the `/stats` charts (reuse `<Skeleton>`) instead of the bare "Pulling rollups..." text while the aggregate loads.
 F38. [ ] Web: dim-mode polish pass on the felt hero band + `<Feed>` panel-dark cards -- audit contrast tokens so the Live page reads as intentionally-dark, not washed.
 F39. [ ] Web: per-class color swatch legend under the `/stats` ingest-tempo chart so the area/bar colors map to named classes at a glance.
 F40. [ ] Web: shot-detail "open next pinned" affordance -- when viewing a pinned shot, a small nav to step through the pinned set (pairs with the new quick-bar).
 
+### Frontend backlog refill (tick 30 -- F41-F48, frontend-override still active)
+F41. [ ] Web: confidence-trend sparkline on `/stats` (the long-open F16/F27) -- now that F31 shipped the delta/zero-line tokens, draw a rolling-24h mean-confidence line over 14 days, stroke coloured by deltaStroke()/deltaFill() (rising green / falling red) and a zeroLine baseline. Reuse `useChartTheme()`.
+F42. [ ] Web: command-palette "clear recent" affordance -- a tiny inline control on the "Recently viewed" section header to wipe the MRU ring (new clearRecentShots() in lib/recent-shots.ts + a small button), for shared / kiosk machines.
+F43. [ ] Web: shot-detail prev/next nav driven by the recent-shots ring -- chevrons in the detail header that step through the MRU list you just built, so paging back through what you were reviewing is one keypress (pairs with F26's history-window idea but uses the local ring, no fetch).
+F44. [ ] Web: persist the `/stats` window selector (24h/7d/30d) to localStorage so a return visit reopens on the same window instead of always 24h. Small lib (parse/serialize) + an effect, mirroring the view-mode persistence pattern.
+F45. [ ] Web: keyboard nav for the command palette "Recently viewed" rows is already wired, but add a `mod+1..9` quick-jump to the Nth result (nav or recent or hit) so power users can pick without arrowing. Pure key-to-index helper + unit tests.
+F46. [ ] Web: stat-card delta chips -- show a small up/down delta vs the previous equivalent window beside each KPI (e.g. mean-conf +2.1pts vs prior 7d), coloured with the new deltaStroke tokens. Backend may need a prior-window field on /api/aggregate (keep minimal).
+F47. [ ] Web: `/shots` shareable filter URL -- a "Copy link to this view" button that serialises the CURRENT filter state back INTO the deep-link query string (the inverse of F30's parser), so users can share a pre-filtered list. Reuse lib/shots-deeplink.ts with a new buildShotsDeepLink().
+F48. [ ] Web: empty-state for the command palette when there are no recents AND no query -- today the resting palette with zero history shows only nav; add a subtle "Tip: open a shot to see it here" hint under the nav so the Recently-viewed section's purpose is discoverable.
+
 
 ## Tick log
+- 2026-06-25 12:21 PT (tick 30, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  - b434c97 feat(web): theme-aware delta / zero-line chart tokens (F31)
+  - 82bd63b feat(web): explainer popovers on the stats KPI cards (F34)
+  - fe35f48 feat(web): recently-viewed shots in the command palette (F32)
+  - 83584eb feat(web): 'v' keyboard shortcut to cycle the shots view (F36)
+  - 5c4cefe feat(web): shots list reads deep-link query params on load (F30)
+  - Gate: tsc --noEmit clean (whole web project) + npm test 291 passed / 0 failed
+    (256 baseline + 35 new across 4 new lib modules: chart-theme delta tokens,
+    stat-explainers, recent-shots, shots-deeplink) + `next build` compiled
+    successfully (/shots still prerenders static -> the Suspense boundary
+    correctly contains useSearchParams). All work is web/ TS only -- zero
+    Python touched, so the pytest baseline cannot regress. `next lint` is NOT
+    configured in this repo; tsc + the 291 web tests + the production build are
+    the reliable web gates, all green.
+  - Theme: this batch leaned into discoverability + deep-linking. F31 lays the
+    token groundwork the still-open F27 confidence-trend sparkline will consume;
+    F30 makes every existing "view in shots" link land pre-filtered (stats
+    chips, legend popovers, pinned quick-bar all already emit the params).
+  - Frontend backlog: F30/F31/F32/F34/F36 marked done. Refilled with F41-F48
+    (8 new). Still open from earlier: F6/F9/F11/F16/F20-F23/F25, F26-F29, F33,
+    F35, F37-F40.
+
 - 2026-06-25 07:04 PT (tick 29, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   - 6af3bbe feat(web): removable filter-summary breadcrumb on the shots table (F24)
   - d571bb6 feat(web): dark-mode-aware recharts theming across all chart surfaces (F19)
