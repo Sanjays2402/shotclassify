@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { Scales, CaretLeft, CaretRight, Trash, Tag, CheckSquare, Square, Star, Crosshair, Table, GridFour, Rows } from "@phosphor-icons/react/dist/ssr";
 import { useSWRConfig } from "swr";
@@ -30,6 +30,7 @@ import {
   type ShotsViewMode,
 } from "@/lib/view-mode";
 import { toast } from "@/lib/toast-store";
+import { parseShotsDeepLink, hasDeepLink } from "@/lib/shots-deeplink";
 import {
   CATEGORIES,
   LONG,
@@ -65,8 +66,9 @@ function fmtTime(iso: string): string {
   });
 }
 
-export default function ShotsPage() {
+function ShotsPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [cat, setCat] = useState<"" | Category>("");
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
@@ -94,6 +96,32 @@ export default function ShotsPage() {
       // Storage blocked -- stay on the table default.
     }
   }, []);
+
+  // Apply deep-link query params ONCE on mount so links INTO the list land
+  // pre-filtered: the stats class-mix chips (`?category=receipt`), the
+  // pinned quick-bar's "View all" (`?pinned=true`), the legend popovers, etc.
+  // Historically the page ignored its own URL; now it seeds initial filter
+  // state from validated params. The guard ref keeps a later in-app filter
+  // change from being clobbered if the effect ever re-ran. We clear the
+  // params from the URL afterwards (replace, no scroll) so a manual filter
+  // tweak isn't fighting a stale query string the user can no longer see.
+  const deepLinkApplied = useRef(false);
+  useEffect(() => {
+    if (deepLinkApplied.current) return;
+    deepLinkApplied.current = true;
+    const link = parseShotsDeepLink(searchParams);
+    if (!hasDeepLink(link)) return;
+    if (link.category !== undefined) setCat(link.category);
+    if (link.q !== undefined) setQ(link.q);
+    if (link.tag !== undefined) setTag(link.tag);
+    if (link.minConfPct !== undefined) setMinConfPct(link.minConfPct);
+    if (link.since !== undefined) setSince(link.since);
+    if (link.until !== undefined) setUntil(link.until);
+    if (link.sort !== undefined) setSort(link.sort);
+    if (link.pinnedOnly !== undefined) setPinnedOnly(link.pinnedOnly);
+    setPage(0);
+    router.replace("/shots", { scroll: false });
+  }, [searchParams, router]);
 
   const setViewPersist = (next: ShotsViewMode) => {
     setView(next);
@@ -966,5 +994,27 @@ export default function ShotsPage() {
         </div>
       </nav>
     </div>
+  );
+}
+
+// useSearchParams() must render under a Suspense boundary in the Next App
+// Router. The inner component holds all the page logic; this thin wrapper
+// supplies the boundary with a lightweight loading shell.
+export default function ShotsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div
+          className="p-3"
+          aria-label="Loading shots"
+          role="status"
+          aria-busy="true"
+        >
+          <SkeletonRows rows={8} />
+        </div>
+      }
+    >
+      <ShotsPageInner />
+    </Suspense>
   );
 }
