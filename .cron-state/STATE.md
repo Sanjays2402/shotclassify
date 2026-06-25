@@ -280,25 +280,58 @@ F6.  [ ] Web: reuse `<EmptyState>` on `/notifications` (filter-aware), `/webhook
 F7.  [x] Web: skeleton loader system -- shipped tick 28. `<Skeleton>`/`<SkeletonText>`/`<SkeletonRows>` + `lib/skeleton.ts`; wired into `/shots` and `/webhooks`.
 F8.  [x] Web: toast / inline-flash notification primitive -- shipped tick 28. `lib/toast-store.ts` + `<Toaster>` in layout; `/shots` bulk + pin migrated off `bulkFlash`.
 F9.  [ ] Web: shot detail keyboard nav -- left/right arrows jump to prev/next shot in the most recent shots list, `j`/`k` cycle, `e` opens the umpire (correct) panel, `t` opens the tag editor (matching the new Linear-style discoverable shortcut catalogue).
-F10. [ ] Web: shot-thumbnail grid view for `/shots` as a viewing-mode toggle next to the existing table (radio: table / grid / compact). Grid cards show the OCR thumbnail, chip, conf-badge, and a hover overlay with file + timestamp. Existing filters apply unchanged.
+F10. [x] Web: shot-thumbnail grid view for `/shots` as a viewing-mode toggle -- shipped tick 29. `lib/view-mode.ts` (table/grid/compact, persisted) + `<ShotGrid>`; `.tbl-compact` density; filters apply unchanged.
 F11. [ ] Web: per-row inline preview drawer on `/shots` (click a row -> expand a vertical drawer below it with the OCR text, conf distribution mini-chart, and rationale -- without leaving the list). Toggle with the chevron the row already shows in the ID column.
-F12. [ ] Web: confidence histogram strip in `/stats` -- a 9-band bar chart of "shots in each 10% confidence bin" so users can spot the model's distribution shape at a glance. Reuses the existing recharts setup from `/shots/[id]` and `<ConfBadge>` colour tokens.
+F12. [x] Web: confidence histogram strip in `/stats` -- ALREADY SHIPPED (the "Confidence calibration" 10-bin bar chart on /stats reads `agg.confidence_histogram`); marked done tick 29 (no new work needed).
 F13. [x] Web: command-palette categories / facets -- shipped tick 28. `lib/palette-facets.ts` parses `class:`/`>90%`/`tag:` etc; CommandPalette filters `/api/history` + shows a facet pill row.
-F14. [ ] Web: per-category color legend hover affordance -- mousing over a `<Chip>` shows a tiny popover with: count this week, mean confidence, P95 latency, "view in shots" link. Pure UI on top of the existing stats query.
-F15. [ ] Web: pinned shots quick-bar -- a horizontally scrolling row of pinned-shot thumbnails at the top of `/` (Live page) so users can jump back to their starred work without browsing all shots. Empty state hides the bar.
+F14. [x] Web: per-category color legend hover affordance -- shipped tick 29. `lib/category-legend.ts` + `<CategoryLegendChip>` popover (count / share / mean conf / view-in-shots) on the /stats class-mix list.
+F15. [x] Web: pinned shots quick-bar -- shipped tick 29. `lib/pinned-bar.ts` + `<PinnedQuickBar>` horizontally-scrolling strip on `/`; hides when nothing pinned.
 F16. [ ] Web: confidence-trend sparkline on `/stats` -- a thin line chart showing rolling-24h mean confidence over the last 14 days, with a felt-green-to-cue-yellow gradient stroke matching `<ScrollProgress>`.
 F17. [x] Web: in-app changelog / "what's new" popover -- shipped tick 28. `lib/changelog.ts` feed + seen-pointer helpers; `<WhatsNew>` on the header version pill auto-opens once per bump for returning users.
 F18. [x] Web: shot detail "copy as JSON" / "copy as Markdown" buttons -- shipped tick 28. `lib/shot-export.ts` serializers + `<CopyExportButtons>` beside ShareActions; toast feedback.
-F19. [ ] Web: dark-mode-aware recharts theming -- every recharts surface (`/shots/[id]`, `/calibration`, future trend charts) needs to invert axis stroke + tooltip background under `[data-theme="dim"]`. Currently they render with hard-coded light tokens.
+F19. [x] Web: dark-mode-aware recharts theming -- shipped tick 29. `lib/chart-theme.ts` + `useChartTheme()` hook wired into /shots/[id], /calibration, /stats; axes/grids/ticks/cursors/reference lines + tooltip read correctly under dim and re-theme live.
 F20. [ ] Web: keyboard-driven filter chips on `/shots` -- pressing `Tab` cycles focus through the filter chips (class / tag / pinned / etc) instead of jumping straight to the OCR search box. Pairs with the new `?` shortcut help so users discover the flow.
 F21. [ ] Web: live counter ticker color-pulse when a new classification lands -- the `<Ticker>` row briefly glows cue-yellow when its number ticks up so users notice live activity without watching it constantly. Pure CSS animation tied to the `useSWR` revalidate hook.
 F22. [ ] Web: collapsible side rail on the shot detail page -- the right column (OCR / rationale / pin / umpire / tags / frame) becomes overwhelming on long shots. Add a fold-up handle that collapses each subsection with smooth max-height animation + remembered state per slot in localStorage.
 F23. [ ] Web: API key creation modal polish -- the existing `/keys` page wraps the create flow in inline cards; replace with a focused modal (using the same chalk-surface + felt-green icon-well pattern from `<EmptyState>`) so the new key + scopes selection feels intentional.
-F24. [ ] Web: filter-summary breadcrumb above the shots table -- a slim row showing "Class: receipt · Tag: #important · since: 2026-01-01" as removable pills (click an `x` on each to clear that filter individually). Pairs with `describeFilters` from the new empty-state helper.
+F24. [x] Web: filter-summary breadcrumb above the shots table -- shipped tick 29. `lib/filter-summary.ts` + `<FilterBreadcrumb>` removable pills (class/search/tag/conf/dates/pinned) + Clear all; also DRY'd the page's two inline reset handlers onto one resetAllFilters().
 F25. [ ] Web: PWA offline shell + offline-aware error state -- expand `/offline/page.tsx` to a proper offline UI (cached list of recently viewed shots, a "you're offline" banner across all routes when the service-worker reports disconnect).
+
+### Frontend backlog refill (tick 29 -- F26-F40, frontend-override still active)
+F26. [ ] Web: shot-detail keyboard nav (the unfinished F9) PLUS prev/next chevron buttons in the detail header so the flow is discoverable without the shortcut. Reads the most-recent `/api/history` window for ordering.
+F27. [ ] Web: confidence-trend sparkline on `/stats` (the F16 idea) -- rolling 24h mean confidence over 14 days; reuse the now-theme-aware recharts setup + `useChartTheme()`.
+F28. [ ] Web: per-row inline preview drawer on `/shots` (the F11 idea), now that table/grid/compact modes exist -- expand a drawer under a table row with OCR + mini conf chart + rationale.
+F29. [ ] Web: grid-view density + sort affordances -- the new `<ShotGrid>` could grow a 2/3/4-column density control and honour the existing sort dropdown's order visibly (currently inherits it silently).
+F30. [ ] Web: empty-state for the pinned quick-bar's "View all" target -- `/shots?pinned=true` should actually READ the `pinned` URL param on load (today the page ignores query params). Wire `useSearchParams` -> initial filter state on /shots so all the stats/pinned deep-links land pre-filtered.
+F31. [ ] Web: theme-aware sparkline/zero-line tokens -- extend `lib/chart-theme.ts` with a `positiveStroke`/`negativeStroke`/`zeroLine` set for future trend charts so red/green deltas stay legible under dim.
+F32. [ ] Web: command-palette recent-shots section -- show the last few viewed shots (localStorage MRU) above search results when the query is empty.
+F33. [ ] Web: filter breadcrumb on `/notifications` + `/webhooks` lists -- reuse `<FilterBreadcrumb>` + a small adapter so the consolidation theme continues.
+F34. [ ] Web: stat-card hover detail on the `/stats` top KPIs (Lifetime / Mean conf / P95 / Corrections) -- a popover (reuse the CategoryLegendChip pattern) explaining how each is computed + the window it covers.
+F35. [ ] Web: "copy as JSON/Markdown" extended to multi-select on `/shots` -- bulk export the current selection via the existing `lib/shot-export.ts` serializers.
+F36. [ ] Web: keyboard shortcut `v` on `/shots` to cycle the new view mode (table/grid/compact), registered in the shortcut catalogue + help overlay.
+F37. [ ] Web: skeleton loaders for the `/stats` charts (reuse `<Skeleton>`) instead of the bare "Pulling rollups..." text while the aggregate loads.
+F38. [ ] Web: dim-mode polish pass on the felt hero band + `<Feed>` panel-dark cards -- audit contrast tokens so the Live page reads as intentionally-dark, not washed.
+F39. [ ] Web: per-class color swatch legend under the `/stats` ingest-tempo chart so the area/bar colors map to named classes at a glance.
+F40. [ ] Web: shot-detail "open next pinned" affordance -- when viewing a pinned shot, a small nav to step through the pinned set (pairs with the new quick-bar).
 
 
 ## Tick log
+- 2026-06-25 07:04 PT (tick 29, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  - 6af3bbe feat(web): removable filter-summary breadcrumb on the shots table (F24)
+  - d571bb6 feat(web): dark-mode-aware recharts theming across all chart surfaces (F19)
+  - 31a4a45 feat(web): table / grid / compact view toggle on the shots list (F10)
+  - 9e243c3 feat(web): pinned-shots quick-bar on the Live page (F15)
+  - df45f5b feat(web): per-category legend hover popover on the stats class mix (F14)
+  - Gate: tsc --noEmit clean (whole web project) + npm test 256 passed / 0 failed
+    (213 baseline + 43 new across 5 new lib modules). All work is web/ TS only --
+    zero Python touched, so the pytest baseline cannot regress. `next lint` is NOT
+    configured in this repo (no eslintrc; `next lint` drops into an interactive
+    setup prompt) -- tsc + the 256 web tests are the reliable web gates, both green.
+  - Note: F12 (confidence histogram on /stats) was found ALREADY SHIPPED (the
+    "Confidence calibration" 10-bin chart) -- marked done rather than padded.
+  - Frontend backlog refilled with F26-F40 (15 new items); F9/F11/F16/F20-F23/F25
+    still open from the earlier batch.
+
 - 2026-06-20 05:37 PT (tick 1, Cake): bootstrap + 5 features.
   - 0d85454 feat(extract/receipt): tip and gratuity extraction
   - 9ac3b34 feat(extract/receipt): payment method detection
