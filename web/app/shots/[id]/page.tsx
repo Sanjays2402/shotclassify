@@ -20,6 +20,7 @@ import { SampleBadge } from "@/components/SampleBadge";
 import { UmpireControls } from "@/components/UmpireControls";
 import LabelTagsEditor from "@/components/LabelTagsEditor";
 import ShareActions from "@/components/ShareActions";
+import CopyExportButtons from "@/components/CopyExportButtons";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import {
   CATEGORIES,
@@ -108,6 +109,26 @@ export default function ShotDetail({
     score: +(d.score * 100).toFixed(2),
   }));
 
+  // Structured payload for the copy-as-JSON / copy-as-Markdown export.
+  const exportShot = {
+    id: rec.id,
+    filename: rec.filename,
+    created_at: rec.created_at,
+    primary_category: rec.primary_category,
+    confidence: rec.confidence,
+    elapsed_ms: rec.elapsed_ms ?? null,
+    source: rec.source ?? null,
+    label: rec.label ?? null,
+    tags: rec.tags ?? [],
+    user_corrected_to: rec.user_corrected_to ?? null,
+    ocr_text: rec.ocr?.text || rec.ocr_text || null,
+    rationale: rec.classification?.rationale ?? null,
+    distribution: sortedDist.map((d) => ({
+      category: d.category,
+      score: d.score,
+    })),
+  };
+
   if (isLoading && !rec) {
     return <div className="p-6 text-sm opacity-70">Cueing up the replay…</div>;
   }
@@ -121,6 +142,11 @@ export default function ShotDetail({
         <span className="opacity-40">/</span>
         <span className="num">{shortId(rec.id)}</span>
         {isSample && <SampleBadge note="No record found; rendering seeded sample." />}
+        {isSample && (
+          <div className="ml-auto">
+            <CopyExportButtons shot={exportShot} />
+          </div>
+        )}
         {!isSample && (
           <div className="ml-auto flex items-center gap-2">
             <button
@@ -157,6 +183,7 @@ export default function ShotDetail({
               <Star size={14} weight={rec.pinned ? "fill" : "duotone"} />
               {rec.pinned ? "Pinned" : "Pin"}
             </button>
+            <CopyExportButtons shot={exportShot} />
             <ShareActions id={rec.id} />
           </div>
         )}
