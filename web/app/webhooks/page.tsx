@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Skeleton } from "@/components/Skeleton";
 import {
   Broadcast as Webhooks,
   Plus,
@@ -459,13 +460,9 @@ export default function WebhooksPage() {
       <section>
         <h2 className="h-display text-base mb-3">Endpoints</h2>
         {hooks === null ? (
-          <div className="space-y-2" aria-hidden>
+          <div className="space-y-2" aria-label="Loading webhooks" role="status" aria-busy="true">
             {[0, 1].map((i) => (
-              <div
-                key={i}
-                className="h-20 rounded border animate-pulse bg-black/[0.03]"
-                style={{ borderColor: "var(--color-rule)" }}
-              />
+              <Skeleton key={i} variant="block" height={80} />
             ))}
           </div>
         ) : hooks.length === 0 ? (

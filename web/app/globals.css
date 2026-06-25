@@ -418,3 +418,47 @@ html, body {
     animation: none;
   }
 }
+
+/* Skeleton shimmer primitive (components/Skeleton.tsx). A travelling
+   highlight sweeps across a muted base. Reduced-motion users get a static
+   pulse-free tint so nothing distracts. Dim mode lifts the base + sweep so
+   the shimmer stays visible on the dark backplate. */
+.sc-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgba(11, 15, 12, 0.07);
+  background-image: linear-gradient(
+    90deg,
+    rgba(11, 15, 12, 0) 0%,
+    rgba(11, 15, 12, 0.06) 50%,
+    rgba(11, 15, 12, 0) 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: sc-skeleton-sweep 1.3s ease-in-out infinite;
+}
+html[data-theme="dim"] .sc-skeleton {
+  background: rgba(232, 226, 204, 0.08);
+  background-image: linear-gradient(
+    90deg,
+    rgba(232, 226, 204, 0) 0%,
+    rgba(232, 226, 204, 0.07) 50%,
+    rgba(232, 226, 204, 0) 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+}
+@keyframes sc-skeleton-sweep {
+  from {
+    background-position: 180% 0;
+  }
+  to {
+    background-position: -80% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-skeleton {
+    animation: none;
+    background-image: none;
+  }
+}

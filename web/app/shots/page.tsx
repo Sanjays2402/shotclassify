@@ -12,6 +12,7 @@ import { ConfBadge } from "@/components/ConfBadge";
 import { SampleBadge } from "@/components/SampleBadge";
 import { ExportMenu } from "@/components/ExportMenu";
 import { EmptyState } from "@/components/EmptyState";
+import { SkeletonRows } from "@/components/Skeleton";
 import { SavedViewsBar, type SavedViewFilters } from "@/components/SavedViewsBar";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
@@ -558,14 +559,8 @@ export default function ShotsPage() {
 
       <div className="panel overflow-hidden">
         {isLoading && !rows.length ? (
-          <div className="p-3 flex flex-col gap-2" aria-label="Loading shots">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-8 rounded-sm animate-pulse"
-                style={{ background: "var(--color-rule)", opacity: 0.35 }}
-              />
-            ))}
+          <div className="p-3" aria-label="Loading shots" role="status" aria-busy="true">
+            <SkeletonRows rows={8} />
           </div>
         ) : error && !rows.length ? (
           <div className="p-8 text-center">
