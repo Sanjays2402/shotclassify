@@ -14,8 +14,10 @@ import { ExportMenu } from "@/components/ExportMenu";
 import { EmptyState } from "@/components/EmptyState";
 import { SkeletonRows } from "@/components/Skeleton";
 import { SavedViewsBar, type SavedViewFilters } from "@/components/SavedViewsBar";
+import { FilterBreadcrumb } from "@/components/FilterBreadcrumb";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
+import type { FilterKey } from "@/lib/filter-summary";
 import { toast } from "@/lib/toast-store";
 import {
   CATEGORIES,
@@ -109,6 +111,48 @@ export default function ShotsPage() {
   const goCompare = () => {
     if (picked.length !== 2) return;
     router.push(`/compare?a=${picked[0]}&b=${picked[1]}`);
+  };
+
+  // Clear a single active filter by key -- backs the FilterBreadcrumb pills.
+  const clearOne = (key: FilterKey) => {
+    switch (key) {
+      case "category":
+        setCat("");
+        break;
+      case "q":
+        setQ("");
+        break;
+      case "tag":
+        setTag("");
+        break;
+      case "minConf":
+        setMinConfPct(0);
+        break;
+      case "since":
+        setSince("");
+        break;
+      case "until":
+        setUntil("");
+        break;
+      case "pinned":
+        setPinnedOnly(false);
+        break;
+    }
+    setPage(0);
+  };
+
+  const resetAllFilters = () => {
+    setCat("");
+    setQ("");
+    setLimit(50);
+    setSince("");
+    setUntil("");
+    setMinConfPct(0);
+    setSort("new");
+    setTag("");
+    setPinnedOnly(false);
+    setPage(0);
+    setPicked([]);
   };
 
   const toIsoStart = (d: string) =>
@@ -370,19 +414,7 @@ export default function ShotsPage() {
 
         <button
           className="btn btn-ghost"
-          onClick={() => {
-            setCat("");
-            setQ("");
-            setLimit(50);
-            setSince("");
-            setUntil("");
-            setMinConfPct(0);
-            setSort("new");
-            setTag("");
-            setPinnedOnly(false);
-            setPage(0);
-            setPicked([]);
-          }}
+          onClick={resetAllFilters}
         >
           Reset
         </button>
@@ -443,6 +475,20 @@ export default function ShotsPage() {
           if (typeof f.limit === "number") setLimit(f.limit);
           setPage(0);
         }}
+      />
+
+      <FilterBreadcrumb
+        filters={{
+          category: cat || undefined,
+          q: qDebounced || undefined,
+          tag: tagDebounced || undefined,
+          minConfPct,
+          since: since || undefined,
+          until: until || undefined,
+          pinnedOnly,
+        }}
+        onClear={clearOne}
+        onClearAll={resetAllFilters}
       />
 
       {bulk.size > 0 && (
@@ -603,19 +649,7 @@ export default function ShotsPage() {
                     ? {
                         label: "Reset filters",
                         kind: "cue",
-                        onClick: () => {
-                          setCat("");
-                          setQ("");
-                          setLimit(50);
-                          setSince("");
-                          setUntil("");
-                          setMinConfPct(0);
-                          setSort("new");
-                          setTag("");
-                          setPinnedOnly(false);
-                          setPage(0);
-                          setPicked([]);
-                        },
+                        onClick: resetAllFilters,
                       }
                     : {
                         label: "Ingest a frame",
