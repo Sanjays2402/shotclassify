@@ -37,6 +37,13 @@ import {
 } from "@phosphor-icons/react";
 
 import { fuzzyScore as _fuzzy, rankNav } from "@/lib/command-palette";
+import {
+  parseFacets,
+  hasFacets,
+  facetsToHistoryParams,
+  describeFacets,
+} from "@/lib/palette-facets";
+import { ENDPOINTS } from "@/lib/api";
 
 type Nav = {
   kind: "nav";
@@ -134,11 +141,18 @@ export default function CommandPalette() {
     }
   }, [open]);
 
+  // Parse inline facets (`class:receipt`, `>90%`, `tag:foo`) out of the
+  // query. The residual free text drives the fuzzy nav + history search.
+  const facets = useMemo(() => parseFacets(q), [q]);
+  const facetSummary = describeFacets(facets);
+
   // Debounced history search.
   useEffect(() => {
     if (!open) return;
-    const Q = q.trim();
-    if (!Q) {
+    // Search when there's residual text OR at least one structured facet --
+    // `class:receipt` alone should list receipts even with no free text.
+    const Q = facets.text.trim();
+    if (!Q && !hasFacets(facets)) {
       setHits([]);
       return;
     }
@@ -146,16 +160,15 @@ export default function CommandPalette() {
     setLoading(true);
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(
-          `/api/history?q=${encodeURIComponent(Q)}&limit=8`,
-          { credentials: "include" },
-        );
+        const url = ENDPOINTS.history(facetsToHistoryParams(facets, 8));
+        const r = await fetch(url, { credentials: "include" });
         if (!r.ok) {
           if (!cancel) setHits([]);
           return;
         }
         const j = await r.json();
-        const items: Hit[] = (j.items || j.history || []).map(
+        const raw = Array.isArray(j) ? j : j.items || j.history || j.data || [];
+        const items: Hit[] = (raw as Record<string, unknown>[]).map(
           (x: Record<string, unknown>) => ({
             kind: "hit" as const,
             id: String(x.id ?? ""),
@@ -178,7 +191,7 @@ export default function CommandPalette() {
       cancel = true;
       clearTimeout(t);
     };
-  }, [q, open]);
+  }, [facets, open]);
 
   const navMatches = useMemo<Nav[]>(() => {
     return rankNav(q, NAV, 8).slice(0, q.trim() ? 8 : 6);
@@ -244,7 +257,7 @@ export default function CommandPalette() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={onKey}
-            placeholder="Jump to a page or search your shots"
+            placeholder="Jump to a page, or search shots — try class:receipt >90%"
             aria-label="Search command palette"
             className="flex-1 bg-transparent outline-none text-[14px]"
           />
@@ -255,6 +268,32 @@ export default function CommandPalette() {
             Esc
           </kbd>
         </div>
+
+        {facetSummary && (
+          <div
+            className="flex items-center gap-2 px-3 py-1.5 border-b text-[11px]"
+            style={{ borderColor: "var(--color-rule, #e5e7eb)" }}
+            data-testid="palette-facets"
+          >
+            <span className="opacity-60 uppercase tracking-wider text-[10px]">
+              Filtering
+            </span>
+            <span
+              className="num inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm"
+              style={{
+                background: "var(--color-felt, #1f4d2b)",
+                color: "var(--color-chalk, #fff)",
+              }}
+            >
+              {facetSummary}
+            </span>
+            {facets.text && (
+              <span className="opacity-60">
+                matching &ldquo;{facets.text}&rdquo;
+              </span>
+            )}
+          </div>
+        )}
 
         <div
           ref={listRef}
