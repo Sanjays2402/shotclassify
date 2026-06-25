@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { chartTheme, axisTick } from "./chart-theme.ts";
+import { chartTheme, axisTick, deltaStroke, deltaFill } from "./chart-theme.ts";
 
 test("chartTheme: dim and light resolve to distinct palettes", () => {
   const light = chartTheme("light");
@@ -54,4 +54,43 @@ test("axisTick: builds a recharts tick bag from the theme fill", () => {
   assert.equal(tick.fontSize, 10);
   // Custom font size flows through.
   assert.equal(axisTick(dim, 12).fontSize, 12);
+});
+
+test("chartTheme: delta + zeroLine tokens exist and differ per theme", () => {
+  const light = chartTheme("light");
+  const dim = chartTheme("dim");
+  for (const t of [light, dim]) {
+    assert.ok(t.positiveStroke);
+    assert.ok(t.negativeStroke);
+    assert.ok(t.positiveFill);
+    assert.ok(t.negativeFill);
+    assert.ok(t.zeroLine);
+    // Rising vs falling must be visually distinct or the colour-coding is moot.
+    assert.notEqual(t.positiveStroke, t.negativeStroke);
+  }
+  // Dim brightens the strokes so they lift off the dark panel -> not equal.
+  assert.notEqual(light.positiveStroke, dim.positiveStroke);
+  assert.notEqual(light.negativeStroke, dim.negativeStroke);
+  assert.notEqual(light.zeroLine, dim.zeroLine);
+});
+
+test("deltaStroke: positive/zero -> positive colour, negative -> negative colour", () => {
+  const t = chartTheme("light");
+  assert.equal(deltaStroke(t, 0.5), t.positiveStroke);
+  assert.equal(deltaStroke(t, 0), t.positiveStroke); // flat reads as fine, not bad
+  assert.equal(deltaStroke(t, -0.3), t.negativeStroke);
+});
+
+test("deltaStroke: a non-finite delta falls back to the neutral zero line", () => {
+  const t = chartTheme("dim");
+  assert.equal(deltaStroke(t, NaN), t.zeroLine);
+  assert.equal(deltaStroke(t, Infinity), t.zeroLine);
+});
+
+test("deltaFill: mirrors deltaStroke direction; non-finite is transparent", () => {
+  const t = chartTheme("light");
+  assert.equal(deltaFill(t, 2), t.positiveFill);
+  assert.equal(deltaFill(t, 0), t.positiveFill);
+  assert.equal(deltaFill(t, -1), t.negativeFill);
+  assert.equal(deltaFill(t, NaN), "transparent");
 });

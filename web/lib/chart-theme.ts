@@ -38,6 +38,17 @@ export type ChartTheme = {
   cursorFill: string;
   // Reference-line stroke (e.g. the y=x diagonal on the calibration chart).
   referenceStroke: string;
+  // Delta tokens for trend / sparkline charts that encode direction. A
+  // rising series (e.g. mean-confidence climbing) strokes green; a falling
+  // one strokes red; the y=0 baseline gets a neutral zeroLine. The *Fill
+  // pair are the faint area-fill companions (use under an <Area>). These
+  // stay legible under both the light and dim palettes -- the dim variants
+  // are lightened/brightened so they don't sink into the dark panel.
+  positiveStroke: string;
+  negativeStroke: string;
+  positiveFill: string;
+  negativeFill: string;
+  zeroLine: string;
   // Tooltip card style bag, ready to spread onto <Tooltip contentStyle>.
   tooltip: ChartTooltipStyle;
 };
@@ -58,6 +69,11 @@ const LIGHT: ChartTheme = {
   tickFill: "rgba(11,15,12,0.65)",
   cursorFill: "rgba(14,92,58,0.06)",
   referenceStroke: "rgba(11,15,12,0.35)",
+  positiveStroke: "#0E5C3A", // felt green -- a rising trend reads "good"
+  negativeStroke: "#B91C1C", // umpire red -- a falling trend reads "watch"
+  positiveFill: "rgba(14,92,58,0.14)",
+  negativeFill: "rgba(185,28,28,0.12)",
+  zeroLine: "rgba(11,15,12,0.22)",
   tooltip: { ...TOOLTIP_BASE },
 };
 
@@ -68,6 +84,11 @@ const DIM: ChartTheme = {
   tickFill: "rgba(232,226,204,0.62)",
   cursorFill: "rgba(20,112,74,0.18)",
   referenceStroke: "rgba(232,226,204,0.32)",
+  positiveStroke: "#3FBF82", // brightened green so it lifts off the dark panel
+  negativeStroke: "#F2696B", // brightened red, same reason
+  positiveFill: "rgba(63,191,130,0.20)",
+  negativeFill: "rgba(242,105,107,0.18)",
+  zeroLine: "rgba(232,226,204,0.28)",
   tooltip: { ...TOOLTIP_BASE },
 };
 
@@ -90,4 +111,22 @@ export function axisTick(theme: ChartTheme, fontSize = 10): {
     fontFamily: "var(--font-mono)",
     fill: theme.tickFill,
   };
+}
+
+// Pick the directional stroke for a signed delta. A positive (or zero,
+// treated as flat-but-fine) value strokes the positive colour; a strictly
+// negative value strokes the negative colour. Non-finite deltas fall back to
+// the neutral zeroLine so a NaN never renders an alarming red line. Used by
+// trend sparklines that colour their stroke by the start->end direction.
+export function deltaStroke(theme: ChartTheme, delta: number): string {
+  if (!Number.isFinite(delta)) return theme.zeroLine;
+  if (delta < 0) return theme.negativeStroke;
+  return theme.positiveStroke;
+}
+
+// The area-fill companion to deltaStroke, for an <Area> under the trend line.
+export function deltaFill(theme: ChartTheme, delta: number): string {
+  if (!Number.isFinite(delta)) return "transparent";
+  if (delta < 0) return theme.negativeFill;
+  return theme.positiveFill;
 }
