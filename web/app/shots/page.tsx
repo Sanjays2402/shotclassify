@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Scales, CaretLeft, CaretRight, Trash, Tag, CheckSquare, Square, Star, Crosshair } from "@phosphor-icons/react/dist/ssr";
+import { Scales, CaretLeft, CaretRight, Trash, Tag, CheckSquare, Square, Star, Crosshair, Table, GridFour, Rows } from "@phosphor-icons/react/dist/ssr";
 import { useSWRConfig } from "swr";
 import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
@@ -15,9 +15,20 @@ import { EmptyState } from "@/components/EmptyState";
 import { SkeletonRows } from "@/components/Skeleton";
 import { SavedViewsBar, type SavedViewFilters } from "@/components/SavedViewsBar";
 import { FilterBreadcrumb } from "@/components/FilterBreadcrumb";
+import { ShotGrid } from "@/components/ShotGrid";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
 import type { FilterKey } from "@/lib/filter-summary";
+import {
+  parseViewMode,
+  nextViewMode,
+  labelForViewMode,
+  isTabular,
+  isCompact,
+  SHOTS_VIEW_STORAGE_KEY,
+  SHOTS_VIEW_MODES,
+  type ShotsViewMode,
+} from "@/lib/view-mode";
 import { toast } from "@/lib/toast-store";
 import {
   CATEGORIES,
@@ -72,7 +83,26 @@ export default function ShotsPage() {
   const [bulk, setBulk] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [tagInput, setTagInput] = useState("");
+  const [view, setView] = useState<ShotsViewMode>("table");
   const { mutate: globalMutate } = useSWRConfig();
+
+  // Load the persisted view mode once on mount (SSR can't know it).
+  useEffect(() => {
+    try {
+      setView(parseViewMode(window.localStorage.getItem(SHOTS_VIEW_STORAGE_KEY)));
+    } catch {
+      // Storage blocked -- stay on the table default.
+    }
+  }, []);
+
+  const setViewPersist = (next: ShotsViewMode) => {
+    setView(next);
+    try {
+      window.localStorage.setItem(SHOTS_VIEW_STORAGE_KEY, next);
+    } catch {
+      // Ignore quota / privacy-mode errors.
+    }
+  };
 
   useEffect(() => {
     const t = setTimeout(() => setQDebounced(q.trim()), 250);
@@ -290,6 +320,34 @@ export default function ShotsPage() {
               ? `${showingFrom}–${showingTo} of ${effectiveTotal}`
               : `${rows.length} rows`}
           </span>
+          <div
+            className="inline-flex items-center rounded-sm border overflow-hidden"
+            style={{ borderColor: "var(--color-rule)" }}
+            role="group"
+            aria-label="View mode"
+          >
+            {SHOTS_VIEW_MODES.map((m) => {
+              const Icon = m === "table" ? Table : m === "grid" ? GridFour : Rows;
+              const active = view === m;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setViewPersist(m)}
+                  aria-pressed={active}
+                  aria-label={`${labelForViewMode(m)} view`}
+                  title={`${labelForViewMode(m)} view`}
+                  className="inline-flex items-center justify-center w-7 h-7 transition-colors"
+                  style={{
+                    background: active ? "var(--color-felt)" : "transparent",
+                    color: active ? "var(--color-chalk)" : "var(--color-ink)",
+                  }}
+                >
+                  <Icon size={15} weight="duotone" />
+                </button>
+              );
+            })}
+          </div>
         </div>
       </header>
 
@@ -666,9 +724,20 @@ export default function ShotsPage() {
               />
             );
           })()
+        ) : !isTabular(view) ? (
+          <ShotGrid
+            rows={rows}
+            bulk={bulk}
+            picked={picked}
+            isSample={isSample}
+            onToggleBulk={toggleBulk}
+            onTogglePick={togglePick}
+            onTogglePin={(r) => void togglePin(r as Row)}
+            onTagClick={(t) => setTag(t)}
+          />
         ) : (
           <div className="overflow-auto max-h-[70vh]">
-            <table className="tbl">
+            <table className={isCompact(view) ? "tbl tbl-compact" : "tbl"}>
               <thead>
                 <tr>
                   <th className="w-[28px]" aria-label="Bulk select">

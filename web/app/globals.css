@@ -271,6 +271,19 @@ html, body {
 .tbl tbody tr:hover {
   background: rgba(14, 92, 58, 0.06);
 }
+
+/* Compact table density (shots view toggle). Tightens vertical padding and
+   nudges the font down so power users can scan more rows per screen without
+   losing the column layout. */
+.tbl-compact {
+  font-size: 12px;
+}
+.tbl-compact thead th {
+  padding: 5px 12px;
+}
+.tbl-compact tbody td {
+  padding: 4px 12px;
+}
 .num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
