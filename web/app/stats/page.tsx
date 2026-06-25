@@ -24,10 +24,12 @@ import {
   Warning,
 } from "@phosphor-icons/react/dist/ssr";
 import { Chip } from "@/components/Chip";
+import { CategoryLegendChip } from "@/components/CategoryLegendChip";
 import { SampleBadge } from "@/components/SampleBadge";
 import { useChartTheme } from "@/components/useChartTheme";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import { CATEGORIES, LONG, SHORT, ms, pct, type Category } from "@/lib/categories";
+import { categoryLegendSummary, totalCount } from "@/lib/category-legend";
 
 type Aggregate = {
   total: number;
@@ -125,6 +127,7 @@ export default function StatsPage() {
 
   const live = !!data && !error && data.total > 0;
   const agg = live ? data! : sampleAggregate(hours);
+  const perClassTotal = totalCount(agg.per_class);
 
   const perClassChart = agg.per_class.map((d) => ({
     name: SHORT[d.category],
@@ -310,7 +313,9 @@ export default function StatsPage() {
                 key={d.category}
                 className="grid grid-cols-[120px_1fr_64px_64px] items-center gap-3 text-[12px]"
               >
-                <Chip cat={d.category} />
+                <CategoryLegendChip
+                  summary={categoryLegendSummary(d, perClassTotal)}
+                />
                 <div
                   className="h-1.5 rounded-sm overflow-hidden"
                   style={{ background: "rgba(11,15,12,0.08)" }}
