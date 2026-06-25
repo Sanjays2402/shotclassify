@@ -25,6 +25,7 @@ import {
 } from "@phosphor-icons/react/dist/ssr";
 import { Chip } from "@/components/Chip";
 import { CategoryLegendChip } from "@/components/CategoryLegendChip";
+import { StatInfoPopover } from "@/components/StatInfoPopover";
 import { SampleBadge } from "@/components/SampleBadge";
 import { useChartTheme } from "@/components/useChartTheme";
 import { fetcher, ENDPOINTS } from "@/lib/api";
@@ -95,16 +96,21 @@ function Stat({
   value,
   hint,
   icon,
+  info,
 }: {
   label: string;
   value: string;
   hint?: string;
   icon: React.ReactNode;
+  info?: React.ReactNode;
 }) {
   return (
     <div className="panel p-4 flex flex-col gap-1">
       <div className="flex items-center justify-between">
-        <span className="eyebrow">{label}</span>
+        <span className="eyebrow flex items-center gap-1.5">
+          {label}
+          {info}
+        </span>
         <span className="opacity-60">{icon}</span>
       </div>
       <div className="num text-[24px]">{value}</div>
@@ -195,24 +201,28 @@ export default function StatsPage() {
           value={agg.total.toLocaleString()}
           hint={`${agg.window_count.toLocaleString()} in window`}
           icon={<Stack weight="duotone" size={18} />}
+          info={<StatInfoPopover stat="lifetime" hours={hours} />}
         />
         <Stat
           label="Mean confidence"
           value={pct(agg.mean_confidence, 1)}
           hint={`${agg.latency_ms.count} timed`}
           icon={<Gauge weight="duotone" size={18} />}
+          info={<StatInfoPopover stat="mean_confidence" hours={hours} />}
         />
         <Stat
           label="P95 latency"
           value={ms(agg.latency_ms.p95)}
           hint={`p50 ${ms(agg.latency_ms.p50)} · p99 ${ms(agg.latency_ms.p99)}`}
           icon={<Timer weight="duotone" size={18} />}
+          info={<StatInfoPopover stat="p95_latency" hours={hours} />}
         />
         <Stat
           label="Corrections"
           value={agg.corrections.toLocaleString()}
           hint={`${pct(agg.correction_rate, 1)} rate`}
           icon={<PencilSimple weight="duotone" size={18} />}
+          info={<StatInfoPopover stat="corrections" hours={hours} />}
         />
       </section>
 
