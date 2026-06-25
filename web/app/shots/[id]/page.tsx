@@ -23,6 +23,7 @@ import ShareActions from "@/components/ShareActions";
 import CopyExportButtons from "@/components/CopyExportButtons";
 import { useChartTheme } from "@/components/useChartTheme";
 import { fetcher, ENDPOINTS } from "@/lib/api";
+import { recordRecentShot } from "@/lib/recent-shots";
 import {
   CATEGORIES,
   LONG,
@@ -101,6 +102,18 @@ export default function ShotDetail({
     : null;
 
   const rec = (data ?? sample)!;
+  // Record this visit in the recently-viewed MRU ring (powers the command
+  // palette's "recently viewed" section). Only real records -- never the
+  // seeded sample shown for a 404 -- so the palette can't link to a ghost id.
+  useEffect(() => {
+    if (isSample || !data) return;
+    recordRecentShot({
+      id: data.id,
+      label: (data.label && data.label.trim()) || data.filename,
+      category: data.primary_category,
+    });
+  }, [isSample, data]);
+
   const dist =
     rec.classification?.confidences ??
     sampleDistribution(rec.primary_category, rec.confidence);

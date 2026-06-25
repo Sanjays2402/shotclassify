@@ -43,6 +43,7 @@ import {
   facetsToHistoryParams,
   describeFacets,
 } from "@/lib/palette-facets";
+import { readRecentShots, type RecentShot } from "@/lib/recent-shots";
 import { ENDPOINTS } from "@/lib/api";
 
 type Nav = {
@@ -65,7 +66,14 @@ type Hit = {
   tags?: string[];
 };
 
-type Item = Nav | Hit;
+type Recent = {
+  kind: "recent";
+  id: string;
+  label: string;
+  category?: string;
+};
+
+type Item = Nav | Hit | Recent;
 
 const NAV: Nav[] = [
   { kind: "nav", id: "nav-live", label: "Live", hint: "Realtime classifier", href: "/", icon: <House size={16} weight="duotone" /> },
@@ -99,6 +107,7 @@ export default function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Hit[]>([]);
+  const [recents, setRecents] = useState<Recent[]>([]);
   const [loading, setLoading] = useState(false);
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -136,6 +145,16 @@ export default function CommandPalette() {
       setQ("");
       setHits([]);
       setCursor(0);
+      // Pull the recently-viewed ring fresh each open so a shot visited in
+      // another tab shows up. Mapped to the palette's `recent` item shape.
+      setRecents(
+        readRecentShots().map((r: RecentShot) => ({
+          kind: "recent" as const,
+          id: r.id,
+          label: r.label,
+          category: r.category,
+        })),
+      );
       // focus the input after paint
       requestAnimationFrame(() => inputRef.current?.focus());
     }
@@ -197,7 +216,19 @@ export default function CommandPalette() {
     return rankNav(q, NAV, 8).slice(0, q.trim() ? 8 : 6);
   }, [q]);
 
-  const items: Item[] = useMemo(() => [...navMatches, ...hits], [navMatches, hits]);
+  // Show the recently-viewed ring only on the resting palette -- no free
+  // text and no structured facet. Once the user starts typing, live search
+  // hits take over the lower section.
+  const showRecents = !facets.text.trim() && !hasFacets(facets);
+  const recentItems = useMemo<Recent[]>(
+    () => (showRecents ? recents : []),
+    [showRecents, recents],
+  );
+
+  const items: Item[] = useMemo(
+    () => [...navMatches, ...recentItems, ...hits],
+    [navMatches, recentItems, hits],
+  );
 
   // Clamp cursor.
   useEffect(() => {
@@ -332,10 +363,42 @@ export default function CommandPalette() {
             </Section>
           )}
 
+          {recentItems.length > 0 && (
+            <Section title="Recently viewed">
+              {recentItems.map((r, k) => {
+                const i = navMatches.length + k;
+                const active = cursor === i;
+                return (
+                  <Row
+                    key={`recent-${r.id}`}
+                    active={active}
+                    onMouseEnter={() => setCursor(i)}
+                    onClick={() => choose(r)}
+                  >
+                    <ClockCounterClockwise
+                      size={16}
+                      weight="duotone"
+                      className="opacity-80"
+                    />
+                    <span className="flex-1 truncate">
+                      <span className="font-medium truncate">{r.label}</span>
+                      {r.category && (
+                        <span className="opacity-60 ml-2 text-[12px] uppercase tracking-wide">
+                          {r.category}
+                        </span>
+                      )}
+                    </span>
+                    <ArrowRight size={14} weight="duotone" className="opacity-50" />
+                  </Row>
+                );
+              })}
+            </Section>
+          )}
+
           {hits.length > 0 && (
             <Section title={loading ? "Shots (loading...)" : "Shots"}>
               {hits.map((h, j) => {
-                const i = navMatches.length + j;
+                const i = navMatches.length + recentItems.length + j;
                 const active = cursor === i;
                 const conf =
                   typeof h.confidence === "number"
