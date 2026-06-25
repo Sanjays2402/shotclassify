@@ -169,3 +169,16 @@ test("SHORTCUTS catalogue has stable ids and unique matches per scope", () => {
   assert.ok(SHORTCUTS.some((s) => s.id === "open-help"));
   assert.ok(SHORTCUTS.some((s) => s.id === "open-palette"));
 });
+
+test("cycle-view shortcut: bound to bare 'v' in the shots scope", () => {
+  const s = SHORTCUTS.find((x) => x.id === "cycle-view");
+  assert.ok(s, "cycle-view shortcut must exist");
+  assert.equal(s!.scope, "shots");
+  assert.equal(s!.combo.match, "v");
+  // Bare "v" fires; modified V (paste) must NOT, so the layout never flips
+  // out from under a clipboard paste.
+  assert.equal(matchesShortcut("v", ev({ key: "v" })), true);
+  assert.equal(matchesShortcut("v", ev({ key: "V" })), true);
+  assert.equal(matchesShortcut("v", ev({ key: "v", metaKey: true })), false);
+  assert.equal(matchesShortcut("v", ev({ key: "v", ctrlKey: true })), false);
+});

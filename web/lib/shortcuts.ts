@@ -74,6 +74,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
     combo: { keys: ["T"], match: "t" },
     label: "Cycle theme (Light / Dim / Auto)",
   },
+  {
+    id: "cycle-view",
+    scope: "shots",
+    combo: { keys: ["V"], match: "v" },
+    label: "Cycle list view (Table / Grid / Compact)",
+  },
 ] as const;
 
 // A minimal, framework-free representation of a key event so the matcher is

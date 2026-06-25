@@ -104,6 +104,40 @@ export default function ShotsPage() {
     }
   };
 
+  // "v" cycles the list view (Table -> Grid -> Compact), matching the
+  // discoverable shortcut now listed in the ? help overlay under "On the
+  // shots list". Mirrors HotKeys' input-guard so typing "v" in the OCR
+  // search box never flips the layout, and skips when a modifier is held so
+  // it never collides with Cmd/Ctrl-V paste. Uses the functional setView so
+  // the listener stays correct without re-binding on every view change.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key.toLowerCase() !== "v") return;
+      e.preventDefault();
+      setView((cur) => {
+        const next = nextViewMode(cur);
+        try {
+          window.localStorage.setItem(SHOTS_VIEW_STORAGE_KEY, next);
+        } catch {
+          // Ignore quota / privacy-mode errors.
+        }
+        return next;
+      });
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   useEffect(() => {
     const t = setTimeout(() => setQDebounced(q.trim()), 250);
     return () => clearTimeout(t);
