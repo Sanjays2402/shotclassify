@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { SavedViewsBar, type SavedViewFilters } from "@/components/SavedViewsBar";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
+import { toast } from "@/lib/toast-store";
 import {
   CATEGORIES,
   LONG,
@@ -67,10 +68,6 @@ export default function ShotsPage() {
   const [picked, setPicked] = useState<string[]>([]);
   const [bulk, setBulk] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
-  const [bulkFlash, setBulkFlash] = useState<
-    | { kind: "ok" | "err"; msg: string }
-    | null
-  >(null);
   const [tagInput, setTagInput] = useState("");
   const { mutate: globalMutate } = useSWRConfig();
 
@@ -162,7 +159,6 @@ export default function ShotsPage() {
   ) {
     if (bulkBusy || bulk.size === 0) return;
     setBulkBusy(true);
-    setBulkFlash(null);
     try {
       const body: Record<string, unknown> = {
         ids: Array.from(bulk),
@@ -190,20 +186,16 @@ export default function ShotsPage() {
           : action === "pin"
           ? "pinned"
           : "unpinned";
-      setBulkFlash({
-        kind: "ok",
-        msg: `${verb} ${json.affected} shot${json.affected === 1 ? "" : "s"}${
+      toast.success(
+        `${verb} ${json.affected} shot${json.affected === 1 ? "" : "s"}${
           json.missing?.length ? `, ${json.missing.length} skipped` : ""
         }.`,
-      });
+      );
       if (action === "delete") setBulk(new Set());
       setTagInput("");
       await reloadHistory();
     } catch (e) {
-      setBulkFlash({
-        kind: "err",
-        msg: (e as Error).message || "Bulk action failed.",
-      });
+      toast.error((e as Error).message || "Bulk action failed.");
     } finally {
       setBulkBusy(false);
     }
@@ -218,11 +210,9 @@ export default function ShotsPage() {
       });
       if (!res.ok) throw new Error(await res.text());
       await reloadHistory();
+      toast.success(want ? "Shot pinned." : "Shot unpinned.");
     } catch (e) {
-      setBulkFlash({
-        kind: "err",
-        msg: (e as Error).message || "Pin failed.",
-      });
+      toast.error((e as Error).message || "Pin failed.");
     }
   }
 
@@ -561,17 +551,6 @@ export default function ShotsPage() {
           {bulkBusy && (
             <span className="text-[11px] opacity-70" role="status">
               Working...
-            </span>
-          )}
-          {bulkFlash && (
-            <span
-              role="status"
-              className="text-[11px]"
-              style={{
-                color: bulkFlash.kind === "ok" ? "#15803d" : "#b91c1c",
-              }}
-            >
-              {bulkFlash.msg}
             </span>
           )}
         </div>
