@@ -4,6 +4,7 @@ import Link from "next/link";
 import useSWR from "swr";
 import Feed from "@/components/Feed";
 import LiveSampleStrip from "@/components/LiveSampleStrip";
+import PinnedQuickBar from "@/components/PinnedQuickBar";
 import { Chip } from "@/components/Chip";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import { CATEGORIES, SHORT } from "@/lib/categories";
@@ -92,6 +93,9 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
+      {/* Pinned shots quick-bar (hides when nothing is pinned) */}
+      <PinnedQuickBar />
 
       {/* One-click live sample classifier */}
       <LiveSampleStrip />
