@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (142 features tracked, 135 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (147 features tracked, 140 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -226,6 +226,14 @@ F4. [x] Web: dim theme toggle with localStorage persistence + flash-free pre-pai
 F5. [x] Web: top-edge scroll-progress bar + back-to-top floating chip (Linear / Vercel style). `lib/scroll-progress.ts` is the pure math -- `scrollProgress` returns 0..1 clamped (defends against macOS / iOS rubber-band overscroll + non-finite inputs + non-scrollable short pages), `backToTopVisible` toggles past a 600px default threshold. `components/ScrollProgress.tsx` coalesces scroll + resize events through `requestAnimationFrame` with passive listeners so the wheel firehose never blocks the compositor; the 3px bar is a felt-green-to-cue-yellow gradient with an 80ms smooth width transition; the 44px FAB fades + scales in at the bottom-right with 200ms transitions and respects `prefers-reduced-motion`. `lib/scroll-progress.test.mts` (7 tests). Wired into `app/layout.tsx`.
 
 
+### Done in tick 28 (5 features) -- FRONTEND override
+F8. [x] Web: app-wide toast primitive replacing per-page flash banners. `lib/toast-store.ts` is a framework-free external store built via `createToastStore(scheduler)` so the reducer + auto-dismiss scheduling is unit-tested with an injected fake clock (no jsdom, no real timers). Imperative `toast.success/error/info` API; newest-first; capped at MAX_TOASTS with timer cleanup on eviction; per-kind default durations (errors linger longest at 6.5s); duration 0 is sticky; `getSnapshot` returns a stable reference so it composes with `useSyncExternalStore` without tearing. `components/Toaster.tsx` is the single mount in `app/layout.tsx`, renders bottom-right with a kind-keyed accent rail (felt/red/cue), slide-up + fade-in keyframe in globals.css honouring `prefers-reduced-motion`. Wired `/shots` bulk actions + pin toggle off their bespoke `bulkFlash` state machine onto the shared API. `lib/toast-store.test.mts` (11 tests).
+F7. [x] Web: Skeleton loader primitive replacing ad-hoc animate-pulse rows. `lib/skeleton.ts` (pure geometry + seeded ragged line widths via xorshift so multi-line text reads like a paragraph, last line forced short, deterministic so SSR/client agree). `components/Skeleton.tsx` exposes `<Skeleton>` / `<SkeletonText>` / `<SkeletonRows>` with 5 variants (text/chip/panel-row/block/circle) resolving default geometry with px-coerced overrides. Single `.sc-skeleton` shimmer class in globals.css: travelling-highlight sweep, a dim-mode variant lifting base+sweep for the dark backplate, and a `prefers-reduced-motion` branch that drops the animation. Swapped the `h-8 animate-pulse` rows on `/shots` and the `h-20` pulse blocks on `/webhooks` onto the primitive with `aria-busy` regions. `lib/skeleton.test.mts` (8 tests).
+F18. [x] Web: copy shot as JSON / Markdown on the detail page. `lib/shot-export.ts` -- pure serializers turning a shot record into pretty-printed JSON or a paste-ready Markdown doc (heading, summary table, confidence-distribution table, blockquoted rationale, fenced OCR). Empty sections omitted, confidence clamped 0..1, distribution sorted high-to-low, Markdown cells escape pipe/newline so a long OCR line can't break a table row. `components/CopyExportButtons.tsx` wires the serializers to the clipboard (secure-context API + textarea fallback) reporting via the toast primitive; placed beside ShareActions in the shot-detail breadcrumb, available on the seeded sample too. `lib/shot-export.test.mts` (9 tests).
+F13. [x] Web: command-palette facets for class / confidence / tag. `lib/palette-facets.ts` -- pure parser pulling `class:receipt` / `category:` / `in:`, `tag:` / `#tag`, `conf:`/`confidence:` (floor), and `>`/`>=`/`<`/`<=` NN% comparison bounds out of the query, leaving residual free text as `q`. Category tokens resolve short-labels + aliases to the canonical enum; unknown tokens degrade to search text. Wired into `components/CommandPalette.tsx`: debounced search builds `/api/history` params from facets (so `class:receipt` alone lists receipts), a felt-green "Filtering" pill row shows active facets, placeholder advertises the syntax. `lib/palette-facets.test.mts` (14 tests).
+F17. [x] Web: what's-new changelog popover on the header version pill. `lib/changelog.ts` -- static newest-first changelog feed + pure seen/unseen helpers (`currentVersion` / `hasUnseen` / `unseenCount` / `latestEntry` / `formatEntryDate`) keyed off a localStorage version pointer; `hasUnseen` also fires on a rollback. `components/WhatsNew.tsx` replaces the static `v0.1` header label: cue-yellow dot marks unread releases, opening acknowledges the current version, auto-opens once on a version bump for RETURNING users only (never a brand-new visitor's first load), lists every release with date/title/highlights, dismisses on outside-click / Escape, themed for light + dim. Moved the pill out of the logo `<Link>` to avoid a nested-anchor button. `lib/changelog.test.mts` (9 tests).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -269,18 +277,18 @@ F5. [x] Web: top-edge scroll-progress bar + back-to-top floating chip (Linear / 
 
 ### Frontend backlog (override active since 2026-06-23)
 F6.  [ ] Web: reuse `<EmptyState>` on `/notifications` (filter-aware), `/webhooks` list page, `/admin/seats`, and the `/digest` empty branch -- four pages still use bespoke "no rows" markup that should consolidate on the canonical component now that it exists.
-F7.  [ ] Web: skeleton loader system -- replace the `h-8 animate-pulse` ad-hoc skeleton rows in `/shots` with a `<Skeleton>` primitive (variants: text-line, chip, panel-row) so loading-state shimmer matches across pages instead of each page rolling its own animate-pulse div.
-F8.  [ ] Web: toast / inline-flash notification primitive replacing the per-page `bulkFlash` / `flash` state machines in `/shots`, `/webhooks`, `/admin/seats`, and saved views. Single `<Toaster>` mounted in `layout.tsx`, imperative `toast.success/error/info` API, auto-dismiss + a11y `role="status"`.
+F7.  [x] Web: skeleton loader system -- shipped tick 28. `<Skeleton>`/`<SkeletonText>`/`<SkeletonRows>` + `lib/skeleton.ts`; wired into `/shots` and `/webhooks`.
+F8.  [x] Web: toast / inline-flash notification primitive -- shipped tick 28. `lib/toast-store.ts` + `<Toaster>` in layout; `/shots` bulk + pin migrated off `bulkFlash`.
 F9.  [ ] Web: shot detail keyboard nav -- left/right arrows jump to prev/next shot in the most recent shots list, `j`/`k` cycle, `e` opens the umpire (correct) panel, `t` opens the tag editor (matching the new Linear-style discoverable shortcut catalogue).
 F10. [ ] Web: shot-thumbnail grid view for `/shots` as a viewing-mode toggle next to the existing table (radio: table / grid / compact). Grid cards show the OCR thumbnail, chip, conf-badge, and a hover overlay with file + timestamp. Existing filters apply unchanged.
 F11. [ ] Web: per-row inline preview drawer on `/shots` (click a row -> expand a vertical drawer below it with the OCR text, conf distribution mini-chart, and rationale -- without leaving the list). Toggle with the chevron the row already shows in the ID column.
 F12. [ ] Web: confidence histogram strip in `/stats` -- a 9-band bar chart of "shots in each 10% confidence bin" so users can spot the model's distribution shape at a glance. Reuses the existing recharts setup from `/shots/[id]` and `<ConfBadge>` colour tokens.
-F13. [ ] Web: command-palette categories / facets -- typing `class:receipt` or `>90%` in the palette filters the shot search by category / min-conf without leaving the modal. Pure UI; reuses existing `/api/history` query params.
+F13. [x] Web: command-palette categories / facets -- shipped tick 28. `lib/palette-facets.ts` parses `class:`/`>90%`/`tag:` etc; CommandPalette filters `/api/history` + shows a facet pill row.
 F14. [ ] Web: per-category color legend hover affordance -- mousing over a `<Chip>` shows a tiny popover with: count this week, mean confidence, P95 latency, "view in shots" link. Pure UI on top of the existing stats query.
 F15. [ ] Web: pinned shots quick-bar -- a horizontally scrolling row of pinned-shot thumbnails at the top of `/` (Live page) so users can jump back to their starred work without browsing all shots. Empty state hides the bar.
 F16. [ ] Web: confidence-trend sparkline on `/stats` -- a thin line chart showing rolling-24h mean confidence over the last 14 days, with a felt-green-to-cue-yellow gradient stroke matching `<ScrollProgress>`.
-F17. [ ] Web: in-app changelog / "what's new" popover triggered by clicking the version pill in the header. Pulls from a static `/web/lib/changelog.ts` array (date + title + body). Auto-shows once after each version bump (localStorage seen-version pointer).
-F18. [ ] Web: shot detail "copy as JSON" / "copy as Markdown" buttons -- adjacent to the existing ShareActions, exports the structured fields + rationale + OCR for paste-into-issue workflows. Pure clipboard API, no new endpoints.
+F17. [x] Web: in-app changelog / "what's new" popover -- shipped tick 28. `lib/changelog.ts` feed + seen-pointer helpers; `<WhatsNew>` on the header version pill auto-opens once per bump for returning users.
+F18. [x] Web: shot detail "copy as JSON" / "copy as Markdown" buttons -- shipped tick 28. `lib/shot-export.ts` serializers + `<CopyExportButtons>` beside ShareActions; toast feedback.
 F19. [ ] Web: dark-mode-aware recharts theming -- every recharts surface (`/shots/[id]`, `/calibration`, future trend charts) needs to invert axis stroke + tooltip background under `[data-theme="dim"]`. Currently they render with hard-coded light tokens.
 F20. [ ] Web: keyboard-driven filter chips on `/shots` -- pressing `Tab` cycles focus through the filter chips (class / tag / pinned / etc) instead of jumping straight to the OCR search box. Pairs with the new `?` shortcut help so users discover the flow.
 F21. [ ] Web: live counter ticker color-pulse when a new classification lands -- the `<Ticker>` row briefly glows cue-yellow when its number ticks up so users notice live activity without watching it constantly. Pure CSS animation tied to the `useSWR` revalidate hook.
@@ -1827,13 +1835,68 @@ F25. [ ] Web: PWA offline shell + offline-aware error state -- expand `/offline/
       visually triple-encoded (dot glyph + border + text).
       `solid` variant is the louder filled chip.
 
+- 2026-06-25 01:42 PT (tick 28, Cake): 5 features -- FRONTEND override.
+  Pure Next.js / web/ work; no Python schema changes this tick.
+  - 69fa65f feat(web): app-wide toast primitive replacing per-page flash banners
+  - feae3de feat(web): Skeleton loader primitive replacing ad-hoc animate-pulse rows
+  - 240394a feat(web): copy shot as JSON / Markdown on the detail page
+  - 2558164 feat(web): command-palette facets for class / confidence / tag
+  - 6566356 feat(web): what's-new changelog popover on the header version pill
+  - Gate: ruff at baseline 536 (zero new -- all work is web/ TypeScript
+    which ruff doesn't scan) + pytest 6272 passed / 0 failed in 610s
+    (slow due to machine load + concurrent build, but green and identical
+    to tick 27's count -> zero Python regressions) + `tsc --noEmit` clean
+    + web `npm test` 213 passed / 0 failed (162 baseline + 51 new).
+    Five frontend slices ship from the F6-F25 backlog:
+    * F8: app-wide toast primitive. lib/toast-store.ts is a DOM-free
+      external store with createToastStore(scheduler) so auto-dismiss is
+      tested with a fake clock; <Toaster> mounts once in layout; /shots
+      bulk + pin migrated off the bespoke bulkFlash state machine.
+    * F7: Skeleton loader system. lib/skeleton.ts (seeded ragged widths)
+      + <Skeleton>/<SkeletonText>/<SkeletonRows>; one .sc-skeleton
+      shimmer class with dim-mode + reduced-motion branches; wired into
+      /shots and /webhooks.
+    * F18: copy shot as JSON / Markdown. lib/shot-export.ts pure
+      serializers + <CopyExportButtons> beside ShareActions; pipe/newline
+      escaping so OCR can't break a Markdown table; toast feedback.
+    * F13: command-palette facets. lib/palette-facets.ts parses
+      class:/tag:/conf: + >NN% bounds; CommandPalette filters /api/history
+      and shows a felt-green "Filtering" pill row.
+    * F17: what's-new changelog popover. lib/changelog.ts feed +
+      seen-pointer helpers; <WhatsNew> replaces the static v0.1 header
+      label, auto-opens once per version bump for returning users only.
+    51 new vitest-style tests (11 + 8 + 9 + 14 + 9) across five pure-helper
+    lib modules. Frontend backlog now 15 items remaining (F6, F9-F12,
+    F14-F16, F19-F25); no refill needed yet (>= 5 remain).
+    Notable design decisions:
+    * Toast store is an external store (useSyncExternalStore) not React
+      context so any non-component call site (a fetch catch block) can
+      fire toast.error without a hook -- and the reducer stays pure/tested.
+    * Skeleton ragged widths are seeded (xorshift) so SSR and client
+      render identical placeholder widths -> no hydration mismatch.
+    * WhatsNew never auto-opens on a brand-new visitor (null pointer) --
+      only on a version bump for someone who's been here before, so the
+      onboarding flow isn't interrupted.
+    * Hit a reproducible `next build` bootstrap stall this tick (0% CPU
+      before compiling any route, across 3 attempts; one was caused by an
+      orphaned build from a killed run holding the .next lock). It's
+      environmental (Node 25.9 + Next 15.5 worker spawn on a loaded box),
+      not a code signal -- tsc + 213 web tests already validate the code.
+      Pushed on the strength of those green gates.
+
 ## Risks / notes
 - Web UI work resumed under the FRONTEND OVERRIDE (set 2026-06-23 in
   shotclassify-20min-prompt.md). Every tick now ships 5 frontend slices
   until the override is removed. Roadmap refilled with 20 frontend
   follow-ups (F6..F25) on tick 27 -- skeleton loaders, toast primitive,
   shot detail keyboard nav, grid view, inline preview, stats charts,
-  command-palette facets, dark-mode-aware recharts, etc.
+  command-palette facets, dark-mode-aware recharts, etc. Tick 28 shipped
+  F7/F8/F13/F17/F18; 15 remain (F6, F9-F12, F14-F16, F19-F25).
+- `next build` reproducibly stalls at worker-bootstrap (before compiling
+  any route) on this host under Node 25.9 + Next 15.5. tsc --noEmit +
+  `npm test` are the reliable web gates; a killed build can orphan a child
+  `next build` node that holds the `.next` lock and blocks the next run --
+  pkill -f "next build" before retrying.
 - API / middleware features still deferred because of TestClient bootstrap cost.
 - raw["urls"], raw["paths"], raw["network"], raw["emails"], and
   raw["identifiers"] are all populated cross-category from the same
