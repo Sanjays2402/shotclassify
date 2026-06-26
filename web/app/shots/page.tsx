@@ -32,6 +32,7 @@ import {
 } from "@/lib/view-mode";
 import { toast } from "@/lib/toast-store";
 import { parseShotsDeepLink, hasDeepLink } from "@/lib/shots-deeplink";
+import { shotsDocTitle } from "@/lib/shots-doc-title";
 import {
   parseShotsPageSize,
   writeShotsPageSize,
@@ -121,6 +122,28 @@ function ShotsPageInner() {
     setLimit(next);
     writeShotsPageSize(next);
   };
+
+  // Reflect the active filter into the browser tab title (F58) so a filtered
+  // or deep-linked shots tab is identifiable in the tab bar -- "Receipt ·
+  // >=90% confidence · Shots". Uses the debounced search / tag so the title
+  // doesn't thrash on every keystroke. Restores the document's prior title on
+  // unmount so navigating away doesn't leave a stale shots title behind.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const prev = document.title;
+    document.title = shotsDocTitle({
+      category: cat || undefined,
+      q: qDebounced || undefined,
+      tag: tagDebounced || undefined,
+      minConfPct,
+      since: since || undefined,
+      until: until || undefined,
+      pinnedOnly,
+    });
+    return () => {
+      document.title = prev;
+    };
+  }, [cat, qDebounced, tagDebounced, minConfPct, since, until, pinnedOnly]);
 
   // Apply deep-link query params ONCE on mount so links INTO the list land
   // pre-filtered: the stats class-mix chips (`?category=receipt`), the
