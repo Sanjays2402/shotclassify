@@ -44,6 +44,7 @@ import {
   describeFacets,
 } from "@/lib/palette-facets";
 import { readRecentShots, clearRecentShots, type RecentShot } from "@/lib/recent-shots";
+import { relativeTime } from "@/lib/relative-time";
 import { ENDPOINTS } from "@/lib/api";
 
 type Nav = {
@@ -71,6 +72,8 @@ type Recent = {
   id: string;
   label: string;
   category?: string;
+  // Epoch ms of the last visit, for the "viewed 3m ago" trailing hint (F59).
+  viewedAt: number;
 };
 
 type Item = Nav | Hit | Recent;
@@ -108,6 +111,10 @@ export default function CommandPalette() {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Hit[]>([]);
   const [recents, setRecents] = useState<Recent[]>([]);
+  // Reference instant for the recents' "viewed Nm ago" hints (F59), captured
+  // when the palette opens so every row measures against the same now and the
+  // labels don't drift mid-session.
+  const [recentsNow, setRecentsNow] = useState(0);
   const [loading, setLoading] = useState(false);
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -147,12 +154,14 @@ export default function CommandPalette() {
       setCursor(0);
       // Pull the recently-viewed ring fresh each open so a shot visited in
       // another tab shows up. Mapped to the palette's `recent` item shape.
+      setRecentsNow(Date.now());
       setRecents(
         readRecentShots().map((r: RecentShot) => ({
           kind: "recent" as const,
           id: r.id,
           label: r.label,
           category: r.category,
+          viewedAt: r.viewedAt,
         })),
       );
       // focus the input after paint
@@ -431,6 +440,18 @@ export default function CommandPalette() {
                         </span>
                       )}
                     </span>
+                    {recentsNow > 0 && relativeTime(r.viewedAt, recentsNow) && (
+                      <span
+                        className="opacity-50 text-[11px] whitespace-nowrap"
+                        title={
+                          Number.isFinite(r.viewedAt)
+                            ? new Date(r.viewedAt).toLocaleString()
+                            : undefined
+                        }
+                      >
+                        {relativeTime(r.viewedAt, recentsNow)}
+                      </span>
+                    )}
                     <ArrowRight size={14} weight="duotone" className="opacity-50" />
                   </Row>
                 );
