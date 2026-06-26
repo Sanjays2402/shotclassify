@@ -31,6 +31,14 @@ import { useChartTheme } from "@/components/useChartTheme";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import { CATEGORIES, LONG, SHORT, ms, pct, type Category } from "@/lib/categories";
 import { categoryLegendSummary, totalCount } from "@/lib/category-legend";
+import {
+  readStatsWindow,
+  writeStatsWindow,
+  labelForStatsWindow,
+  STATS_WINDOWS,
+  STATS_WINDOW_DEFAULT,
+  type StatsWindowHours,
+} from "@/lib/stats-window";
 
 type Aggregate = {
   total: number;
@@ -44,12 +52,6 @@ type Aggregate = {
   confidence_histogram: { bin: number; lo: number; hi: number; count: number }[];
   hourly: { hour: string; count: number }[];
 };
-
-const WINDOWS = [
-  { label: "24h", h: 24 },
-  { label: "7d", h: 24 * 7 },
-  { label: "30d", h: 24 * 30 },
-];
 
 function sampleAggregate(hours: number): Aggregate {
   // Deterministic seeded sample so first-time visitors see something live.
@@ -120,10 +122,23 @@ function Stat({
 }
 
 export default function StatsPage() {
-  const [hours, setHours] = useState(24);
+  const [hours, setHours] = useState<StatsWindowHours>(STATS_WINDOW_DEFAULT);
   const [mounted, setMounted] = useState(false);
   const ct = useChartTheme();
   useEffect(() => setMounted(true), []);
+
+  // Reopen on the window the user last chose (F44). SSR can't know it, so we
+  // read on mount; an invalid / missing value coerces back to the default.
+  useEffect(() => {
+    setHours(readStatsWindow());
+  }, []);
+
+  // Persisting setter for the window buttons -- updates state and remembers
+  // the choice so a return visit lands on the same scope.
+  const pickWindow = (h: StatsWindowHours) => {
+    setHours(h);
+    writeStatsWindow(h);
+  };
 
   const { data, error, isLoading } = useSWR<Aggregate>(
     ENDPOINTS.aggregate(hours),
@@ -163,22 +178,22 @@ export default function StatsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {WINDOWS.map((w) => (
+          {STATS_WINDOWS.map((w) => (
             <button
-              key={w.h}
+              key={w}
               type="button"
-              onClick={() => setHours(w.h)}
-              aria-pressed={hours === w.h}
+              onClick={() => pickWindow(w)}
+              aria-pressed={hours === w}
               className="btn text-[12px] px-3 py-1.5"
               style={{
                 background:
-                  hours === w.h ? "var(--color-felt)" : "transparent",
+                  hours === w ? "var(--color-felt)" : "transparent",
                 color:
-                  hours === w.h ? "var(--color-chalk)" : "var(--color-ink)",
+                  hours === w ? "var(--color-chalk)" : "var(--color-ink)",
                 borderColor: "var(--color-rule)",
               }}
             >
-              {w.label}
+              {labelForStatsWindow(w)}
             </button>
           ))}
           {!live && <SampleBadge note="Seeded preview until you ingest data." />}
