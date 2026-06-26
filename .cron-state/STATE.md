@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (155 features tracked, 150 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (160 features tracked, 155 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -234,6 +234,14 @@ F13. [x] Web: command-palette facets for class / confidence / tag. `lib/palette-
 F17. [x] Web: what's-new changelog popover on the header version pill. `lib/changelog.ts` -- static newest-first changelog feed + pure seen/unseen helpers (`currentVersion` / `hasUnseen` / `unseenCount` / `latestEntry` / `formatEntryDate`) keyed off a localStorage version pointer; `hasUnseen` also fires on a rollback. `components/WhatsNew.tsx` replaces the static `v0.1` header label: cue-yellow dot marks unread releases, opening acknowledges the current version, auto-opens once on a version bump for RETURNING users only (never a brand-new visitor's first load), lists every release with date/title/highlights, dismisses on outside-click / Escape, themed for light + dim. Moved the pill out of the logo `<Link>` to avoid a nested-anchor button. `lib/changelog.test.mts` (9 tests).
 
 
+### Done in tick 32 (5 features) -- FRONTEND override
+F51. [x] Web: persist the `/shots` page-size selector across visits. `lib/shots-page-size.ts` mirrors the stats-window / view-mode persistence pattern -- a DOM-free parse/serialize pair + a known-sizes list ([25,50,100,200]) coercing any corrupt / future-schema value back to the 50 default, plus no-throw read/write wrappers. The page loads the stored size once on mount and a setLimitPersist() writer saves every selector change, so a return visit to a dense workspace reopens on 200 instead of snapping back to 50. `lib/shots-page-size.test.mts` (9 tests).
+F52. [x] Web: name the active filters in the /shots copy-link toast. `describeShotsFilters()` / `shotsFilterParts()` / `copyLinkToastMessage()` in shots-deeplink.ts reuse the exact active-filter rules buildShotsQuery applies so the prose and the URL never disagree. Parts are ordered coarse-to-fine (class via LONG label, search, tag, confidence, date range, pinned), the search query is truncated, the inert 0% floor is dropped, one-sided date ranges read since/until, and the phrases join into an Oxford-style English clause. CopyViewLinkButton swaps its static "Copied a link to this filtered view." for "Copied a link filtered to Receipt and >=90% confidence." (8 new tests, shots-deeplink.test.mts now 30).
+F58. [x] Web: reflect the /shots filter into the browser tab title. `lib/shots-doc-title.ts` `shotsDocTitle(state)` turns the live filter into "Receipt · >=90% confidence · Shots" (bare "Shots" when unfiltered), reusing F52's shotsFilterParts so the tab title, copy-link toast, and breadcrumb describe a filter identically. The page sets document.title in an effect keyed on the debounced filter values and restores the prior title on unmount so navigating away leaves no stale title. `lib/shots-doc-title.test.mts` (5 tests).
+F59. [x] Web: command-palette recent rows show a relative "viewed 3m ago" timestamp. `lib/relative-time.ts` `relativeTime(then, now)` is pure + DOM-free (explicit now): future + sub-45s gaps collapse to "just now" so a skewed clock never reads "in 3s", minute/hour/day/week buckets, a coarse "30d+ ago" cap, and non-finite inputs degrade to "" rather than "NaN ago". Rendered as a faint trailing hint with the full timestamp on hover; the palette captures one `now` when it opens so labels don't drift mid-session. `lib/relative-time.test.mts` (8 tests).
+F50. [x] Web: command-palette resting discoverability hint. Pure `paletteRestingHint(resting, recentCount)` in command-palette.ts returns a one-line Sparkle-prefixed tip ("Tip: open a shot and it shows up here for one-keystroke return.") rendered under the nav ONLY when the palette is resting (no query / facet) AND the recents ring is empty; it steps aside the instant the user types or once the ring has any entry, and a non-finite count is treated as empty so a malformed ring still surfaces the tip. (4 new tests, command-palette.test.mts now 14).
+
+
 ### Backlog
 12. [ ] OCR runner: confidence threshold filter that strips low-confidence words above `--min-conf` (per-tenant policy later).
 15. [ ] Code: heredoc + multi-language fenced block split (extract first ```lang fence).
@@ -327,20 +335,27 @@ F48. [ ] Web: empty-state for the command palette when there are no recents AND 
 
 ### Frontend backlog refill (tick 31 -- F49-F60, frontend-override still active)
 F49. [ ] Web: shot-detail prev/next nav driven by the recent-shots ring (the open F43) -- chevrons in the detail header that step through the MRU list, plus `[`/`]` keyboard bindings; reuse `readRecentShots()` (no fetch). Pairs with the new Cmd+digit palette jump.
-F50. [ ] Web: command-palette empty-state hint (the open F48) -- when the resting palette has zero recents and no query, render a subtle "Tip: open a shot and it shows up here" line under the nav so the Recently-viewed section's purpose is discoverable. Pure render branch + a tiny `paletteRestingHint()` helper with tests.
-F51. [ ] Web: persist the `/shots` page-size selector (25/50/100/200) to localStorage, mirroring the F44 stats-window pattern -- a return visit reopens on the same density. New `lib/shots-page-size.ts` (parse/serialize/read/write, default-coercing, no-throw) + wire into the page-size `<select>`.
-F52. [ ] Web: "Copy link" success should reflect WHAT was copied -- extend F47's toast to name the active filters (e.g. "Copied a link filtered to receipts >90%"). Reuse `describeFacets`/`filter-summary` phrasing; pure `describeShotsFilters(state)` helper + tests, wired into `CopyViewLinkButton`.
+F50. [x] Web: command-palette empty-state hint -- shipped tick 32. Pure `paletteRestingHint(resting, recentCount)` returns a one-line Sparkle-prefixed tip under the nav ONLY when the palette is resting (no query/facet) AND the recents ring is empty; steps aside the moment the user types or once a shot's been viewed; non-finite count treated as empty. 4 tests.
+F51. [x] Web: persist the `/shots` page-size selector (25/50/100/200) -- shipped tick 32. `lib/shots-page-size.ts` (parse/serialize/read/write, [25,50,100,200] known-set, default-coercing to 50, no-throw) mirrors the stats-window pattern; page loads stored size on mount + a setLimitPersist() writer saves every change. 9 tests.
+F52. [x] Web: "Copy link" toast names the active filters -- shipped tick 32. `describeShotsFilters()`/`shotsFilterParts()`/`copyLinkToastMessage()` in shots-deeplink.ts reuse buildShotsQuery's active-filter rules so prose + URL never disagree; coarse-to-fine order, LONG class label, query truncation, 0% floor omission, one-sided dates, Oxford-style join. Wired into CopyViewLinkButton. 8 tests.
 F53. [ ] Web: stat-card delta chips (the open F46) -- a small up/down delta vs the previous equivalent window beside each KPI, coloured with the F31 deltaStroke tokens. If `/api/aggregate` lacks a prior-window field, derive client-side from a second SWR call at 2x the window; keep it minimal. Pure `formatDelta()` + tests.
 F54. [ ] Web: confidence-trend sparkline on `/stats` (the long-open F16/F27/F41) -- now that F31 (delta tokens) AND F37 (chart skeletons) AND F44 (window persistence) are all in, draw the rolling-mean-confidence line over the window, stroke by deltaStroke()/deltaFill(), zeroLine baseline, skeleton while busy. Reuse `useChartTheme()`.
 F55. [ ] Web: `/shots` "scroll to top" floating affordance when the list is long and scrolled -- a small felt-green pill that fades in past ~600px and smooth-scrolls up. Reuse the `<ScrollProgress>` scroll listener pattern; respects reduced-motion.
 F56. [ ] Web: per-class color swatch legend under the `/stats` ingest-tempo area chart (the open F39) -- a compact row mapping each `--color-cat-*` swatch to its class name so the stacked area reads at a glance. Pure render from CATEGORIES; no new data.
 F57. [ ] Web: keyboard shortcut `g s` / `g h` / `g u` (Linear-style "go to" chords) for Stats / sHots / Upload -- extend the shortcut catalogue + HotKeys with a two-key sequence matcher. Pure `matchGoToChord(keys)` state machine + tests; surfaced in the `?` help overlay.
-F58. [ ] Web: `/shots` filter state -> document.title so a deep-linked / filtered tab is identifiable in the browser tab bar (e.g. "Receipts >90% - Shots"). Pure `shotsDocTitle(state)` helper (reuse F52's describe) + an effect; tests on the helper.
-F59. [ ] Web: command-palette recent-shots rows show a relative "viewed 3m ago" timestamp (the ring already stores `viewedAt`) -- pure `relativeTime(ms, now)` helper with tests, rendered as a faint trailing label. Makes the MRU ordering legible.
+F58. [x] Web: `/shots` filter state -> document.title -- shipped tick 32. `lib/shots-doc-title.ts` `shotsDocTitle(state)` reuses F52's shotsFilterParts to build "Receipt · >=90% confidence · Shots"; page sets document.title in a debounced effect and restores the prior title on unmount. 5 tests.
+F59. [x] Web: command-palette recent rows show "viewed 3m ago" -- shipped tick 32. `lib/relative-time.ts` `relativeTime(then, now)` (pure, just-now<45s, future-clamp, minute/hour/day/week buckets, 30d+ cap, non-finite->""); palette captures one `now` on open so labels don't drift; full timestamp on hover. 8 tests.
 F60. [ ] Web: `/stats` "All classes" grid links should carry the active window as a deep-link hint (e.g. open `/shots` pre-filtered to the class) -- thread F47's `buildShotsDeepLink` so clicking a class tile from a 7d view lands on that class. Small wiring + a test that the built href round-trips.
 
 
 ## Tick log
+- 2026-06-25 22:10 PT (tick 32, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  - 5f25eea feat(web): command-palette resting hint when there are no recents (F50)
+  - 9fe0a49 feat(web): show 'viewed 3m ago' on command-palette recent rows (F59)
+  - ef6c7bd feat(web): reflect the /shots filter into the browser tab title (F58)
+  - 1c7236b feat(web): name the active filters in the /shots copy-link toast (F52)
+  - ef1be38 feat(web): persist the /shots page-size selector across visits (F51)
+  - Gate: tsc --noEmit clean (whole web project) + npm test 355 passed / 0 failed. ESLint not configured in repo (interactive prompt); tsc+test is the established web gate.
 - 2026-06-25 17:35 PT (tick 31, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   - 94b9628 feat(web): copy a shareable link to the current /shots filter view (F47)
   - 5e5586e feat(web): clear-recents affordance in the command palette (F42)
