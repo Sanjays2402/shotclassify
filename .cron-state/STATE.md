@@ -7,6 +7,10 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - Python 3.11+, uv workspace, FastAPI API, worker, web (Next.js), packages: classify/common/extract/ocr/route/store, cli.
 - Pipeline: OCR (tesseract) -> classify (vision LLM with heuristic fallback) -> extract (per-category) -> route (yaml rules) -> store (SQLAlchemy).
 - Test runner: `uv run pytest` (~2:06 full suite, 1137 tests). `uv run ruff check .` for lint.
+  Web: `npm test` (= `npx tsx --test lib/*.test.mts`, 458 tests as of tick 35) + `npx tsc --noEmit` + `npx next build`.
+  GOTCHA: the web glob run hangs after all assertions pass (one suite leaves a
+  dangling handle); use `npx tsx --test --test-force-exit lib/*.test.mts` to get
+  a clean 458/0 exit. tsc + build never hang.
 - DO NOT add heavy deps (no torch / tensorflow). opencv-headless already in.
 
 ## Conventions
@@ -20,7 +24,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (180 features tracked, 166 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (190 features tracked, 171 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -361,20 +365,66 @@ F68. [x] Web: command-palette "go to section" chord hints -- shipped tick 34. Ra
 
 ### Frontend backlog refill (tick 34 -- F69-F80, frontend-override still active)
 F69. [ ] Web: `g <x>` chord hints in the `?` ShortcutsHelp overlay should render as a TWO-KEY badge with a "then" separator already (they do) -- instead, add a one-line "Tip: press G then a letter" caption under the "Jump to a section" group header so the chord PATTERN is explained once, not just enumerated. Pure copy + a render tweak in ShortcutsHelp.tsx; no lib change.
-F70. [ ] Web: command-palette should also expose the grid-density `d` and view `v` shortcuts as a faint footer legend (like the existing Cmd-digit legend) when the palette is open, so the shots-list shortcuts are discoverable from the palette. Pure render off SHORTCUTS filtered to scope==="shots"; no new lib.
+F70. [x] Web: command-palette shots-list shortcut legend -- shipped tick 35. `shotsScopeHints(SHORTCUTS)` (pure, filters scope==="shots" entries that have keys, returns key glyphs + label) + `shortLabelForHint()` (drops the parenthetical + leading "Cycle ") in command-palette.ts; CommandPalette renders a faint "Shots list" footer row of kbd chips. Adding a future shots shortcut lights up here automatically. 7 tests. (6cca183)
 F71. [ ] Web: `<ShotNav>` keyboard hint -- when the prev/next chevrons are visible, show a tiny `[ ]` kbd pair next to the position counter ("2 of 6  [ ]") so the keys are discoverable without the ? overlay. Pure render in ShotNav.tsx; reduced-motion irrelevant.
 F72. [ ] Web: per-row inline preview drawer on `/shots` (the long-open F11/F28) -- click the ID-column chevron to expand a drawer under the row with OCR text + a mini confidence bar + rationale, without leaving the list. Pure row-expand state (Set<id>) + a presentational `<ShotPreviewDrawer>`; data already on the row or one /api/shots/[id] fetch.
 F73. [ ] Web: filter breadcrumb on `/notifications` + `/webhooks` lists (the open F33) -- reuse `<FilterBreadcrumb>` + a small adapter so the consolidation theme continues. Pure adapter mapping each page's filter state to FilterKey pills + a clearOne handler.
 F74. [ ] Web: reuse `<EmptyState>` on `/notifications` (filter-aware), `/webhooks`, `/admin/seats`, `/digest` (the long-open F6) -- four pages still use bespoke "no rows" markup. Consolidate onto the canonical component now that emptyCopyForList exists.
 F75. [ ] Web: keyboard-driven filter chips on `/shots` (the open F20) -- `Tab` cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box; pairs with the `?` help. Pure tabIndex ordering + a roving-focus hook; test the order helper.
-F76. [ ] Web: live-counter color-pulse on the `<Ticker>` when a new classification lands (the open F21) -- the 24h total briefly glows cue-yellow when its number ticks up. Pure `usePrevious(total)` + a CSS keyframe class toggled on increase; respect prefers-reduced-motion.
-F77. [ ] Web: collapsible side rail on the shot-detail page (the open F22) -- fold-up handles per subsection (OCR / rationale / pin / umpire / tags / frame) with smooth max-height animation + remembered state per slot in localStorage. Pure `lib/detail-rail.ts` (parse/serialize/toggle, no-throw storage) + a `<CollapsibleSection>` wrapper; test the state helpers.
+F76. [x] Web: live-counter color-pulse on the `<Ticker>` -- shipped tick 35. `lib/ticker-pulse.ts` pure didIncrease() (strict increase only; first-observation / equal / decrease / non-finite never pulse) + increasedKeys() (only the per-class counts that moved). Ticker keeps usePrevious-style refs for the prior total + per-class map, adds a transient `sc-tick-pulse` class on increase (brighten/scale/glow), strips it after the keyframe so a later tick re-fires; sample data never pulses. globals.css keyframe + reduced-motion branch. 9 tests. (ef202fc)
+F77. [x] Web: collapsible side rail on the shot-detail page -- shipped tick 35. `lib/detail-rail.ts` (pure DOM-free SET of collapsed slot keys; parse/serialize round-trip in canonical order, drop unknown tokens, immutable toggleSlot, no-throw storage) + `<CollapsibleSection>` (grid-rows 1fr<->0fr fold + rotating caret, body stays mounted when collapsed, reduced-motion snap). Wraps the five rail panels; UmpireControls + LabelTagsEditor gained an `embedded` prop to drop their own panel chrome. 13 tests. (3586635)
 F78. [ ] Web: API-key creation modal polish (the open F23) -- replace the inline create cards on `/keys` with a focused modal reusing the chalk-surface + felt-green icon-well pattern; the new key + scopes selection feels intentional. Component-level; reuse existing modal chrome.
-F79. [ ] Web: `/stats` window selector should expose a keyboard cycle (`w` cycles 24h/7d/30d) mirroring the shots `v`/`d` shortcuts, registered under a new "stats" SHORTCUTS scope; input-guarded + chord-guarded against the `g w` Webhooks chord (same pattern as F63's `d` vs `g d`). Pure nextStatsWindow() + tests.
-F80. [ ] Web: shot-detail "copy as CSV" single-shot export beside the existing JSON/MD buttons (CopyExportButtons), reusing F64's csvCell quoting via a shared helper extracted from shot-export-bulk.ts so the two exporters can't drift. Pure toCsv(shot) + tests.
+F79. [x] Web: `/stats` window keyboard cycle (`w`) -- shipped tick 35. Pure `nextStatsWindow()` (wraps 24h->7d->30d, coerces unknown through the default) in stats-window.ts; the page binds a `w` keydown effect that is input-guarded AND chord-guarded against `g w` (skips a `w` within 1200ms of a `g` so HotKeys owns the Webhooks nav), persists via writeStatsWindow. New "stats" SHORTCUTS scope + ShortcutsHelp section. 6 tests across stats-window + shortcuts. (b47b0c9)
+F80. [x] Web: shot-detail single-shot "copy as CSV" -- shipped tick 35. Extracted csvCell / CSV_HEADERS / csvRow / toCsv into shot-export.ts as the single source of truth; shot-export-bulk.ts now imports them (BULK_CSV_HEADERS aliases CSV_HEADERS, toBulkCsv maps csvRow -- byte-identical output, all bulk tests green). CopyExportButtons gained a "Copy CSV" button. A cross-module test asserts toCsv's data row equals toBulkCsv's row for the same shot. 6 new tests. (0962bf9)
+
+
+### Frontend backlog refill (tick 35 -- F81-F90, frontend-override still active)
+F81. [ ] Web: `<ShotNav>` keyboard hint (the open F71) -- when the prev/next chevrons are visible, render a tiny `[ ]` kbd pair beside the position counter ("2 of 6  [ ]") so the keys are discoverable without the ? overlay. Pure render tweak in ShotNav.tsx; no lib change.
+F82. [ ] Web: "Expand all / Collapse all" control for the shot-detail rail (pairs with F77) -- a small header affordance that folds or unfolds every CollapsibleSection at once, writing the full set via lib/detail-rail. Pure `allCollapsed()` / `collapseAll()` / `expandAll()` helpers in detail-rail.ts + a button row; test the set helpers.
+F83. [ ] Web: command-palette "go to section" rows should show the recently-viewed COUNT as a faint badge on the Shots nav row (e.g. "Shots · 4 recent") so the user knows the ring has entries before opening. Pure render off the existing recents length; no new lib.
+F84. [ ] Web: per-row inline preview drawer on `/shots` (the long-open F11/F28/F72) -- click the ID-column chevron to expand a drawer under the row with OCR snippet + a mini confidence bar + rationale, without leaving the list. Pure row-expand state (Set<id>) + a presentational `<ShotPreviewDrawer>`; data already on the row.
+F85. [ ] Web: `/stats` window selector keyboard hint -- show a faint "press W" affordance beside the 24h/7d/30d buttons (mirrors how F71 surfaces `[ ]` on ShotNav) so the new F79 cycle is discoverable on the page, not just the ? overlay. Pure render; no lib.
+F86. [ ] Web: shot-detail "copy as CSV" should also land in the bulk-actions bar's format set if not already obvious -- audit BulkExportButtons vs CopyExportButtons so both surfaces expose JSON/MD/CSV identically (F64 added bulk CSV, F80 added single CSV; confirm parity + a shared label helper). Pure component audit + a tiny shared labels constant; test the constant.
+F87. [ ] Web: keyboard-driven filter chips on `/shots` (the open F20/F75) -- `Tab` cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box. Pure tabIndex ordering helper + a roving-focus hook; test the order helper.
+F88. [ ] Web: filter breadcrumb on `/notifications` + `/webhooks` lists (the open F33/F73) -- reuse `<FilterBreadcrumb>` + a small adapter mapping each page's filter state to FilterKey pills + a clearOne handler. Pure adapter; test the mapping.
+F89. [ ] Web: reuse `<EmptyState>` on `/notifications` (filter-aware), `/webhooks`, `/admin/seats`, `/digest` (the long-open F6/F74) -- consolidate the bespoke "no rows" markup onto the canonical component now that emptyCopyForList exists. Component-level; reuse the existing lib.
+F90. [ ] Web: `g <x>` chord pattern caption in the `?` overlay (the open F69) -- add a one-line "Tip: press G then a letter" caption under the "Jump to a section" group header so the chord PATTERN is explained once, not just enumerated. Pure copy + a render tweak in ShortcutsHelp.tsx; no lib change.
 
 
 ## Tick log
+- 2026-06-26 13:40 PT (tick 35, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  - b47b0c9 feat(web): keyboard cycle for the /stats time window (F79)
+  - 0962bf9 feat(web): copy a single shot as CSV on the detail page (F80)
+  - 3586635 feat(web): collapsible side rail on the shot-detail page (F77)
+  - ef202fc feat(web): live-ticker count pulse when a classification lands (F76)
+  - 6cca183 feat(web): shots-list shortcut legend in the command palette (F70)
+  - Gate: tsc --noEmit clean (whole web project) + npm test 458 passed / 0 failed
+    (420 baseline at tick 34 + 38 new across 5 lib modules: stats-window
+    nextStatsWindow, shot-export CSV primitives, detail-rail, ticker-pulse,
+    command-palette shotsScopeHints/shortLabelForHint) + `next build` compiled
+    successfully -- /shots AND /stats still prerender static, /shots/[id]
+    dynamic as expected. All work is web/ TS/TSX/CSS -- ZERO Python touched, so
+    the pytest baseline cannot regress. `next lint` is NOT configured in this
+    repo; tsc + 458 web tests + the production build are the reliable web gates,
+    all green. NOTE: `npx tsx --test lib/*.test.mts` needs `--test-force-exit`
+    (one suite leaves a dangling handle that keeps the runner alive after all
+    458 assertions pass -- the force-exit run reports 458/0 cleanly).
+  - Theme: discoverability + keyboard-first polish + an export-format trio. F79
+    gives /stats a `w` window cycle to match the shots `v`/`d` keys (new "stats"
+    scope); F70 surfaces those shots keys as a palette footer legend; F77 lets
+    the detail rail fold per-section with remembered state; F76 glows the live
+    ticker when a count ticks up; F80 finishes the JSON/MD/CSV export trio on a
+    single shot, sharing the CSV primitives with the bulk exporter so they can't
+    drift. Five small, revertible, tested slices.
+  - Frontend backlog: F70/F76/F77/F79/F80 marked done. Refilled with F81-F90
+    (10 new). Still open from earlier: F6/F9/F11/F16/F20-F25, F26-F28, F33,
+    F38-F41, F43, F46, F48, F53-F56, F65, F67, F69, F71-F75, F78.
+  - NOTE (carried from tick 34, still true): repo-wide `ruff check` reports ~536
+    PRE-EXISTING errors from ruff-version drift (pins >=0.6, resolved to a newer
+    release with new UP/I/F rules). My batch touched ZERO Python and added zero
+    new lint errors. Still flagged for Sanjay; needs a separate `ruff check
+    --fix` + pin bump, out of scope for the frontend override.
+
 - 2026-06-26 07:50 PT (tick 34, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   - 0f75c15 feat(web): extend the g <x> chord namespace to Demo/Webhooks/Keys/Inbox (F61)
   - 5578e8b feat(web): show g <x> section chords on the command palette nav rows (F68)
