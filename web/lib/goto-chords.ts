@@ -29,6 +29,11 @@ export type GotoChord = {
 // The catalogue. Order is the order they render in the help overlay's
 // "Jump to a section" group. `g t` is intentionally NOT here -- it's the
 // scroll-to-top action HotKeys handles specially, not a section jump.
+//
+// Second-letter assignment avoids collisions with `g t` (scroll-to-top) and
+// each other. We use a memorable letter where the first letter is free and
+// fall back to a distinctive one when it's taken: Demo->D, Webhooks->W,
+// API keys->K (Keys), Inbox->I. None reuse L/H/S/U/C/T.
 export const GOTO_CHORDS: readonly GotoChord[] = [
   { seq: "g l", route: "/", label: "Go to Live", keys: ["G", "L"] },
   { seq: "g h", route: "/shots", label: "Go to Shots", keys: ["G", "H"] },
@@ -40,6 +45,10 @@ export const GOTO_CHORDS: readonly GotoChord[] = [
     label: "Go to Calibration",
     keys: ["G", "C"],
   },
+  { seq: "g d", route: "/demo", label: "Go to Demo", keys: ["G", "D"] },
+  { seq: "g w", route: "/webhooks", label: "Go to Webhooks", keys: ["G", "W"] },
+  { seq: "g k", route: "/keys", label: "Go to API keys", keys: ["G", "K"] },
+  { seq: "g i", route: "/notifications", label: "Go to Inbox", keys: ["G", "I"] },
 ] as const;
 
 // Pre-built lookup so resolution is O(1) and the normalisation rules live in

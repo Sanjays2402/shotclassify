@@ -134,6 +134,34 @@ export const SHORTCUTS: readonly Shortcut[] = [
     label: "Go to Calibration",
     hint: "Press G, then C",
   },
+  {
+    id: "goto-demo",
+    scope: "goto",
+    combo: { keys: ["G", "D"], match: "g d" },
+    label: "Go to Demo",
+    hint: "Press G, then D",
+  },
+  {
+    id: "goto-webhooks",
+    scope: "goto",
+    combo: { keys: ["G", "W"], match: "g w" },
+    label: "Go to Webhooks",
+    hint: "Press G, then W",
+  },
+  {
+    id: "goto-keys",
+    scope: "goto",
+    combo: { keys: ["G", "K"], match: "g k" },
+    label: "Go to API keys",
+    hint: "Press G, then K",
+  },
+  {
+    id: "goto-inbox",
+    scope: "goto",
+    combo: { keys: ["G", "I"], match: "g i" },
+    label: "Go to Inbox",
+    hint: "Press G, then I",
+  },
 ] as const;
 
 // A minimal, framework-free representation of a key event so the matcher is

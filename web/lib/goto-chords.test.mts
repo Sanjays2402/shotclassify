@@ -26,6 +26,11 @@ test("routeForChord: every catalogued chord resolves to its route", () => {
   assert.equal(routeForChord("g s"), "/stats");
   assert.equal(routeForChord("g u"), "/upload");
   assert.equal(routeForChord("g c"), "/calibration");
+  // Tick-34 additions (F61): more sections under the same namespace.
+  assert.equal(routeForChord("g d"), "/demo");
+  assert.equal(routeForChord("g w"), "/webhooks");
+  assert.equal(routeForChord("g k"), "/keys");
+  assert.equal(routeForChord("g i"), "/notifications");
 });
 
 test("routeForChord: 'g t' (scroll-to-top) is NOT a section jump", () => {
@@ -67,6 +72,26 @@ test("GOTO_CHORDS: stable shape -- unique seqs, two glyphs, leading G", () => {
     assert.match(c.seq, /^g [a-z]$/, `${c.seq} is "g <letter>"`);
     assert.ok(c.label.startsWith("Go to "), `${c.seq} label`);
   }
+});
+
+test("GOTO_CHORDS: no chord collides with the reserved 'g t' scroll-to-top", () => {
+  // `g t` is owned by HotKeys for scroll-to-top; a section chord reusing the
+  // second letter `t` would make the two ambiguous. Guard it explicitly.
+  for (const c of GOTO_CHORDS) {
+    assert.notEqual(c.seq, "g t", "g t is reserved for scroll-to-top");
+    assert.notEqual(c.keys[1], "T", `${c.seq} must not reuse T`);
+  }
+});
+
+test("GOTO_CHORDS: second letters are all distinct (deterministic routing)", () => {
+  // The sequence tracker resolves the FIRST fully-matched chord, so two
+  // chords sharing a second letter would be unreachable / ambiguous.
+  const seconds = GOTO_CHORDS.map((c) => c.keys[1]);
+  assert.equal(
+    new Set(seconds).size,
+    seconds.length,
+    "every g<x> chord needs a unique second key",
+  );
 });
 
 test("every goto chord is registered in the SHORTCUTS catalogue", () => {
