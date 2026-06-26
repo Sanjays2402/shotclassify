@@ -491,3 +491,41 @@ html[data-theme="dim"] .sc-skeleton {
     transition: none;
   }
 }
+
+/* Live-ticker count pulse (components/Ticker.tsx). When a count ticks UP on a
+   revalidate the number briefly glows cue-yellow so a watcher notices live
+   activity. The class is added on increase and stripped after the keyframe so
+   a later tick re-fires it. Reduced-motion users get a brief static tint with
+   no scale/glow movement. */
+.sc-tick-pulse {
+  animation: sc-tick-pulse 1.05s ease-out;
+}
+@keyframes sc-tick-pulse {
+  0% {
+    text-shadow: 0 0 0 rgba(245, 197, 24, 0);
+    transform: translateY(0) scale(1);
+  }
+  18% {
+    color: #FFF4C2;
+    text-shadow: 0 0 12px rgba(245, 197, 24, 0.85);
+    transform: translateY(-1px) scale(1.16);
+  }
+  100% {
+    text-shadow: 0 0 0 rgba(245, 197, 24, 0);
+    transform: translateY(0) scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-tick-pulse {
+    animation: sc-tick-pulse-reduced 1.05s ease-out;
+  }
+  @keyframes sc-tick-pulse-reduced {
+    0%,
+    40% {
+      color: #FFF4C2;
+    }
+    100% {
+      color: inherit;
+    }
+  }
+}
