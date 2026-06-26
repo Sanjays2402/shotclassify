@@ -43,7 +43,7 @@ import {
   facetsToHistoryParams,
   describeFacets,
 } from "@/lib/palette-facets";
-import { readRecentShots, type RecentShot } from "@/lib/recent-shots";
+import { readRecentShots, clearRecentShots, type RecentShot } from "@/lib/recent-shots";
 import { ENDPOINTS } from "@/lib/api";
 
 type Nav = {
@@ -244,6 +244,16 @@ export default function CommandPalette() {
     [router],
   );
 
+  // Wipe the recently-viewed ring (F42) and drop the local list so the
+  // section disappears immediately, without closing the palette. Stops the
+  // click from bubbling to a row. Keyboard cursor falls back into range via
+  // the existing clamp effect once `recents` empties.
+  const clearRecents = useCallback(() => {
+    clearRecentShots();
+    setRecents([]);
+    setCursor(0);
+  }, []);
+
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -364,7 +374,25 @@ export default function CommandPalette() {
           )}
 
           {recentItems.length > 0 && (
-            <Section title="Recently viewed">
+            <Section
+              title="Recently viewed"
+              action={
+                <button
+                  type="button"
+                  // Don't let the click bubble to a Row / steal palette focus.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    clearRecents();
+                  }}
+                  className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 transition-opacity"
+                  aria-label="Clear recently viewed shots"
+                  title="Clear the recently-viewed list"
+                >
+                  Clear
+                </button>
+              }
+            >
               {recentItems.map((r, k) => {
                 const i = navMatches.length + k;
                 const active = cursor === i;
@@ -450,11 +478,22 @@ export default function CommandPalette() {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className="py-1">
-      <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider opacity-60">
-        {title}
+      <div className="px-3 pt-2 pb-1 flex items-center justify-between">
+        <span className="text-[10px] uppercase tracking-wider opacity-60">
+          {title}
+        </span>
+        {action}
       </div>
       {children}
     </div>

@@ -124,3 +124,18 @@ export function recordRecentShot(
     return [];
   }
 }
+
+// Wipe the recently-viewed ring (F42). Backs the palette's "Clear" affordance
+// on the "Recently viewed" header -- useful on a shared / kiosk machine where
+// the next person shouldn't see what the last one was reviewing. Removes the
+// key entirely (rather than storing "[]") so storage stays clean. No-throw:
+// returns true when the key was cleared, false on SSR / blocked storage.
+export function clearRecentShots(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    window.localStorage.removeItem(RECENT_SHOTS_STORAGE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}

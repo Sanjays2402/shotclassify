@@ -6,6 +6,7 @@ import {
   pushRecentShot,
   parseRecentShots,
   serializeRecentShots,
+  clearRecentShots,
   RECENT_SHOTS_MAX,
   RECENT_SHOTS_STORAGE_KEY,
   type RecentShot,
@@ -106,4 +107,51 @@ test("serialize -> parse round-trips a clean list", () => {
     ["a", "b"],
   );
   assert.equal(round[0].category, "receipt");
+});
+
+// --- F42: clearRecentShots ------------------------------------------------
+
+test("clearRecentShots: no window (SSR) returns false, never throws", () => {
+  // In the node:test runtime there's no `window` global by default.
+  assert.equal(typeof (globalThis as { window?: unknown }).window, "undefined");
+  assert.equal(clearRecentShots(), false);
+});
+
+test("clearRecentShots: removes the ring key and reports true", () => {
+  const store = new Map<string, string>([
+    [RECENT_SHOTS_STORAGE_KEY, serializeRecentShots([shot("a", 1)])],
+    ["keep-me", "untouched"],
+  ]);
+  const g = globalThis as { window?: unknown };
+  g.window = {
+    localStorage: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    },
+  };
+  try {
+    assert.equal(clearRecentShots(), true);
+    assert.equal(store.has(RECENT_SHOTS_STORAGE_KEY), false);
+    // Only the ring key is touched; unrelated keys survive.
+    assert.equal(store.get("keep-me"), "untouched");
+  } finally {
+    delete g.window;
+  }
+});
+
+test("clearRecentShots: a throwing storage is swallowed -> false", () => {
+  const g = globalThis as { window?: unknown };
+  g.window = {
+    localStorage: {
+      removeItem: () => {
+        throw new Error("blocked");
+      },
+    },
+  };
+  try {
+    assert.equal(clearRecentShots(), false);
+  } finally {
+    delete g.window;
+  }
 });
