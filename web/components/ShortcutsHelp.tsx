@@ -75,6 +75,7 @@ export default function ShortcutsHelp() {
     { key: "global", title: "Anywhere" },
     { key: "goto", title: "Jump to a section" },
     { key: "shots", title: "On the shots list" },
+    { key: "stats", title: "On the box score" },
     { key: "detail", title: "On a shot's detail" },
   ];
 

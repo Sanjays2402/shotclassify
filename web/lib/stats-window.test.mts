@@ -6,6 +6,7 @@ import {
   parseStatsWindow,
   serializeStatsWindow,
   labelForStatsWindow,
+  nextStatsWindow,
   readStatsWindow,
   writeStatsWindow,
   STATS_WINDOWS,
@@ -47,6 +48,32 @@ test("labelForStatsWindow: human labels per window", () => {
   assert.equal(labelForStatsWindow(24), "24h");
   assert.equal(labelForStatsWindow(168), "7d");
   assert.equal(labelForStatsWindow(720), "30d");
+});
+
+test("nextStatsWindow: cycles 24h -> 7d -> 30d -> 24h", () => {
+  assert.equal(nextStatsWindow(24), 168);
+  assert.equal(nextStatsWindow(168), 720);
+  assert.equal(nextStatsWindow(720), 24);
+});
+
+test("nextStatsWindow: order matches the on-screen selector order", () => {
+  // Walking the cycle from the first window visits every window exactly once
+  // before wrapping back -- no skips, no dead ends.
+  let cur = STATS_WINDOWS[0];
+  const seen = new Set<number>();
+  for (let i = 0; i < STATS_WINDOWS.length; i++) {
+    seen.add(cur);
+    cur = nextStatsWindow(cur);
+  }
+  assert.equal(seen.size, STATS_WINDOWS.length);
+  assert.equal(cur, STATS_WINDOWS[0], "cycle wraps back to the start");
+});
+
+test("nextStatsWindow: an unknown current value advances to a valid window", () => {
+  const out = nextStatsWindow(99 as never);
+  assert.ok((STATS_WINDOWS as number[]).includes(out));
+  // Coerces through the default's slot, so it lands on whatever follows it.
+  assert.equal(out, nextStatsWindow(STATS_WINDOW_DEFAULT));
 });
 
 test("readStatsWindow: SSR (no window) returns the default", () => {

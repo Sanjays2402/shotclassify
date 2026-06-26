@@ -182,3 +182,29 @@ test("cycle-view shortcut: bound to bare 'v' in the shots scope", () => {
   assert.equal(matchesShortcut("v", ev({ key: "v", metaKey: true })), false);
   assert.equal(matchesShortcut("v", ev({ key: "v", ctrlKey: true })), false);
 });
+
+test("cycle-stats-window shortcut: bound to bare 'w' in the stats scope", () => {
+  const s = SHORTCUTS.find((x) => x.id === "cycle-stats-window");
+  assert.ok(s, "cycle-stats-window shortcut must exist");
+  assert.equal(s!.scope, "stats");
+  assert.equal(s!.combo.match, "w");
+  // Bare "w" fires; modified W (Cmd-W close-tab / Ctrl-W) must NOT, so the
+  // window never cycles out from under a browser close-tab chord.
+  assert.equal(matchesShortcut("w", ev({ key: "w" })), true);
+  assert.equal(matchesShortcut("w", ev({ key: "W" })), true);
+  assert.equal(matchesShortcut("w", ev({ key: "w", metaKey: true })), false);
+  assert.equal(matchesShortcut("w", ev({ key: "w", ctrlKey: true })), false);
+});
+
+test("bare 'w' shortcut shares its letter only with the 'g w' chord", () => {
+  // The new stats `w` reuses the same letter as the "go to Webhooks" chord's
+  // tail. That's the documented chord-guard situation (F79). Assert there is
+  // no OTHER bare single-letter shortcut also on `w` that would double-fire.
+  const bareW = SHORTCUTS.filter(
+    (s) => s.combo.match === "w",
+  );
+  assert.equal(bareW.length, 1, "exactly one bare-w shortcut");
+  assert.equal(bareW[0].id, "cycle-stats-window");
+  // The Webhooks chord exists and is the two-stroke "g w" -- distinct match.
+  assert.ok(SHORTCUTS.some((s) => s.combo.match === "g w"));
+});

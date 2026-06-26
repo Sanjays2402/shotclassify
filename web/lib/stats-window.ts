@@ -52,6 +52,16 @@ export function labelForStatsWindow(w: StatsWindowHours): string {
   return "24h";
 }
 
+// Cycle to the next window in the on-screen selector order, wrapping at the
+// end: 24h -> 7d -> 30d -> 24h. Backs the `w` keyboard shortcut on /stats
+// (F79), mirroring how `v` cycles the shots view and `d` cycles grid density.
+// An unknown current value coerces through the default's slot so the cycle
+// always advances to a valid window.
+export function nextStatsWindow(w: StatsWindowHours): StatsWindowHours {
+  const i = STATS_WINDOWS.indexOf(isKnownWindow(w) ? w : STATS_WINDOW_DEFAULT);
+  return STATS_WINDOWS[(i + 1) % STATS_WINDOWS.length];
+}
+
 // --- Browser wrappers (no-throw) -----------------------------------------
 
 // Read the persisted window. Returns the default on SSR / blocked storage /

@@ -36,6 +36,7 @@ import {
   readStatsWindow,
   writeStatsWindow,
   labelForStatsWindow,
+  nextStatsWindow,
   STATS_WINDOWS,
   STATS_WINDOW_DEFAULT,
   type StatsWindowHours,
@@ -149,6 +150,53 @@ export default function StatsPage() {
     writeStatsWindow(h);
   };
 
+  // "w" cycles the time window (24h -> 7d -> 30d), mirroring the shots-list
+  // `v` (view) / `d` (density) shortcuts and registered under a new "stats"
+  // scope in the ? overlay. Two guards beyond the usual input/modifier checks
+  // (F79):
+  //   1. Input guard -- never fire while a field is focused.
+  //   2. Chord guard -- `g w` is the "go to Webhooks" section chord (F61). The
+  //      keystroke that completes it also reaches this bare-`w` handler, so we
+  //      skip a `w` that lands within the chord window after a `g`, letting
+  //      HotKeys own the navigation without us flipping the window on the way
+  //      out. Same shape as the shots page's `d` vs `g d` guard.
+  useEffect(() => {
+    let lastGAt = 0;
+    const CHORD_WINDOW_MS = 1200; // matches createSequenceTracker's default
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      const k = e.key.toLowerCase();
+      if (k === "g") {
+        lastGAt = e.timeStamp || performance.now();
+        return;
+      }
+      if (k !== "w") return;
+      // Tail of the `g w` chord -> let HotKeys navigate; don't cycle.
+      const now = e.timeStamp || performance.now();
+      if (now - lastGAt <= CHORD_WINDOW_MS) {
+        lastGAt = 0;
+        return;
+      }
+      e.preventDefault();
+      setHours((cur) => {
+        const next = nextStatsWindow(cur);
+        writeStatsWindow(next);
+        return next;
+      });
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const { data, error, isLoading } = useSWR<Aggregate>(
     ENDPOINTS.aggregate(hours),
     fetcher,
@@ -200,6 +248,7 @@ export default function StatsPage() {
               type="button"
               onClick={() => pickWindow(w)}
               aria-pressed={hours === w}
+              title={`Show the last ${labelForStatsWindow(w)} (press W to cycle)`}
               className="btn text-[12px] px-3 py-1.5"
               style={{
                 background:

@@ -17,7 +17,7 @@ export type Shortcut = {
   id: string;
   // Where this shortcut applies. "global" = any page outside text inputs;
   // "goto" = the Linear-style `g <x>` section-jump chords.
-  scope: "global" | "shots" | "detail" | "goto";
+  scope: "global" | "shots" | "stats" | "detail" | "goto";
   combo: ShortcutKey;
   label: string;
   // Optional second hint that renders in the right-hand column of the modal.
@@ -87,6 +87,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     combo: { keys: ["D"], match: "d" },
     label: "Cycle grid density (Roomy / Default / Dense)",
     hint: "Grid view only",
+  },
+  {
+    id: "cycle-stats-window",
+    scope: "stats",
+    combo: { keys: ["W"], match: "w" },
+    label: "Cycle window (24h / 7d / 30d)",
+    hint: "On the box score",
   },
   {
     id: "detail-prev",
