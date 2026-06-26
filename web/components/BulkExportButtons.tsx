@@ -7,10 +7,11 @@
 // about the selected-vs-copied split when the selection spans pages.
 
 import { useState } from "react";
-import { BracketsCurly, MarkdownLogo } from "@phosphor-icons/react/dist/ssr";
+import { BracketsCurly, MarkdownLogo, Table } from "@phosphor-icons/react/dist/ssr";
 import {
   toBulkJson,
   toBulkMarkdown,
+  toBulkCsv,
   bulkExportToastMessage,
 } from "@/lib/shot-export-bulk";
 import type { ShotExportInput } from "@/lib/shot-export";
@@ -51,12 +52,16 @@ export default function BulkExportButtons({
 }) {
   const [busy, setBusy] = useState(false);
 
-  async function copy(format: "JSON" | "Markdown") {
+  async function copy(format: "JSON" | "Markdown" | "CSV") {
     if (busy) return;
     setBusy(true);
     try {
       const text =
-        format === "JSON" ? toBulkJson(shots) : toBulkMarkdown(shots);
+        format === "JSON"
+          ? toBulkJson(shots)
+          : format === "Markdown"
+            ? toBulkMarkdown(shots)
+            : toBulkCsv(shots);
       await writeClipboard(text);
       const msg = bulkExportToastMessage(shots.length, selectedCount, format);
       if (shots.length === 0) toast.error(msg);
@@ -91,6 +96,16 @@ export default function BulkExportButtons({
         title="Copy the selected shots as a Markdown table"
       >
         <MarkdownLogo size={14} weight="duotone" /> Copy MD
+      </button>
+      <button
+        type="button"
+        className="btn btn-ghost text-[12px]"
+        disabled={off}
+        onClick={() => void copy("CSV")}
+        aria-label="Copy the selected shots as a CSV spreadsheet"
+        title="Copy the selected shots as RFC-4180 CSV (opens in any spreadsheet)"
+      >
+        <Table size={14} weight="duotone" /> Copy CSV
       </button>
     </div>
   );

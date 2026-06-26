@@ -70,7 +70,7 @@ export function toBulkMarkdown(shots: readonly ShotExportInput[]): string {
 export function bulkExportToastMessage(
   copied: number,
   selected: number,
-  format: "JSON" | "Markdown",
+  format: "JSON" | "Markdown" | "CSV",
 ): string {
   const c = Math.max(0, Math.floor(Number.isFinite(copied) ? copied : 0));
   const sel = Math.max(c, Math.floor(Number.isFinite(selected) ? selected : c));
@@ -80,4 +80,53 @@ export function bulkExportToastMessage(
     return `Copied ${c} of ${sel} selected ${noun} as ${format} (the rest are on other pages).`;
   }
   return `Copied ${c} ${noun} as ${format}.`;
+}
+
+// RFC-4180 field quoting. A field is wrapped in double quotes when it contains
+// a comma, a double quote, a CR, or an LF (§2.5-2.7); interior double quotes
+// are escaped by doubling them. Everything else passes through untouched so a
+// plain value stays unquoted and human-readable.
+function csvCell(v: string): string {
+  return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+// The CSV column order. Stable + documented so downstream scripts can rely on
+// it. `confidence_pct` is a bare number (no % sign) so a spreadsheet sorts it
+// numerically; tags are joined with "; " inside a single cell.
+export const BULK_CSV_HEADERS = [
+  "id",
+  "class",
+  "confidence_pct",
+  "file",
+  "tags",
+  "captured",
+  "source",
+] as const;
+
+// A flat, spreadsheet-friendly CSV of the selection (F64) -- the third bulk
+// export format beside JSON (machine-nested) and Markdown (paste-into-issue).
+// RFC-4180 throughout: CRLF record separators (§2.1) and per-field quoting via
+// csvCell, so a label/filename containing a comma, quote, or newline can't
+// corrupt the columns. Always emits the header row; an empty selection yields
+// the header alone (a valid, self-describing CSV) rather than an empty string.
+export function toBulkCsv(shots: readonly ShotExportInput[]): string {
+  const list = Array.isArray(shots) ? shots : [];
+  const rows: string[] = [BULK_CSV_HEADERS.join(",")];
+  for (const s of list) {
+    const conf = Math.max(
+      0,
+      Math.min(1, Number.isFinite(s.confidence) ? s.confidence : 0),
+    );
+    const cells = [
+      s.id ?? "",
+      s.primary_category ?? "",
+      (conf * 100).toFixed(1),
+      (s.label && s.label.trim()) || s.filename || "",
+      s.tags && s.tags.length > 0 ? s.tags.join("; ") : "",
+      s.created_at ?? "",
+      s.source ?? "",
+    ];
+    rows.push(cells.map((c) => csvCell(String(c))).join(","));
+  }
+  return rows.join("\r\n");
 }
