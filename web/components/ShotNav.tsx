@@ -74,6 +74,7 @@ export default function ShotNav({ currentId }: { currentId: string }) {
       <NavButton
         dir="prev"
         targetId={nav.prevId}
+        neighborLabel={nav.prevLabel}
         onGo={(id) => router.push(`/shots/${id}`)}
       />
       <span
@@ -85,6 +86,7 @@ export default function ShotNav({ currentId }: { currentId: string }) {
       <NavButton
         dir="next"
         targetId={nav.nextId}
+        neighborLabel={nav.nextLabel}
         onGo={(id) => router.push(`/shots/${id}`)}
       />
     </div>
@@ -94,16 +96,23 @@ export default function ShotNav({ currentId }: { currentId: string }) {
 function NavButton({
   dir,
   targetId,
+  neighborLabel,
   onGo,
 }: {
   dir: "prev" | "next";
   targetId: string | null;
+  neighborLabel: string | null;
   onGo: (id: string) => void;
 }) {
   const disabled = !targetId;
   const Icon = dir === "prev" ? CaretLeft : CaretRight;
+  // Spell out the neighbour so screen readers + hover get the destination, not
+  // just a direction. Falls back to the generic wording when there's no label.
+  const where = neighborLabel ? `: ${neighborLabel}` : "";
   const label =
-    dir === "prev" ? "Newer shot you viewed ( [ )" : "Older shot you viewed ( ] )";
+    dir === "prev"
+      ? `Newer shot you viewed ( [ )${where}`
+      : `Older shot you viewed ( ] )${where}`;
   return (
     <button
       type="button"
@@ -111,10 +120,19 @@ function NavButton({
       onClick={() => targetId && onGo(targetId)}
       aria-label={label}
       title={label}
-      className="inline-flex items-center justify-center w-7 h-7 rounded-sm border transition-colors disabled:opacity-30 disabled:cursor-not-allowed hover:bg-black/[0.05]"
+      className="inline-flex items-center gap-1 h-7 px-1.5 rounded-sm border transition-colors disabled:opacity-30 disabled:cursor-not-allowed hover:bg-black/[0.05]"
       style={{ borderColor: "var(--color-rule)", color: "var(--color-ink)" }}
     >
-      <Icon size={14} weight="bold" />
+      {dir === "prev" && <Icon size={14} weight="bold" />}
+      {/* The on-screen neighbour label (F62) so the trail reads without a
+          hover. Hidden on very small screens to keep the header tidy; the
+          chevron + aria-label still convey the action there. */}
+      {neighborLabel && (
+        <span className="num text-[11px] max-w-[10rem] truncate hidden sm:inline">
+          {neighborLabel}
+        </span>
+      )}
+      {dir === "next" && <Icon size={14} weight="bold" />}
     </button>
   );
 }

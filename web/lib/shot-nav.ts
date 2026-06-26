@@ -21,7 +21,35 @@ export type ShotNeighbors = {
   prevId: string | null;
   // The older neighbour's id (index + 1), or null at the tail / when absent.
   nextId: string | null;
+  // A short, human-legible label for each neighbour so the chevrons can read
+  // as "< RECEIPT" / "CODE >" without a hover (F62). null when there is no
+  // neighbour on that side. Derived from the frozen ring snapshot, never a
+  // fetch -- the labels are the ones the user actually browsed.
+  prevLabel: string | null;
+  nextLabel: string | null;
 };
+
+// How long a neighbour label may be before we trim it with an ellipsis. Kept
+// short so the chevron pair stays compact in the detail header.
+const NEIGHBOR_LABEL_MAX = 18;
+
+// Build a compact display label for a neighbour from its ring entry. Prefers
+// the stored label (the user's label / filename), falling back to a shortened
+// id so there's always something to show. Trimmed + ellipsised to keep the
+// header tidy. Exported for the component + its tests.
+export function neighborLabel(shot: RecentShot | null | undefined): string | null {
+  if (!shot) return null;
+  const raw =
+    typeof shot.label === "string" && shot.label.trim()
+      ? shot.label.trim()
+      : typeof shot.id === "string"
+        ? shot.id.slice(0, 8)
+        : "";
+  if (!raw) return null;
+  return raw.length > NEIGHBOR_LABEL_MAX
+    ? `${raw.slice(0, NEIGHBOR_LABEL_MAX - 1)}\u2026`
+    : raw;
+}
 
 // Locate `currentId` in the ring and report its neighbours. A shot the user
 // navigated to directly (deep link, not via a prior visit) won't be in the
@@ -35,14 +63,37 @@ export function neighborShots(
   const ring = Array.isArray(list) ? list : [];
   const total = ring.length;
   const id = typeof currentId === "string" ? currentId.trim() : "";
-  if (!id) return { index: -1, total, prevId: null, nextId: null };
+  if (!id)
+    return {
+      index: -1,
+      total,
+      prevId: null,
+      nextId: null,
+      prevLabel: null,
+      nextLabel: null,
+    };
 
   const index = ring.findIndex((s) => s && s.id === id);
-  if (index < 0) return { index: -1, total, prevId: null, nextId: null };
+  if (index < 0)
+    return {
+      index: -1,
+      total,
+      prevId: null,
+      nextId: null,
+      prevLabel: null,
+      nextLabel: null,
+    };
 
-  const prevId = index > 0 ? ring[index - 1].id : null;
-  const nextId = index < total - 1 ? ring[index + 1].id : null;
-  return { index, total, prevId, nextId };
+  const prev = index > 0 ? ring[index - 1] : null;
+  const next = index < total - 1 ? ring[index + 1] : null;
+  return {
+    index,
+    total,
+    prevId: prev ? prev.id : null,
+    nextId: next ? next.id : null,
+    prevLabel: neighborLabel(prev),
+    nextLabel: neighborLabel(next),
+  };
 }
 
 // True when there's at least one neighbour to step to -- lets the page skip
