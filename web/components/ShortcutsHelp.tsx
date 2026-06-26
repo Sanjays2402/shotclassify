@@ -73,6 +73,7 @@ export default function ShortcutsHelp() {
   }
   const scopeOrder: Array<{ key: string; title: string }> = [
     { key: "global", title: "Anywhere" },
+    { key: "goto", title: "Jump to a section" },
     { key: "shots", title: "On the shots list" },
     { key: "detail", title: "On a shot's detail" },
   ];

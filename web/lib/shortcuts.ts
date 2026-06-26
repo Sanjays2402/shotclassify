@@ -15,8 +15,9 @@ export type ShortcutKey = {
 
 export type Shortcut = {
   id: string;
-  // Where this shortcut applies. "global" = any page outside text inputs.
-  scope: "global" | "shots" | "detail";
+  // Where this shortcut applies. "global" = any page outside text inputs;
+  // "goto" = the Linear-style `g <x>` section-jump chords.
+  scope: "global" | "shots" | "detail" | "goto";
   combo: ShortcutKey;
   label: string;
   // Optional second hint that renders in the right-hand column of the modal.
@@ -79,6 +80,45 @@ export const SHORTCUTS: readonly Shortcut[] = [
     scope: "shots",
     combo: { keys: ["V"], match: "v" },
     label: "Cycle list view (Table / Grid / Compact)",
+  },
+  // Linear-style "go to" chords: press G, then the section letter. The
+  // routes + this catalogue's source of truth live in lib/goto-chords.ts;
+  // these entries exist so the sequence tracker recognises the chords and the
+  // help overlay self-documents them under "Jump to a section".
+  {
+    id: "goto-live",
+    scope: "goto",
+    combo: { keys: ["G", "L"], match: "g l" },
+    label: "Go to Live",
+    hint: "Press G, then L",
+  },
+  {
+    id: "goto-shots",
+    scope: "goto",
+    combo: { keys: ["G", "H"], match: "g h" },
+    label: "Go to Shots",
+    hint: "Press G, then H",
+  },
+  {
+    id: "goto-stats",
+    scope: "goto",
+    combo: { keys: ["G", "S"], match: "g s" },
+    label: "Go to Stats",
+    hint: "Press G, then S",
+  },
+  {
+    id: "goto-upload",
+    scope: "goto",
+    combo: { keys: ["G", "U"], match: "g u" },
+    label: "Go to Upload",
+    hint: "Press G, then U",
+  },
+  {
+    id: "goto-calibration",
+    scope: "goto",
+    combo: { keys: ["G", "C"], match: "g c" },
+    label: "Go to Calibration",
+    hint: "Press G, then C",
   },
 ] as const;
 

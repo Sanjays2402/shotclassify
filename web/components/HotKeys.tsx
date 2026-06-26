@@ -8,6 +8,7 @@
 import { useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { SHORTCUTS, createSequenceTracker } from "@/lib/shortcuts";
+import { routeForChord } from "@/lib/goto-chords";
 
 export default function HotKeys() {
   const router = useRouter();
@@ -41,6 +42,15 @@ export default function HotKeys() {
       if (seq === "g t") {
         e.preventDefault();
         window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+      // Linear-style section jumps: `g s` -> /stats, `g h` -> /shots, etc.
+      // Resolved before the bare single-letter switch so a completed chord
+      // wins over the legacy fast-path letters.
+      const chordRoute = routeForChord(seq);
+      if (chordRoute) {
+        e.preventDefault();
+        router.push(chordRoute);
         return;
       }
 
