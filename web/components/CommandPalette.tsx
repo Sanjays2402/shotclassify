@@ -36,8 +36,9 @@ import {
   Snowflake,
 } from "@phosphor-icons/react";
 
-import { fuzzyScore as _fuzzy, rankNav, digitJumpIndex, paletteRestingHint } from "@/lib/command-palette";
+import { fuzzyScore as _fuzzy, rankNav, digitJumpIndex, paletteRestingHint, shotsScopeHints, shortLabelForHint } from "@/lib/command-palette";
 import { chordKeysForRoute } from "@/lib/goto-chords";
+import { SHORTCUTS } from "@/lib/shortcuts";
 import {
   parseFacets,
   hasFacets,
@@ -105,6 +106,11 @@ const NAV: Nav[] = [
 export function fuzzyScore(q: string, label: string, hint: string): number {
   return _fuzzy(q, label, hint);
 }
+
+// Shots-list shortcut legend (F70), derived once from the frozen catalogue.
+// Surfaced in the palette footer so the `v` / `d` single-letter shortcuts are
+// discoverable from anywhere, not just the `?` overlay.
+const SHOTS_HINTS = shotsScopeHints(SHORTCUTS);
 
 export default function CommandPalette() {
   const router = useRouter();
@@ -552,6 +558,30 @@ export default function CommandPalette() {
             <Kbd>K</Kbd> to toggle
           </span>
         </div>
+
+        {SHOTS_HINTS.length > 0 && (
+          <div
+            className="flex items-center gap-3 px-3 py-1.5 text-[11px] border-t opacity-60 overflow-x-auto"
+            style={{ borderColor: "var(--color-rule, #e5e7eb)" }}
+            data-testid="palette-shots-legend"
+          >
+            <span className="uppercase tracking-wider text-[10px] opacity-80 whitespace-nowrap">
+              Shots list
+            </span>
+            {SHOTS_HINTS.map((h) => (
+              <span
+                key={h.id}
+                className="inline-flex items-center gap-1 whitespace-nowrap"
+                title={h.label}
+              >
+                {h.keys.map((k, i) => (
+                  <Kbd key={i}>{k}</Kbd>
+                ))}
+                <span className="opacity-80">{shortLabelForHint(h.label)}</span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

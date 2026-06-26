@@ -78,3 +78,55 @@ export function paletteRestingHint(
   if (Number.isFinite(recentCount) && recentCount > 0) return null;
   return PALETTE_RESTING_HINT;
 }
+
+// Shots-list shortcut legend for the palette footer (F70). The shots page has
+// single-letter shortcuts (`v` cycle view, `d` cycle grid density) that are
+// only discoverable today via the `?` overlay. Surfacing them as a faint
+// footer legend when the palette is open makes them reachable from anywhere,
+// the same way the Cmd-digit jump legend already advertises that chord.
+//
+// Pure: takes the SHORTCUTS catalogue (the component passes it in so this
+// module doesn't import React-adjacent code) and returns one entry per
+// shots-scope shortcut, each carrying its rendered key glyph(s) + label. The
+// component renders them as <kbd> chips. Anything not in the "shots" scope is
+// filtered out, so adding a new shots shortcut to the catalogue lights it up
+// here automatically.
+export type PaletteScopeHint = {
+  id: string;
+  keys: string[];
+  label: string;
+};
+
+type ScopedShortcut = {
+  id: string;
+  scope: string;
+  combo: { keys: string[] };
+  label: string;
+};
+
+export function shotsScopeHints(
+  shortcuts: readonly ScopedShortcut[],
+): PaletteScopeHint[] {
+  if (!Array.isArray(shortcuts)) return [];
+  return shortcuts
+    .filter((s) => s && s.scope === "shots")
+    .map((s) => ({
+      id: s.id,
+      keys: Array.isArray(s.combo?.keys) ? [...s.combo.keys] : [],
+      label: s.label,
+    }))
+    .filter((h) => h.keys.length > 0);
+}
+
+// Condense a verbose shortcut label down to its leading verb-phrase for the
+// compact footer legend (F70): the catalogue labels read like "Cycle list
+// view (Table / Grid / Compact)" which is too long for a footer chip. We keep
+// the text before the first parenthetical and, when it starts with "Cycle ",
+// drop that lead word so "Cycle grid density (...)" -> "grid density". Falls
+// back to the trimmed full label when there's nothing to strip.
+export function shortLabelForHint(label: string): string {
+  if (typeof label !== "string") return "";
+  let s = label.split("(")[0].trim();
+  if (/^cycle\s+/i.test(s)) s = s.replace(/^cycle\s+/i, "");
+  return s.trim();
+}

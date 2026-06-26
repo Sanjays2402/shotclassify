@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fuzzyScore, rankNav, digitJumpIndex, paletteRestingHint, PALETTE_RESTING_HINT } from "./command-palette";
+import { fuzzyScore, rankNav, digitJumpIndex, paletteRestingHint, PALETTE_RESTING_HINT, shotsScopeHints, shortLabelForHint } from "./command-palette";
 
 test("fuzzyScore: empty query yields neutral score", () => {
   assert.equal(fuzzyScore("", "Shots", "Browse history"), 1);
@@ -118,4 +118,57 @@ test("paletteRestingHint: hidden once the recents ring has entries", () => {
 
 test("paletteRestingHint: a non-finite count is treated as empty (still shows)", () => {
   assert.equal(paletteRestingHint(true, NaN), PALETTE_RESTING_HINT);
+});
+
+// --- shots-scope footer legend (F70) -------------------------------------
+
+const FAKE_SHORTCUTS = [
+  { id: "open-palette", scope: "global", combo: { keys: ["Cmd", "K"] }, label: "Open palette" },
+  { id: "cycle-view", scope: "shots", combo: { keys: ["V"] }, label: "Cycle list view (Table / Grid / Compact)" },
+  { id: "cycle-grid-density", scope: "shots", combo: { keys: ["D"] }, label: "Cycle grid density (Roomy / Default / Dense)" },
+  { id: "detail-prev", scope: "detail", combo: { keys: ["["] }, label: "Newer shot" },
+  { id: "no-keys", scope: "shots", combo: { keys: [] }, label: "Bogus, no keys" },
+];
+
+test("shotsScopeHints: returns only shots-scope shortcuts that have keys", () => {
+  const hints = shotsScopeHints(FAKE_SHORTCUTS);
+  assert.deepEqual(
+    hints.map((h) => h.id),
+    ["cycle-view", "cycle-grid-density"],
+  );
+  // Carries the rendered key glyph(s) + the full label.
+  assert.deepEqual(hints[0].keys, ["V"]);
+  assert.equal(hints[1].keys[0], "D");
+});
+
+test("shotsScopeHints: a non-array input is tolerated", () => {
+  assert.deepEqual(shotsScopeHints(undefined as never), []);
+  assert.deepEqual(shotsScopeHints(null as never), []);
+});
+
+test("shotsScopeHints: the real catalogue lights up v + d", async () => {
+  const { SHORTCUTS } = await import("./shortcuts.ts");
+  const ids = shotsScopeHints(SHORTCUTS).map((h) => h.id);
+  assert.ok(ids.includes("cycle-view"), "view cycle should appear");
+  assert.ok(ids.includes("cycle-grid-density"), "density cycle should appear");
+  // Nothing from another scope leaks in.
+  assert.ok(!ids.includes("open-palette"));
+  assert.ok(!ids.includes("cycle-stats-window"));
+});
+
+test("shortLabelForHint: drops the parenthetical and the leading 'Cycle '", () => {
+  assert.equal(
+    shortLabelForHint("Cycle list view (Table / Grid / Compact)"),
+    "list view",
+  );
+  assert.equal(
+    shortLabelForHint("Cycle grid density (Roomy / Default / Dense)"),
+    "grid density",
+  );
+});
+
+test("shortLabelForHint: falls back to the trimmed label when nothing to strip", () => {
+  assert.equal(shortLabelForHint("Pin shot"), "Pin shot");
+  assert.equal(shortLabelForHint("  Spaced  "), "Spaced");
+  assert.equal(shortLabelForHint(undefined as never), "");
 });
