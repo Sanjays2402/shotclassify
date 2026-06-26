@@ -26,6 +26,8 @@ import {
   type GridDensity,
 } from "@/lib/grid-density";
 import CopyViewLinkButton from "@/components/CopyViewLinkButton";
+import BulkExportButtons from "@/components/BulkExportButtons";
+import type { ShotExportInput } from "@/lib/shot-export";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
 import type { FilterKey } from "@/lib/filter-summary";
@@ -431,6 +433,28 @@ function ShotsPageInner() {
   }
 
   const total = payload?.total ?? 0;
+
+  // Build export-shaped rows for the bulk "copy as JSON / Markdown" (F35)
+  // from the selected ids that are present on the current page. A selection
+  // can span pages, so we can only serialise the rows we actually hold; the
+  // toast names the copied-vs-selected split honestly. Preserves the on-page
+  // order so the manifest reads top-to-bottom.
+  const bulkExportShots: ShotExportInput[] = useMemo(() => {
+    if (bulk.size === 0 || !Array.isArray(data)) return [];
+    return (data as Row[])
+      .filter((r) => bulk.has(r.id))
+      .map((r) => ({
+        id: r.id,
+        filename: r.filename,
+        created_at: r.created_at,
+        primary_category: r.primary_category,
+        confidence: r.confidence,
+        elapsed_ms: r.elapsed_ms ?? null,
+        source: r.source ?? null,
+        label: r.label ?? null,
+        tags: r.tags ?? [],
+      }));
+  }, [bulk, data]);
 
   const isSample = !!error || !Array.isArray(data) || data.length === 0;
   const sampleRows = (makeSampleShots(Math.min(limit, 60)) as unknown as Row[]).filter(
@@ -845,6 +869,19 @@ function ShotsPageInner() {
               Working...
             </span>
           )}
+          <div className="ml-auto flex items-center gap-2">
+            <span
+              className="eyebrow opacity-60 hidden sm:inline"
+              aria-hidden
+            >
+              Export
+            </span>
+            <BulkExportButtons
+              shots={bulkExportShots}
+              selectedCount={bulk.size}
+              disabled={bulkBusy}
+            />
+          </div>
         </div>
       )}
 
