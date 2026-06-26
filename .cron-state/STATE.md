@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (155 features tracked, 145 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (155 features tracked, 150 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -309,23 +309,62 @@ F33. [ ] Web: filter breadcrumb on `/notifications` + `/webhooks` lists -- reuse
 F34. [x] Web: stat-card hover detail on the `/stats` top KPIs -- shipped tick 30. `lib/stat-explainers.ts` + `<StatInfoPopover>` "?" affordance on each of the 4 KPI cards (definition / how-computed / window scope).
 F35. [ ] Web: "copy as JSON/Markdown" extended to multi-select on `/shots` -- bulk export the current selection via the existing `lib/shot-export.ts` serializers.
 F36. [x] Web: keyboard shortcut `v` on `/shots` to cycle the new view mode (table/grid/compact) -- shipped tick 30. Registered in the shortcut catalogue under the `shots` scope so it appears in the `?` help overlay's "On the shots list" section; input-guarded + modifier-safe.
-F37. [ ] Web: skeleton loaders for the `/stats` charts (reuse `<Skeleton>`) instead of the bare "Pulling rollups..." text while the aggregate loads.
+F37. [x] Web: skeleton loaders for the `/stats` charts -- shipped tick 31. `lib/stats-loading.ts` chartsBusy() predicate gates all 3 chart canvases on the canonical `<Skeleton block>` while pre-mount / first-fetch-with-no-data; the "Pulling rollups..." line became a role=status region.
 F38. [ ] Web: dim-mode polish pass on the felt hero band + `<Feed>` panel-dark cards -- audit contrast tokens so the Live page reads as intentionally-dark, not washed.
 F39. [ ] Web: per-class color swatch legend under the `/stats` ingest-tempo chart so the area/bar colors map to named classes at a glance.
 F40. [ ] Web: shot-detail "open next pinned" affordance -- when viewing a pinned shot, a small nav to step through the pinned set (pairs with the new quick-bar).
 
 ### Frontend backlog refill (tick 30 -- F41-F48, frontend-override still active)
 F41. [ ] Web: confidence-trend sparkline on `/stats` (the long-open F16/F27) -- now that F31 shipped the delta/zero-line tokens, draw a rolling-24h mean-confidence line over 14 days, stroke coloured by deltaStroke()/deltaFill() (rising green / falling red) and a zeroLine baseline. Reuse `useChartTheme()`.
-F42. [ ] Web: command-palette "clear recent" affordance -- a tiny inline control on the "Recently viewed" section header to wipe the MRU ring (new clearRecentShots() in lib/recent-shots.ts + a small button), for shared / kiosk machines.
+F42. [x] Web: command-palette "clear recent" affordance -- shipped tick 31. `clearRecentShots()` removes the MRU ring key entirely (no-throw); the "Recently viewed" header gained a guarded inline "Clear" button (Section grew an action slot).
 F43. [ ] Web: shot-detail prev/next nav driven by the recent-shots ring -- chevrons in the detail header that step through the MRU list you just built, so paging back through what you were reviewing is one keypress (pairs with F26's history-window idea but uses the local ring, no fetch).
-F44. [ ] Web: persist the `/stats` window selector (24h/7d/30d) to localStorage so a return visit reopens on the same window instead of always 24h. Small lib (parse/serialize) + an effect, mirroring the view-mode persistence pattern.
-F45. [ ] Web: keyboard nav for the command palette "Recently viewed" rows is already wired, but add a `mod+1..9` quick-jump to the Nth result (nav or recent or hit) so power users can pick without arrowing. Pure key-to-index helper + unit tests.
+F44. [x] Web: persist the `/stats` window selector (24h/7d/30d) to localStorage -- shipped tick 31. `lib/stats-window.ts` (parse/serialize/read/write keyed by hour-count, no-throw, default-coercing) + a persisting pickWindow() on the page; replaced the ad-hoc WINDOWS array.
+F45. [x] Web: command-palette `mod+1..9` quick-jump to the Nth result -- shipped tick 31. Pure `digitJumpIndex(key, count)` (0 unbound, range-guarded); wired into onKey under meta/ctrl; first 9 rows show a faint Cmd-digit hint + footer legend.
 F46. [ ] Web: stat-card delta chips -- show a small up/down delta vs the previous equivalent window beside each KPI (e.g. mean-conf +2.1pts vs prior 7d), coloured with the new deltaStroke tokens. Backend may need a prior-window field on /api/aggregate (keep minimal).
-F47. [ ] Web: `/shots` shareable filter URL -- a "Copy link to this view" button that serialises the CURRENT filter state back INTO the deep-link query string (the inverse of F30's parser), so users can share a pre-filtered list. Reuse lib/shots-deeplink.ts with a new buildShotsDeepLink().
+F47. [x] Web: `/shots` shareable filter URL -- shipped tick 31. `buildShotsQuery`/`buildShotsDeepLink` (inverse of F30, round-trip-stable) + a `<CopyViewLinkButton>` on the toolbar that copies an absolute pre-filtered URL and disables when no filter is active.
 F48. [ ] Web: empty-state for the command palette when there are no recents AND no query -- today the resting palette with zero history shows only nav; add a subtle "Tip: open a shot to see it here" hint under the nav so the Recently-viewed section's purpose is discoverable.
 
 
+### Frontend backlog refill (tick 31 -- F49-F60, frontend-override still active)
+F49. [ ] Web: shot-detail prev/next nav driven by the recent-shots ring (the open F43) -- chevrons in the detail header that step through the MRU list, plus `[`/`]` keyboard bindings; reuse `readRecentShots()` (no fetch). Pairs with the new Cmd+digit palette jump.
+F50. [ ] Web: command-palette empty-state hint (the open F48) -- when the resting palette has zero recents and no query, render a subtle "Tip: open a shot and it shows up here" line under the nav so the Recently-viewed section's purpose is discoverable. Pure render branch + a tiny `paletteRestingHint()` helper with tests.
+F51. [ ] Web: persist the `/shots` page-size selector (25/50/100/200) to localStorage, mirroring the F44 stats-window pattern -- a return visit reopens on the same density. New `lib/shots-page-size.ts` (parse/serialize/read/write, default-coercing, no-throw) + wire into the page-size `<select>`.
+F52. [ ] Web: "Copy link" success should reflect WHAT was copied -- extend F47's toast to name the active filters (e.g. "Copied a link filtered to receipts >90%"). Reuse `describeFacets`/`filter-summary` phrasing; pure `describeShotsFilters(state)` helper + tests, wired into `CopyViewLinkButton`.
+F53. [ ] Web: stat-card delta chips (the open F46) -- a small up/down delta vs the previous equivalent window beside each KPI, coloured with the F31 deltaStroke tokens. If `/api/aggregate` lacks a prior-window field, derive client-side from a second SWR call at 2x the window; keep it minimal. Pure `formatDelta()` + tests.
+F54. [ ] Web: confidence-trend sparkline on `/stats` (the long-open F16/F27/F41) -- now that F31 (delta tokens) AND F37 (chart skeletons) AND F44 (window persistence) are all in, draw the rolling-mean-confidence line over the window, stroke by deltaStroke()/deltaFill(), zeroLine baseline, skeleton while busy. Reuse `useChartTheme()`.
+F55. [ ] Web: `/shots` "scroll to top" floating affordance when the list is long and scrolled -- a small felt-green pill that fades in past ~600px and smooth-scrolls up. Reuse the `<ScrollProgress>` scroll listener pattern; respects reduced-motion.
+F56. [ ] Web: per-class color swatch legend under the `/stats` ingest-tempo area chart (the open F39) -- a compact row mapping each `--color-cat-*` swatch to its class name so the stacked area reads at a glance. Pure render from CATEGORIES; no new data.
+F57. [ ] Web: keyboard shortcut `g s` / `g h` / `g u` (Linear-style "go to" chords) for Stats / sHots / Upload -- extend the shortcut catalogue + HotKeys with a two-key sequence matcher. Pure `matchGoToChord(keys)` state machine + tests; surfaced in the `?` help overlay.
+F58. [ ] Web: `/shots` filter state -> document.title so a deep-linked / filtered tab is identifiable in the browser tab bar (e.g. "Receipts >90% - Shots"). Pure `shotsDocTitle(state)` helper (reuse F52's describe) + an effect; tests on the helper.
+F59. [ ] Web: command-palette recent-shots rows show a relative "viewed 3m ago" timestamp (the ring already stores `viewedAt`) -- pure `relativeTime(ms, now)` helper with tests, rendered as a faint trailing label. Makes the MRU ordering legible.
+F60. [ ] Web: `/stats` "All classes" grid links should carry the active window as a deep-link hint (e.g. open `/shots` pre-filtered to the class) -- thread F47's `buildShotsDeepLink` so clicking a class tile from a 7d view lands on that class. Small wiring + a test that the built href round-trips.
+
+
 ## Tick log
+- 2026-06-25 17:35 PT (tick 31, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  - 94b9628 feat(web): copy a shareable link to the current /shots filter view (F47)
+  - 5e5586e feat(web): clear-recents affordance in the command palette (F42)
+  - 2b029a8 feat(web): Cmd/Ctrl + 1-9 quick-jump in the command palette (F45)
+  - 46f2fd9 feat(web): persist the /stats time-window selector across visits (F44)
+  - a712ec0 feat(web): skeleton loaders for the /stats charts (F37)
+  - Gate: tsc --noEmit clean (whole web project) + npm test 322 passed / 0 failed
+    (291 baseline + 31 new across 4 new/extended lib modules: shots-deeplink
+    inverse builder, recent-shots clearRecentShots, command-palette
+    digitJumpIndex, stats-window, stats-loading) + `next build` compiled
+    successfully in 5.9s -- /shots AND /stats both still prerender static. All
+    work is web/ TS only -- zero Python touched, so the pytest baseline cannot
+    regress. `next lint` is NOT configured in this repo; tsc + the 322 web
+    tests + the production build are the reliable web gates, all green.
+  - Theme: this batch finished off the F41-F48 refill's "infrastructure I
+    already shipped" items. F47 closes the deep-link loop (F30 parses IN, F47
+    serialises OUT -- round-trip-stable, shared via a Copy-link button). F42
+    + F45 deepen the command palette (clear the MRU ring; Cmd+digit jump with
+    discoverable per-row hints). F44 makes /stats remember your window. F37
+    gives /stats real chart skeletons. Five small, revertible, tested slices.
+  - Frontend backlog: F37/F42/F44/F45/F47 marked done. Refilled with F49-F60
+    (12 new). Still open from earlier: F6/F9/F11/F16/F20-F23/F25, F26-F29, F33,
+    F35, F38-F41, F43, F46, F48.
+
 - 2026-06-25 12:21 PT (tick 30, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   - b434c97 feat(web): theme-aware delta / zero-line chart tokens (F31)
   - 82bd63b feat(web): explainer popovers on the stats KPI cards (F34)
