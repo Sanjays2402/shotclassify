@@ -27,6 +27,7 @@ import { Chip } from "@/components/Chip";
 import { CategoryLegendChip } from "@/components/CategoryLegendChip";
 import { StatInfoPopover } from "@/components/StatInfoPopover";
 import { SampleBadge } from "@/components/SampleBadge";
+import { Skeleton } from "@/components/Skeleton";
 import { useChartTheme } from "@/components/useChartTheme";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import { CATEGORIES, LONG, SHORT, ms, pct, type Category } from "@/lib/categories";
@@ -39,6 +40,7 @@ import {
   STATS_WINDOW_DEFAULT,
   type StatsWindowHours,
 } from "@/lib/stats-window";
+import { chartsBusy } from "@/lib/stats-loading";
 
 type Aggregate = {
   total: number;
@@ -150,6 +152,13 @@ export default function StatsPage() {
   const agg = live ? data! : sampleAggregate(hours);
   const perClassTotal = totalCount(agg.per_class);
 
+  // Show chart skeletons before mount or while the very first aggregate is
+  // still loading with nothing to draw yet (F37). `data` is the real SWR
+  // payload -- once it (or the seeded fallback after an error) is available
+  // we render the charts. `error` short-circuits to the seeded preview, so
+  // it counts as "have something to draw".
+  const busy = chartsBusy(mounted, isLoading, !!data || !!error);
+
   const perClassChart = agg.per_class.map((d) => ({
     name: SHORT[d.category],
     cat: d.category,
@@ -249,7 +258,10 @@ export default function StatsPage() {
           <span className="num text-[11px] opacity-60">last {agg.window_hours}h</span>
         </div>
         <div style={{ width: "100%", height: 220 }}>
-          {mounted && (
+          {busy ? (
+            <Skeleton height="100%" radius={6} className="opacity-70" />
+          ) : (
+            mounted && (
             <ResponsiveContainer>
               <AreaChart data={hourlyChart} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
                 <defs>
@@ -283,6 +295,7 @@ export default function StatsPage() {
                 />
               </AreaChart>
             </ResponsiveContainer>
+            )
           )}
         </div>
         {hourlyChart.length === 0 && (
@@ -299,7 +312,10 @@ export default function StatsPage() {
             <span className="num text-[11px] opacity-60">{agg.per_class.length} classes seen</span>
           </div>
           <div style={{ width: "100%", height: 240 }}>
-            {mounted && (
+            {busy ? (
+              <Skeleton height="100%" radius={6} className="opacity-70" />
+            ) : (
+              mounted && (
               <ResponsiveContainer>
                 <BarChart
                   data={perClassChart}
@@ -330,6 +346,7 @@ export default function StatsPage() {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
+              )
             )}
           </div>
           <ul className="mt-3 flex flex-col gap-1.5">
@@ -368,7 +385,10 @@ export default function StatsPage() {
             <span className="num text-[11px] opacity-60">10 bins · 0 to 100%</span>
           </div>
           <div style={{ width: "100%", height: 240 }}>
-            {mounted && (
+            {busy ? (
+              <Skeleton height="100%" radius={6} className="opacity-70" />
+            ) : (
+              mounted && (
               <ResponsiveContainer>
                 <BarChart
                   data={confHistChart}
@@ -405,6 +425,7 @@ export default function StatsPage() {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
+              )
             )}
           </div>
           <p className="text-[11px] opacity-70 mt-3 leading-relaxed">
@@ -443,8 +464,10 @@ export default function StatsPage() {
         </div>
       </section>
 
-      {isLoading && !data && (
-        <div className="text-[12px] opacity-60 num">Pulling rollups…</div>
+      {busy && (
+        <div className="text-[12px] opacity-60 num" role="status" aria-live="polite">
+          Pulling rollups…
+        </div>
       )}
     </div>
   );
