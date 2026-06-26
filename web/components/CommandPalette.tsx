@@ -36,7 +36,7 @@ import {
   Snowflake,
 } from "@phosphor-icons/react";
 
-import { fuzzyScore as _fuzzy, rankNav } from "@/lib/command-palette";
+import { fuzzyScore as _fuzzy, rankNav, digitJumpIndex } from "@/lib/command-palette";
 import {
   parseFacets,
   hasFacets,
@@ -255,6 +255,19 @@ export default function CommandPalette() {
   }, []);
 
   const onKey = (e: React.KeyboardEvent) => {
+    // Cmd/Ctrl + 1-9 jumps straight to (and opens) the Nth flat result --
+    // nav, then recents, then hits, the same order shown. Out-of-range
+    // digits and 0 no-op so the browser keeps its native chord (e.g. Cmd+0
+    // zoom-reset). (F45)
+    if (e.metaKey || e.ctrlKey) {
+      const idx = digitJumpIndex(e.key, items.length);
+      if (idx !== null) {
+        e.preventDefault();
+        setCursor(idx);
+        choose(items[idx]);
+        return;
+      }
+    }
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setCursor((c) => Math.min(items.length - 1, c + 1));
@@ -357,6 +370,7 @@ export default function CommandPalette() {
                   <Row
                     key={n.id}
                     active={active}
+                    jump={i < 9 ? i + 1 : undefined}
                     onMouseEnter={() => setCursor(i)}
                     onClick={() => choose(n)}
                   >
@@ -400,6 +414,7 @@ export default function CommandPalette() {
                   <Row
                     key={`recent-${r.id}`}
                     active={active}
+                    jump={i < 9 ? i + 1 : undefined}
                     onMouseEnter={() => setCursor(i)}
                     onClick={() => choose(r)}
                   >
@@ -436,6 +451,7 @@ export default function CommandPalette() {
                   <Row
                     key={`hit-${h.id}`}
                     active={active}
+                    jump={i < 9 ? i + 1 : undefined}
                     onMouseEnter={() => setCursor(i)}
                     onClick={() => choose(h)}
                   >
@@ -466,7 +482,9 @@ export default function CommandPalette() {
           style={{ borderColor: "var(--color-rule, #e5e7eb)" }}
         >
           <span>
-            <Kbd>↑</Kbd> <Kbd>↓</Kbd> navigate <Kbd>↵</Kbd> select
+            <Kbd>↑</Kbd> <Kbd>↓</Kbd> navigate <Kbd>↵</Kbd> select{" "}
+            <Kbd>⌘</Kbd>
+            <Kbd>1-9</Kbd> jump
           </span>
           <span>
             <Kbd>⌘</Kbd>
@@ -505,11 +523,16 @@ function Row({
   active,
   onClick,
   onMouseEnter,
+  jump,
 }: {
   children: React.ReactNode;
   active: boolean;
   onClick: () => void;
   onMouseEnter: () => void;
+  // 1-9 for the first nine rows -- rendered as a faint trailing hint so the
+  // Cmd+digit quick-jump (F45) is discoverable. Hidden on the active row to
+  // keep the selection chrome clean.
+  jump?: number;
 }) {
   return (
     <button
@@ -525,6 +548,15 @@ function Row({
       }}
     >
       {children}
+      {jump != null && !active && (
+        <kbd
+          className="hidden sm:inline-block text-[9px] leading-none px-1 py-0.5 rounded border opacity-40 ml-1"
+          style={{ borderColor: "var(--color-rule, #e5e7eb)" }}
+          aria-hidden
+        >
+          ⌘{jump}
+        </kbd>
+      )}
     </button>
   );
 }

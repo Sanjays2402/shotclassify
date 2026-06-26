@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fuzzyScore, rankNav } from "./command-palette";
+import { fuzzyScore, rankNav, digitJumpIndex } from "./command-palette";
 
 test("fuzzyScore: empty query yields neutral score", () => {
   assert.equal(fuzzyScore("", "Shots", "Browse history"), 1);
@@ -67,4 +67,35 @@ test("rankNav: ranks by score, filters zeros, respects limit", () => {
   }));
   const r4 = rankNav("", nav2, 5);
   assert.equal(r4.length, 5);
+});
+
+// --- F45: digitJumpIndex (Cmd/Ctrl + 1-9 quick-jump) ----------------------
+
+test("digitJumpIndex: 1-9 map to zero-based indices when in range", () => {
+  assert.equal(digitJumpIndex("1", 9), 0);
+  assert.equal(digitJumpIndex("2", 9), 1);
+  assert.equal(digitJumpIndex("9", 9), 8);
+});
+
+test("digitJumpIndex: an index past the result count returns null", () => {
+  // Only 3 results -> 1, 2, 3 valid; 4+ is null.
+  assert.equal(digitJumpIndex("3", 3), 2);
+  assert.equal(digitJumpIndex("4", 3), null);
+  assert.equal(digitJumpIndex("9", 3), null);
+});
+
+test("digitJumpIndex: 0 is intentionally unbound", () => {
+  assert.equal(digitJumpIndex("0", 9), null);
+});
+
+test("digitJumpIndex: non-digit / multi-char keys return null", () => {
+  for (const k of ["a", "Enter", "", "12", "+", " "]) {
+    assert.equal(digitJumpIndex(k, 9), null, JSON.stringify(k));
+  }
+});
+
+test("digitJumpIndex: an empty / non-positive result set returns null", () => {
+  assert.equal(digitJumpIndex("1", 0), null);
+  assert.equal(digitJumpIndex("1", -3), null);
+  assert.equal(digitJumpIndex("1", 1.5 as number), null);
 });
