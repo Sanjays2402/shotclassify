@@ -37,6 +37,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { fuzzyScore as _fuzzy, rankNav, digitJumpIndex, paletteRestingHint } from "@/lib/command-palette";
+import { chordKeysForRoute } from "@/lib/goto-chords";
 import {
   parseFacets,
   hasFacets,
@@ -395,7 +396,29 @@ export default function CommandPalette() {
                       <span className="font-medium">{n.label}</span>
                       <span className="opacity-60 ml-2 text-[12px]">{n.hint}</span>
                     </span>
-                    <span className="opacity-50 text-[11px]">{n.href}</span>
+                    {(() => {
+                      // Surface the Linear-style `g <x>` section chord for any
+                      // nav row that has one (F68), so the shortcut is
+                      // discoverable straight from the palette -- no cheat
+                      // sheet needed. Rows without a chord keep showing their
+                      // route. GOTO_CHORDS stays the single source of truth.
+                      const chord = chordKeysForRoute(n.href);
+                      if (chord) {
+                        return (
+                          <span
+                            className="hidden sm:inline-flex items-center gap-0.5"
+                            aria-label={`Shortcut: press ${chord[0]} then ${chord[1]}`}
+                            title={`Press ${chord[0]} then ${chord[1]}`}
+                          >
+                            <kbd className="kbd text-[10px]">{chord[0]}</kbd>
+                            <kbd className="kbd text-[10px]">{chord[1]}</kbd>
+                          </span>
+                        );
+                      }
+                      return (
+                        <span className="opacity-50 text-[11px]">{n.href}</span>
+                      );
+                    })()}
                     <ArrowRight size={14} weight="duotone" className="opacity-50" />
                   </Row>
                 );

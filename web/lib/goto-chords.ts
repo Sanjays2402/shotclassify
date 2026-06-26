@@ -57,6 +57,36 @@ const BY_SEQ: ReadonlyMap<string, string> = new Map(
   GOTO_CHORDS.map((c) => [c.seq, c.route]),
 );
 
+// Reverse index: route -> chord. Lets a consumer that already knows a
+// destination (e.g. the command palette's nav rows) surface the chord that
+// reaches it, keeping GOTO_CHORDS the single source of truth. Routes are
+// unique (a GOTO_CHORDS invariant the tests enforce) so this is unambiguous.
+const BY_ROUTE: ReadonlyMap<string, GotoChord> = new Map(
+  GOTO_CHORDS.map((c) => [c.route, c]),
+);
+
+// Find the section chord that navigates to `route`, or null when no chord
+// targets it. Pure + defensive so a non-string / unknown route degrades to
+// null rather than throwing into a render path. Backs the palette's chord
+// hint (F68): each nav row whose href matches a chord renders the `g <x>`
+// glyphs so the shortcut is discoverable without opening the cheat sheet.
+export function chordForRoute(
+  route: string | null | undefined,
+): GotoChord | null {
+  if (typeof route !== "string") return null;
+  return BY_ROUTE.get(route) ?? null;
+}
+
+// The two glyphs (e.g. ["G", "S"]) for the chord that reaches `route`, or
+// null when none does. Thin convenience over chordForRoute for a renderer
+// that only needs the keys to draw <kbd> badges.
+export function chordKeysForRoute(
+  route: string | null | undefined,
+): readonly [string, string] | null {
+  const c = chordForRoute(route);
+  return c ? c.keys : null;
+}
+
 // Map a completed chord sequence to its destination route. Returns null for
 // any sequence we don't own -- notably "g t" (scroll-to-top, handled by the
 // caller) and any unknown chord -- so HotKeys can fall through to its other

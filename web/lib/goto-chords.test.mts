@@ -6,6 +6,8 @@ import {
   GOTO_CHORDS,
   routeForChord,
   isGotoChord,
+  chordForRoute,
+  chordKeysForRoute,
 } from "./goto-chords.ts";
 import { SHORTCUTS, createSequenceTracker, type KeyLike } from "./shortcuts.ts";
 
@@ -59,6 +61,38 @@ test("isGotoChord: boolean mirror of routeForChord", () => {
   assert.equal(isGotoChord("g s"), true);
   assert.equal(isGotoChord("g t"), false);
   assert.equal(isGotoChord("nope"), false);
+});
+
+test("chordForRoute: reverse-maps a route to its chord (F68)", () => {
+  assert.equal(chordForRoute("/stats")?.seq, "g s");
+  assert.equal(chordForRoute("/")?.seq, "g l");
+  assert.equal(chordForRoute("/demo")?.seq, "g d");
+  assert.equal(chordForRoute("/notifications")?.seq, "g i");
+});
+
+test("chordForRoute: a route with no chord (or junk) is null", () => {
+  assert.equal(chordForRoute("/usage"), null);
+  assert.equal(chordForRoute("/settings/security/freeze"), null);
+  assert.equal(chordForRoute(""), null);
+  assert.equal(chordForRoute(null), null);
+  assert.equal(chordForRoute(undefined), null);
+  assert.equal(chordForRoute(42 as unknown as string), null);
+});
+
+test("chordKeysForRoute: the two glyphs, or null when unmapped", () => {
+  assert.deepEqual(chordKeysForRoute("/shots"), ["G", "H"]);
+  assert.deepEqual(chordKeysForRoute("/keys"), ["G", "K"]);
+  assert.equal(chordKeysForRoute("/usage"), null);
+});
+
+test("chordForRoute round-trips every chord through routeForChord", () => {
+  // The reverse index must be a perfect inverse of the forward map for the
+  // palette hint to never disagree with what the keyboard actually does.
+  for (const c of GOTO_CHORDS) {
+    const back = chordForRoute(c.route);
+    assert.equal(back?.seq, c.seq, `${c.route} should map back to ${c.seq}`);
+    assert.equal(routeForChord(back!.seq), c.route);
+  }
 });
 
 test("GOTO_CHORDS: stable shape -- unique seqs, two glyphs, leading G", () => {
