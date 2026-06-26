@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fuzzyScore, rankNav, digitJumpIndex } from "./command-palette";
+import { fuzzyScore, rankNav, digitJumpIndex, paletteRestingHint, PALETTE_RESTING_HINT } from "./command-palette";
 
 test("fuzzyScore: empty query yields neutral score", () => {
   assert.equal(fuzzyScore("", "Shots", "Browse history"), 1);
@@ -98,4 +98,24 @@ test("digitJumpIndex: an empty / non-positive result set returns null", () => {
   assert.equal(digitJumpIndex("1", 0), null);
   assert.equal(digitJumpIndex("1", -3), null);
   assert.equal(digitJumpIndex("1", 1.5 as number), null);
+});
+
+// --- F50: resting-palette discoverability hint ---------------------------
+
+test("paletteRestingHint: shown only when resting AND no recents", () => {
+  assert.equal(paletteRestingHint(true, 0), PALETTE_RESTING_HINT);
+});
+
+test("paletteRestingHint: hidden the moment the user types (not resting)", () => {
+  assert.equal(paletteRestingHint(false, 0), null);
+  assert.equal(paletteRestingHint(false, 3), null);
+});
+
+test("paletteRestingHint: hidden once the recents ring has entries", () => {
+  assert.equal(paletteRestingHint(true, 1), null);
+  assert.equal(paletteRestingHint(true, 6), null);
+});
+
+test("paletteRestingHint: a non-finite count is treated as empty (still shows)", () => {
+  assert.equal(paletteRestingHint(true, NaN), PALETTE_RESTING_HINT);
 });

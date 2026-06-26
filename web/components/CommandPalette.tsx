@@ -36,7 +36,7 @@ import {
   Snowflake,
 } from "@phosphor-icons/react";
 
-import { fuzzyScore as _fuzzy, rankNav, digitJumpIndex } from "@/lib/command-palette";
+import { fuzzyScore as _fuzzy, rankNav, digitJumpIndex, paletteRestingHint } from "@/lib/command-palette";
 import {
   parseFacets,
   hasFacets,
@@ -233,6 +233,13 @@ export default function CommandPalette() {
     () => (showRecents ? recents : []),
     [showRecents, recents],
   );
+
+  // Resting-palette discoverability hint (F50): on a bare palette with no
+  // query AND an empty recents ring, the lower half is just nav -- nothing
+  // tells a new user that opening a shot will seed a one-keystroke "Recently
+  // viewed" shortcut. Show a one-line tip in exactly that state; it steps
+  // aside the moment they type or once they've viewed a shot.
+  const restingHint = paletteRestingHint(showRecents, recents.length);
 
   const items: Item[] = useMemo(
     () => [...navMatches, ...recentItems, ...hits],
@@ -495,6 +502,16 @@ export default function CommandPalette() {
                 );
               })}
             </Section>
+          )}
+
+          {restingHint && (
+            <div
+              className="px-3 pt-2 pb-3 text-[11px] flex items-center gap-1.5 opacity-55"
+              data-testid="palette-resting-hint"
+            >
+              <Sparkle size={12} weight="duotone" className="shrink-0" />
+              <span>{restingHint}</span>
+            </div>
           )}
         </div>
 

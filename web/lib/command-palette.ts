@@ -56,3 +56,25 @@ export function digitJumpIndex(
   if (idx >= itemCount) return null;
   return idx;
 }
+
+// Resting-palette discoverability hint (F50). When the palette is open with
+// NO free text / facet typed AND the recently-viewed ring is empty, the lower
+// half is bare nav -- nothing explains that opening a shot will populate a
+// "Recently viewed" shortcut here. This returns a one-line tip to render
+// under the nav in exactly that state, and null otherwise (so the moment the
+// user types, or once they've viewed a shot, the hint steps aside).
+//
+// `resting` is the same predicate the component already computes for whether
+// to show the recents section (no residual text AND no structured facet);
+// `recentCount` is the size of the recently-viewed ring.
+export const PALETTE_RESTING_HINT =
+  "Tip: open a shot and it shows up here for one-keystroke return.";
+
+export function paletteRestingHint(
+  resting: boolean,
+  recentCount: number,
+): string | null {
+  if (!resting) return null;
+  if (Number.isFinite(recentCount) && recentCount > 0) return null;
+  return PALETTE_RESTING_HINT;
+}
