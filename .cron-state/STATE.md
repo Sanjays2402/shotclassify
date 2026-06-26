@@ -20,7 +20,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (168 features tracked, 160 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (180 features tracked, 166 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -349,17 +349,45 @@ F60. [x] Web: `/stats` "All classes" tiles carry the active window into /shots -
 
 
 ### Frontend backlog refill (tick 33 -- F61-F68, frontend-override still active)
-F61. [ ] Web: extend the `g <x>` chord namespace to more sections (g d Demo / g w Webhooks / g k API keys / g i Inbox) -- pure additions to `lib/goto-chords.ts` GOTO_CHORDS + the SHORTCUTS "goto" scope; the tracker + HotKeys wiring already generalises, so it's catalogue-only + tests. Watch for first-letter collisions (keep g s = Stats).
-F62. [ ] Web: shot-detail prev/next should also render plain on-screen chevron LABELS (the newer/older shot's short id or class) so the trail is legible without hovering -- extend `<ShotNav>` to read the neighbour's RecentShot label from the frozen ring snapshot, not just its id. Pure label lookup + a test.
-F63. [ ] Web: grid-density keyboard cycle -- a `d` shortcut on /shots (shots scope, grid view only) that cycles roomy->default->dense, mirroring the `v` view-cycle. Pure `nextGridDensity()` + a SHORTCUTS entry under the shots scope; input-guarded.
-F64. [ ] Web: bulk-export a 3rd format -- "Copy as CSV" beside JSON/MD on the multi-select, reusing the same selection rows. Pure `toBulkCsv()` in shot-export-bulk.ts (RFC-4180 quoting: wrap cells containing comma/quote/newline, double interior quotes) + tests; wire a third button.
-F65. [ ] Web: confidence-trend sparkline on `/stats` (the long-open F16/F27/F41/F54) -- now that F31 (delta tokens), F37 (chart skeletons), F44 (window persistence) are all in, draw the rolling mean-confidence line over the window; stroke by deltaStroke()/deltaFill(); zeroLine baseline; skeleton while busy; `useChartTheme()`.
-F66. [ ] Web: `/shots` "scroll to top" floating affordance (the open F55) -- a felt-green pill that fades in past ~600px and smooth-scrolls up; reuse the `<ScrollProgress>` scroll-listener + scrollProgress() math; respect prefers-reduced-motion.
-F67. [ ] Web: per-class swatch legend under the `/stats` ingest-tempo area chart (the open F39/F56) -- a compact row mapping each `--color-cat-*` swatch to its class name. Pure render from CATEGORIES; no new data.
-F68. [ ] Web: command-palette "go to section" rows -- surface the F57 chord destinations (Live/Shots/Stats/Upload/Calibration) as palette entries with their `g <x>` hint shown on the right, so the chords are discoverable from the palette too. Reuse GOTO_CHORDS as the single source; pure row-builder + a test.
+F61. [x] Web: extend the `g <x>` chord namespace -- shipped tick 34. GOTO_CHORDS + SHORTCUTS gain g d (Demo) / g w (Webhooks) / g k (API keys) / g i (Inbox); second letters picked to avoid the reserved `g t` and each other; two guard tests (no-T-reuse, distinct-second-letters). Catalogue-only; tracker + HotKeys already generalise. (0f75c15)
+F62. [x] Web: shot-detail prev/next chevrons show the neighbour's LABEL -- shipped tick 34. ShotNeighbors gains prevLabel/nextLabel from the frozen ring snapshot; pure neighborLabel() (stored label -> 8-char short-id fallback -> ellipsis at 18); ShotNav renders an inline truncated span (hidden < sm) + folds the name into aria-label/title. (e5091dc)
+F63. [x] Web: grid-density keyboard cycle -- shipped tick 34. `d` on /shots cycles Roomy->Default->Dense via pure nextGridDensity(); shots-scope SHORTCUTS entry hinted "Grid view only"; handler is view-guarded (grid only, via ref) AND chord-guarded so the new `g d` Demo chord doesn't also flip density (swallows a `d` within 1200ms of a `g`). (6b84035)
+F64. [x] Web: bulk "Copy as CSV" (3rd format) -- shipped tick 34. toBulkCsv() in shot-export-bulk.ts with RFC-4180 quoting (comma/quote/CR/LF -> wrap+double-quote), CRLF records, stable exported BULK_CSV_HEADERS, bare confidence_pct number, "; "-joined tags; empty selection -> header row alone; "Copy CSV" button + toast type widened. 6 tests. (adc08f3)
+F65. [ ] Web: confidence-trend sparkline on `/stats` (the long-open F16/F27/F41/F54) -- now that F31 (delta tokens), F37 (chart skeletons), F44 (window persistence) are all in, draw the rolling mean-confidence line over the window; stroke by deltaStroke()/deltaFill(); zeroLine baseline; skeleton while busy; `useChartTheme()`. NOTE (tick 34): `/api/aggregate` `hourly` is COUNT-ONLY -- no per-bucket mean confidence -- so this needs a real backend field (per-hour mean conf) before the chart is honest. Deferred to avoid a half-baked viz; do the backend slice first.
+F66. [x] Web: `/shots` "scroll to top" floating affordance -- ALREADY SHIPPED. `<ScrollProgress>` (felt-green->cue FAB + scroll-progress bar, reduced-motion aware) is mounted GLOBALLY in app/layout.tsx, so every route including /shots already has it. Marked done tick 34 (no new work needed; would have been filler).
+F67. [ ] Web: per-class swatch legend under the `/stats` ingest-tempo area chart (the open F39/F56) -- a compact row mapping each `--color-cat-*` swatch to its class name. Pure render from CATEGORIES; no new data. NOTE (tick 34): the tempo chart is a SINGLE felt-green series (total ingest/hour), not per-class -- so a class legend under IT is misleading. The class-mix bar chart below already has the CategoryLegendChip list. Re-scope or drop before picking up.
+F68. [x] Web: command-palette "go to section" chord hints -- shipped tick 34. Rather than add duplicate rows, decorated the EXISTING nav rows: chordForRoute()/chordKeysForRoute() reverse-index GOTO_CHORDS so each "Jump to" row whose href has a chord renders its `g <x>` kbd glyphs (sm:+ only) instead of the route. Round-trip test proves the reverse map is a perfect inverse. (5578e8b)
+
+
+### Frontend backlog refill (tick 34 -- F69-F80, frontend-override still active)
+F69. [ ] Web: `g <x>` chord hints in the `?` ShortcutsHelp overlay should render as a TWO-KEY badge with a "then" separator already (they do) -- instead, add a one-line "Tip: press G then a letter" caption under the "Jump to a section" group header so the chord PATTERN is explained once, not just enumerated. Pure copy + a render tweak in ShortcutsHelp.tsx; no lib change.
+F70. [ ] Web: command-palette should also expose the grid-density `d` and view `v` shortcuts as a faint footer legend (like the existing Cmd-digit legend) when the palette is open, so the shots-list shortcuts are discoverable from the palette. Pure render off SHORTCUTS filtered to scope==="shots"; no new lib.
+F71. [ ] Web: `<ShotNav>` keyboard hint -- when the prev/next chevrons are visible, show a tiny `[ ]` kbd pair next to the position counter ("2 of 6  [ ]") so the keys are discoverable without the ? overlay. Pure render in ShotNav.tsx; reduced-motion irrelevant.
+F72. [ ] Web: per-row inline preview drawer on `/shots` (the long-open F11/F28) -- click the ID-column chevron to expand a drawer under the row with OCR text + a mini confidence bar + rationale, without leaving the list. Pure row-expand state (Set<id>) + a presentational `<ShotPreviewDrawer>`; data already on the row or one /api/shots/[id] fetch.
+F73. [ ] Web: filter breadcrumb on `/notifications` + `/webhooks` lists (the open F33) -- reuse `<FilterBreadcrumb>` + a small adapter so the consolidation theme continues. Pure adapter mapping each page's filter state to FilterKey pills + a clearOne handler.
+F74. [ ] Web: reuse `<EmptyState>` on `/notifications` (filter-aware), `/webhooks`, `/admin/seats`, `/digest` (the long-open F6) -- four pages still use bespoke "no rows" markup. Consolidate onto the canonical component now that emptyCopyForList exists.
+F75. [ ] Web: keyboard-driven filter chips on `/shots` (the open F20) -- `Tab` cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box; pairs with the `?` help. Pure tabIndex ordering + a roving-focus hook; test the order helper.
+F76. [ ] Web: live-counter color-pulse on the `<Ticker>` when a new classification lands (the open F21) -- the 24h total briefly glows cue-yellow when its number ticks up. Pure `usePrevious(total)` + a CSS keyframe class toggled on increase; respect prefers-reduced-motion.
+F77. [ ] Web: collapsible side rail on the shot-detail page (the open F22) -- fold-up handles per subsection (OCR / rationale / pin / umpire / tags / frame) with smooth max-height animation + remembered state per slot in localStorage. Pure `lib/detail-rail.ts` (parse/serialize/toggle, no-throw storage) + a `<CollapsibleSection>` wrapper; test the state helpers.
+F78. [ ] Web: API-key creation modal polish (the open F23) -- replace the inline create cards on `/keys` with a focused modal reusing the chalk-surface + felt-green icon-well pattern; the new key + scopes selection feels intentional. Component-level; reuse existing modal chrome.
+F79. [ ] Web: `/stats` window selector should expose a keyboard cycle (`w` cycles 24h/7d/30d) mirroring the shots `v`/`d` shortcuts, registered under a new "stats" SHORTCUTS scope; input-guarded + chord-guarded against the `g w` Webhooks chord (same pattern as F63's `d` vs `g d`). Pure nextStatsWindow() + tests.
+F80. [ ] Web: shot-detail "copy as CSV" single-shot export beside the existing JSON/MD buttons (CopyExportButtons), reusing F64's csvCell quoting via a shared helper extracted from shot-export-bulk.ts so the two exporters can't drift. Pure toCsv(shot) + tests.
 
 
 ## Tick log
+- 2026-06-26 07:50 PT (tick 34, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  - 0f75c15 feat(web): extend the g <x> chord namespace to Demo/Webhooks/Keys/Inbox (F61)
+  - 5578e8b feat(web): show g <x> section chords on the command palette nav rows (F68)
+  - adc08f3 feat(web): bulk "Copy as CSV" on the /shots multi-select (F64)
+  - e5091dc feat(web): shot-detail prev/next chevrons show the neighbour's label (F62)
+  - 6b84035 feat(web): grid-density keyboard cycle on /shots (F63)
+  - Gate: web suite 420 pass / 0 fail (was 402; +18 new tests), tsc --noEmit clean.
+  - Skipped F65 (needs a backend per-hour mean-conf field first), F66 (already global via
+    ScrollProgress in layout), F67 (tempo chart is single-series; class legend would mislead).
+  - NOTE: repo-wide `ruff check` reports 536 PRE-EXISTING errors (proven byte-identical at
+    HEAD~5) from ruff-version drift (pins >=0.6, resolved 0.15.15 -> new UP/I/F rules). My batch
+    touched ZERO Python and added zero new lint errors. Flagged for Sanjay; needs a separate
+    `ruff check --fix` + pin bump, not part of the frontend override.
 - 2026-06-26 02:33 PT (tick 33, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   - 5ecec8a feat(web): Linear-style "go to" chords for section nav (F57)
   - aded544 feat(web): shot-detail prev/next nav over the recently-viewed ring (F49)
