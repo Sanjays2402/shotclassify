@@ -33,6 +33,13 @@ import {
 import { toast } from "@/lib/toast-store";
 import { parseShotsDeepLink, hasDeepLink } from "@/lib/shots-deeplink";
 import {
+  parseShotsPageSize,
+  writeShotsPageSize,
+  SHOTS_PAGE_SIZES,
+  SHOTS_PAGE_SIZE_STORAGE_KEY,
+  type ShotsPageSize,
+} from "@/lib/shots-page-size";
+import {
   CATEGORIES,
   LONG,
   confColor,
@@ -97,6 +104,23 @@ function ShotsPageInner() {
       // Storage blocked -- stay on the table default.
     }
   }, []);
+
+  // Load the persisted page size once on mount, mirroring the view-mode load
+  // (F51). A return visit reopens on the density you last picked instead of
+  // snapping back to 50. Storage failures leave the in-state default intact.
+  useEffect(() => {
+    try {
+      setLimit(parseShotsPageSize(window.localStorage.getItem(SHOTS_PAGE_SIZE_STORAGE_KEY)));
+    } catch {
+      // Storage blocked -- stay on the 50-row default.
+    }
+  }, []);
+
+  // Change + persist the page size together so the next visit reopens here.
+  const setLimitPersist = (next: ShotsPageSize) => {
+    setLimit(next);
+    writeShotsPageSize(next);
+  };
 
   // Apply deep-link query params ONCE on mount so links INTO the list land
   // pre-filtered: the stats class-mix chips (`?category=receipt`), the
@@ -446,10 +470,10 @@ function ShotsPageInner() {
           className="num text-[12px] px-2 py-1.5 rounded-sm border bg-white"
           style={{ borderColor: "var(--color-rule)" }}
           value={limit}
-          onChange={(e) => setLimit(Number(e.target.value))}
+          onChange={(e) => setLimitPersist(Number(e.target.value) as ShotsPageSize)}
           aria-label="Page size"
         >
-          {[25, 50, 100, 200].map((n) => (
+          {SHOTS_PAGE_SIZES.map((n) => (
             <option key={n} value={n}>
               {n} / page
             </option>
