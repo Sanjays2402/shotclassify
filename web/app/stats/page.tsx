@@ -41,6 +41,7 @@ import {
   type StatsWindowHours,
 } from "@/lib/stats-window";
 import { chartsBusy } from "@/lib/stats-loading";
+import { statsClassLink } from "@/lib/stats-class-link";
 
 type Aggregate = {
   total: number;
@@ -126,8 +127,14 @@ function Stat({
 export default function StatsPage() {
   const [hours, setHours] = useState<StatsWindowHours>(STATS_WINDOW_DEFAULT);
   const [mounted, setMounted] = useState(false);
+  // Captured once on mount so the class-tile deep-links (F60) have a stable
+  // `now` reference and don't recompute their since= date every render.
+  const [now, setNow] = useState(0);
   const ct = useChartTheme();
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+    setNow(Date.now());
+  }, []);
 
   // Reopen on the window the user last chose (F44). SSR can't know it, so we
   // read on mount; an invalid / missing value coerces back to the default.
@@ -447,10 +454,19 @@ export default function StatsPage() {
             const row = agg.per_class.find((p) => p.category === c);
             const count = row?.count ?? 0;
             const mean = row?.mean_confidence ?? 0;
+            // Carry the active window into the link as a since= date so the
+            // tile lands on /shots pre-filtered to this class AND timeframe
+            // (F60). Pre-mount we keep the bare class link so SSR and the
+            // first client render agree; post-mount it upgrades to the
+            // windowed deep-link once `now` is captured.
+            const href =
+              mounted && now > 0
+                ? statsClassLink(c, hours, now)
+                : `/shots?category=${c}`;
             return (
               <Link
                 key={c}
-                href={`/shots?category=${c}`}
+                href={href}
                 className="panel p-3 hover:shadow-md transition-shadow"
               >
                 <Chip cat={c} />
