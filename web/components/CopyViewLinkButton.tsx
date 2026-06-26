@@ -12,6 +12,7 @@ import { LinkSimple } from "@phosphor-icons/react/dist/ssr";
 import {
   buildShotsDeepLink,
   buildShotsQuery,
+  copyLinkToastMessage,
   type ShotsFilterState,
 } from "@/lib/shots-deeplink";
 import { toast } from "@/lib/toast-store";
@@ -57,7 +58,7 @@ export default function CopyViewLinkButton({
     const url = buildShotsDeepLink(filters, base);
     try {
       await writeClipboard(url);
-      toast.success("Copied a link to this filtered view.");
+      toast.success(copyLinkToastMessage(filters));
     } catch {
       toast.error("Copy failed. Your browser blocked clipboard access.");
     }

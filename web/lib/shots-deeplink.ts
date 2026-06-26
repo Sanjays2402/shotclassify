@@ -7,7 +7,7 @@
 // validated slice of the page's initial filter state. DOM-free + framework-
 // free so it's unit-testable; the page applies the result once on mount.
 
-import { CATEGORIES, type Category } from "./categories";
+import { CATEGORIES, LONG, type Category } from "./categories";
 
 export type ShotsSort = "new" | "old" | "conf_desc" | "conf_asc";
 
@@ -181,4 +181,77 @@ export function buildShotsDeepLink(
 ): string {
   const qs = buildShotsQuery(state);
   return qs ? `${base}?${qs}` : base;
+}
+
+// --- Human-readable filter summary (F52) ---------------------------------
+// The "Copy link" toast (CopyViewLinkButton) confirmed the copy generically
+// ("Copied a link to this filtered view."). This names WHAT was copied so the
+// user trusts the link carries their actual filters -- "Copied a link
+// filtered to Receipt, >=90% confidence." Pure + DOM-free; reuses the same
+// active-filter rules as buildShotsQuery so the prose and the URL never
+// disagree. Mirrors the phrasing style of empty-state.ts describeFilters and
+// palette-facets describeFacets (the `·`-joined parts), but reads as a clause
+// for an inline sentence.
+
+// One short phrase per active filter, in the same coarse-to-fine order the
+// breadcrumb uses (class, search, tag, confidence, dates, pinned). Returns
+// [] when nothing is active.
+export function shotsFilterParts(state: ShotsFilterState): string[] {
+  const parts: string[] = [];
+
+  const category = typeof state.category === "string" ? state.category.trim() : "";
+  if (category && isCategory(category)) {
+    parts.push(LONG[category as Category]);
+  }
+
+  const q = typeof state.q === "string" ? state.q.trim() : "";
+  if (q) {
+    const shown = q.length > 24 ? `${q.slice(0, 24)}…` : q;
+    parts.push(`matching "${shown}"`);
+  }
+
+  const tag =
+    typeof state.tag === "string"
+      ? state.tag.trim().toLowerCase().slice(0, 32)
+      : "";
+  if (tag) parts.push(`#${tag}`);
+
+  if (typeof state.minConfPct === "number" && Number.isFinite(state.minConfPct)) {
+    const pct = Math.max(0, Math.min(100, Math.round(state.minConfPct)));
+    if (pct > 0) parts.push(`>=${pct}% confidence`);
+  }
+
+  const since = typeof state.since === "string" ? state.since.trim() : "";
+  const until = typeof state.until === "string" ? state.until.trim() : "";
+  if (since && ISO_DATE.test(since) && until && ISO_DATE.test(until)) {
+    parts.push(`${since} to ${until}`);
+  } else if (since && ISO_DATE.test(since)) {
+    parts.push(`since ${since}`);
+  } else if (until && ISO_DATE.test(until)) {
+    parts.push(`until ${until}`);
+  }
+
+  if (state.pinnedOnly === true) parts.push("pinned only");
+
+  return parts;
+}
+
+// Join the active-filter phrases into an English clause with an Oxford-style
+// comma list ("A", "A and B", "A, B and C"). Returns "" when nothing's
+// active so the caller can fall back to generic copy.
+export function describeShotsFilters(state: ShotsFilterState): string {
+  const parts = shotsFilterParts(state);
+  if (parts.length === 0) return "";
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+// The full toast line for a successful copy. Names the filters when any are
+// active, else a generic confirmation.
+export function copyLinkToastMessage(state: ShotsFilterState): string {
+  const summary = describeShotsFilters(state);
+  return summary
+    ? `Copied a link filtered to ${summary}.`
+    : "Copied a link to this view.";
 }

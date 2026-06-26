@@ -7,6 +7,9 @@ import {
   hasDeepLink,
   buildShotsQuery,
   buildShotsDeepLink,
+  shotsFilterParts,
+  describeShotsFilters,
+  copyLinkToastMessage,
   type ParamSource,
   type ShotsFilterState,
 } from "./shots-deeplink.ts";
@@ -219,4 +222,72 @@ test("F47 round trip: parse(build(state)) is stable", () => {
     sort: "conf_asc",
     pinnedOnly: true,
   });
+});
+
+// --- F52: human-readable filter summary for the copy-link toast -----------
+
+test("shotsFilterParts: empty state yields no parts", () => {
+  assert.deepEqual(shotsFilterParts({}), []);
+  assert.deepEqual(
+    shotsFilterParts({ category: "", q: "", tag: "", minConfPct: 0, pinnedOnly: false }),
+    [],
+  );
+});
+
+test("shotsFilterParts: ordered coarse-to-fine, class uses the LONG label", () => {
+  const parts = shotsFilterParts({
+    category: "receipt",
+    q: "latte",
+    tag: "urgent",
+    minConfPct: 90,
+    since: "2026-01-01",
+    until: "2026-02-01",
+    pinnedOnly: true,
+  });
+  assert.deepEqual(parts, [
+    "Receipt",
+    'matching "latte"',
+    "#urgent",
+    ">=90% confidence",
+    "2026-01-01 to 2026-02-01",
+    "pinned only",
+  ]);
+});
+
+test("shotsFilterParts: a 0% conf floor is the inert default and is omitted", () => {
+  assert.deepEqual(shotsFilterParts({ minConfPct: 0 }), []);
+  assert.deepEqual(shotsFilterParts({ minConfPct: 85 }), [">=85% confidence"]);
+});
+
+test("shotsFilterParts: a long search query is truncated with an ellipsis", () => {
+  const q = "a-very-long-search-string-that-exceeds-the-cap";
+  assert.deepEqual(shotsFilterParts({ q }), [
+    'matching "a-very-long-search-strin…"',
+  ]);
+});
+
+test("shotsFilterParts: one-sided date ranges read 'since' / 'until'", () => {
+  assert.deepEqual(shotsFilterParts({ since: "2026-03-01" }), ["since 2026-03-01"]);
+  assert.deepEqual(shotsFilterParts({ until: "2026-03-31" }), ["until 2026-03-31"]);
+});
+
+test("describeShotsFilters: Oxford-style English joining", () => {
+  assert.equal(describeShotsFilters({}), "");
+  assert.equal(describeShotsFilters({ category: "receipt" }), "Receipt");
+  assert.equal(
+    describeShotsFilters({ category: "receipt", minConfPct: 90 }),
+    "Receipt and >=90% confidence",
+  );
+  assert.equal(
+    describeShotsFilters({ category: "receipt", tag: "urgent", minConfPct: 90 }),
+    "Receipt, #urgent and >=90% confidence",
+  );
+});
+
+test("copyLinkToastMessage: names the filters, else a generic line", () => {
+  assert.equal(copyLinkToastMessage({}), "Copied a link to this view.");
+  assert.equal(
+    copyLinkToastMessage({ category: "receipt", minConfPct: 90 }),
+    "Copied a link filtered to Receipt and >=90% confidence.",
+  );
 });
