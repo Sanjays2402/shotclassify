@@ -64,6 +64,17 @@ export function labelForGridDensity(d: GridDensity): string {
   return "Default";
 }
 
+// Cycle to the next density in the on-screen toggle order, wrapping at the
+// end: roomy -> default -> dense -> roomy. Backs the `d` keyboard shortcut on
+// /shots (F63), mirroring how `v` cycles the view mode. An unknown current
+// value coerces through the default's slot so the cycle always advances to a
+// valid density.
+export function nextGridDensity(d: GridDensity): GridDensity {
+  const order = GRID_DENSITIES;
+  const i = order.indexOf(isKnownDensity(d) ? d : GRID_DENSITY_DEFAULT);
+  return order[(i + 1) % order.length];
+}
+
 // --- Browser wrappers (no-throw) -----------------------------------------
 
 // Read the persisted density. Returns the default on SSR / blocked storage /

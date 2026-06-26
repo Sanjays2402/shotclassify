@@ -20,6 +20,7 @@ import {
   parseGridDensity,
   writeGridDensity,
   labelForGridDensity,
+  nextGridDensity,
   GRID_DENSITIES,
   GRID_DENSITY_DEFAULT,
   GRID_DENSITY_STORAGE_KEY,
@@ -238,6 +239,58 @@ function ShotsPageInner() {
         } catch {
           // Ignore quota / privacy-mode errors.
         }
+        return next;
+      });
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // "d" cycles the grid column density (Roomy -> Default -> Dense), mirroring
+  // the "v" view cycle and only meaningful in the grid view. Two guards beyond
+  // the usual input/modifier checks (F63):
+  //   1. View guard -- density is a grid-only concept, so we no-op in
+  //      table/compact. Read from a ref so the listener never re-binds.
+  //   2. Chord guard -- `g d` is the new "go to Demo" section chord (F61). The
+  //      keystroke that completes it also reaches this bare-`d` handler, so we
+  //      skip a `d` that lands within the chord window after a `g`, letting
+  //      HotKeys own the navigation without us flipping density on the way out.
+  const viewRef = useRef<ShotsViewMode>(view);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+  useEffect(() => {
+    let lastGAt = 0;
+    const CHORD_WINDOW_MS = 1200; // matches createSequenceTracker's default
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      const k = e.key.toLowerCase();
+      if (k === "g") {
+        lastGAt = e.timeStamp || performance.now();
+        return;
+      }
+      if (k !== "d") return;
+      // Tail of the `g d` chord -> let HotKeys navigate; don't cycle density.
+      const now = e.timeStamp || performance.now();
+      if (now - lastGAt <= CHORD_WINDOW_MS) {
+        lastGAt = 0;
+        return;
+      }
+      // Density only applies to the grid view.
+      if (viewRef.current !== "grid") return;
+      e.preventDefault();
+      setGridDensity((cur) => {
+        const next = nextGridDensity(cur);
+        writeGridDensity(next);
         return next;
       });
     }

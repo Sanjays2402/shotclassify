@@ -82,6 +82,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     label: "Cycle list view (Table / Grid / Compact)",
   },
   {
+    id: "cycle-grid-density",
+    scope: "shots",
+    combo: { keys: ["D"], match: "d" },
+    label: "Cycle grid density (Roomy / Default / Dense)",
+    hint: "Grid view only",
+  },
+  {
     id: "detail-prev",
     scope: "detail",
     combo: { keys: ["["], match: "[" },

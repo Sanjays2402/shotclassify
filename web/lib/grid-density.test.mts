@@ -7,6 +7,7 @@ import {
   serializeGridDensity,
   gridColumnsClass,
   labelForGridDensity,
+  nextGridDensity,
   readGridDensity,
   writeGridDensity,
   GRID_DENSITIES,
@@ -77,6 +78,30 @@ test("labelForGridDensity: human labels", () => {
   assert.equal(labelForGridDensity("roomy"), "Roomy");
   assert.equal(labelForGridDensity("default"), "Default");
   assert.equal(labelForGridDensity("dense"), "Dense");
+});
+
+test("nextGridDensity: cycles roomy -> default -> dense -> roomy", () => {
+  assert.equal(nextGridDensity("roomy"), "default");
+  assert.equal(nextGridDensity("default"), "dense");
+  assert.equal(nextGridDensity("dense"), "roomy");
+});
+
+test("nextGridDensity: order matches the on-screen toggle order", () => {
+  // Walking the cycle from each density visits every density exactly once
+  // before returning to the start -- no skips, no dead ends.
+  let cur = GRID_DENSITIES[0];
+  const seen = new Set<string>();
+  for (let i = 0; i < GRID_DENSITIES.length; i++) {
+    seen.add(cur);
+    cur = nextGridDensity(cur);
+  }
+  assert.equal(seen.size, GRID_DENSITIES.length);
+  assert.equal(cur, GRID_DENSITIES[0], "cycle wraps back to the start");
+});
+
+test("nextGridDensity: an unknown current value advances to a valid density", () => {
+  assert.equal(nextGridDensity("bogus" as never), nextGridDensity(GRID_DENSITY_DEFAULT));
+  assert.ok((GRID_DENSITIES as string[]).includes(nextGridDensity("bogus" as never)));
 });
 
 test("readGridDensity: SSR (no window) returns the default", () => {
