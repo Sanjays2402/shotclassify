@@ -21,6 +21,7 @@ import { UmpireControls } from "@/components/UmpireControls";
 import LabelTagsEditor from "@/components/LabelTagsEditor";
 import ShareActions from "@/components/ShareActions";
 import CopyExportButtons from "@/components/CopyExportButtons";
+import ShotNav from "@/components/ShotNav";
 import { useChartTheme } from "@/components/useChartTheme";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import { recordRecentShot } from "@/lib/recent-shots";
@@ -157,6 +158,7 @@ export default function ShotDetail({
         <span className="opacity-40">/</span>
         <span className="num">{shortId(rec.id)}</span>
         {isSample && <SampleBadge note="No record found; rendering seeded sample." />}
+        {!isSample && <ShotNav currentId={rec.id} />}
         {isSample && (
           <div className="ml-auto">
             <CopyExportButtons shot={exportShot} />

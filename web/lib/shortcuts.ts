@@ -81,6 +81,20 @@ export const SHORTCUTS: readonly Shortcut[] = [
     combo: { keys: ["V"], match: "v" },
     label: "Cycle list view (Table / Grid / Compact)",
   },
+  {
+    id: "detail-prev",
+    scope: "detail",
+    combo: { keys: ["["], match: "[" },
+    label: "Newer shot you viewed",
+    hint: "Steps the recently-viewed trail",
+  },
+  {
+    id: "detail-next",
+    scope: "detail",
+    combo: { keys: ["]"], match: "]" },
+    label: "Older shot you viewed",
+    hint: "Steps the recently-viewed trail",
+  },
   // Linear-style "go to" chords: press G, then the section letter. The
   // routes + this catalogue's source of truth live in lib/goto-chords.ts;
   // these entries exist so the sequence tracker recognises the chords and the
