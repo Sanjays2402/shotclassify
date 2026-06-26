@@ -10,6 +10,9 @@ type Props = {
   tags: string[];
   filenameFallback: string;
   disabled?: boolean;
+  /** Rendered inside a CollapsibleSection (F77): drop the panel chrome since
+   * the section already provides the card + header. */
+  embedded?: boolean;
 };
 
 function normalize(t: string): string {
@@ -22,6 +25,7 @@ export default function LabelTagsEditor({
   tags,
   filenameFallback,
   disabled,
+  embedded,
 }: Props) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -103,10 +107,13 @@ export default function LabelTagsEditor({
   }
 
   const displayLabel = (label ?? "").trim() || filenameFallback;
+  // When embedded in a CollapsibleSection (F77) the section supplies the card,
+  // so drop the panel chrome and just stack the contents.
+  const wrapClass = embedded ? "flex flex-col gap-3" : "panel p-4 flex flex-col gap-3";
 
   if (!editing) {
     return (
-      <div className="panel p-4 flex flex-col gap-3">
+      <div className={wrapClass}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="eyebrow mb-1">Label</div>
@@ -158,7 +165,7 @@ export default function LabelTagsEditor({
   }
 
   return (
-    <div className="panel p-4 flex flex-col gap-3">
+    <div className={wrapClass}>
       <div>
         <label className="eyebrow mb-1 block" htmlFor={`label-${id}`}>
           Label

@@ -475,3 +475,19 @@ html[data-theme="dim"] .sc-skeleton {
     background-image: none;
   }
 }
+
+/* Collapsible shot-detail rail (components/CollapsibleSection.tsx). The body
+   folds via a grid-rows 1fr <-> 0fr transition and the caret rotates. Both
+   animate smoothly; reduced-motion users get an instant snap. */
+.sc-rail-body {
+  transition: grid-template-rows 220ms cubic-bezier(0.21, 1, 0.36, 1);
+}
+.sc-rail-caret {
+  transition: transform 200ms cubic-bezier(0.21, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-rail-body,
+  .sc-rail-caret {
+    transition: none;
+  }
+}

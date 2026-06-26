@@ -19,6 +19,9 @@ type Props = {
   corrected?: Category | null;
   /** Disable everything (sample / non-persisted shot). */
   disabled?: boolean;
+  /** Rendered inside a CollapsibleSection (F77): drop the panel chrome +
+   * the redundant "Umpire room" header since the section already labels it. */
+  embedded?: boolean;
 };
 
 type Status =
@@ -26,7 +29,7 @@ type Status =
   | { kind: "ok"; msg: string }
   | { kind: "err"; msg: string };
 
-export function UmpireControls({ id, primary, corrected, disabled }: Props) {
+export function UmpireControls({ id, primary, corrected, disabled, embedded }: Props) {
   const router = useRouter();
   const { mutate } = useSWRConfig();
   const [pending, startTransition] = useTransition();
@@ -97,17 +100,27 @@ export function UmpireControls({ id, primary, corrected, disabled }: Props) {
   };
 
   return (
-    <div className="panel p-5">
-      <div className="flex items-center justify-between mb-3">
-        <span className="eyebrow inline-flex items-center gap-1.5">
-          <Flag size={14} weight="duotone" /> Umpire room
-        </span>
-        {corrected && (
-          <span className="num text-[10px] opacity-60">
-            on file: {LONG[corrected]}
+    <div className={embedded ? "" : "panel p-5"}>
+      {embedded ? (
+        corrected ? (
+          <div className="flex items-center justify-end mb-3">
+            <span className="num text-[10px] opacity-60">
+              on file: {LONG[corrected]}
+            </span>
+          </div>
+        ) : null
+      ) : (
+        <div className="flex items-center justify-between mb-3">
+          <span className="eyebrow inline-flex items-center gap-1.5">
+            <Flag size={14} weight="duotone" /> Umpire room
           </span>
-        )}
-      </div>
+          {corrected && (
+            <span className="num text-[10px] opacity-60">
+              on file: {LONG[corrected]}
+            </span>
+          )}
+        </div>
+      )}
 
       <p className="text-[12px] opacity-75 leading-snug mb-3">
         Disagree with the call? Mark the true class to feed calibration, or rerun the

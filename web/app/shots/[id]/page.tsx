@@ -22,9 +22,18 @@ import LabelTagsEditor from "@/components/LabelTagsEditor";
 import ShareActions from "@/components/ShareActions";
 import CopyExportButtons from "@/components/CopyExportButtons";
 import ShotNav from "@/components/ShotNav";
+import { CollapsibleSection } from "@/components/CollapsibleSection";
 import { useChartTheme } from "@/components/useChartTheme";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import { recordRecentShot } from "@/lib/recent-shots";
+import {
+  readDetailRail,
+  writeDetailRail,
+  toggleSlot,
+  isCollapsed,
+  type DetailRailState,
+  type DetailRailSlot,
+} from "@/lib/detail-rail";
 import {
   CATEGORIES,
   LONG,
@@ -73,8 +82,24 @@ export default function ShotDetail({
   const { mutate: globalMutate } = useSWRConfig();
   const [pinBusy, setPinBusy] = useState(false);
   const [mounted, setMounted] = useState(false);
+  // Per-slot collapse state for the right rail (F77). Empty (all expanded)
+  // until the mount effect loads any persisted folds, so SSR and the first
+  // client render agree. A toggle persists the whole set so a return visit
+  // reopens with the same sections folded.
+  const [rail, setRail] = useState<DetailRailState>(new Set());
   const chart = useChartTheme();
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+    setRail(readDetailRail());
+  }, []);
+
+  const toggleRail = (slot: DetailRailSlot) => {
+    setRail((cur) => {
+      const next = toggleSlot(cur, slot);
+      writeDetailRail(next);
+      return next;
+    });
+  };
   const { data, error, isLoading } = useSWR<Detail>(
     ENDPOINTS.historyItem(id),
     fetcher
@@ -296,8 +321,11 @@ export default function ShotDetail({
         </div>
 
         <div className="flex flex-col gap-5">
-          <div className="panel p-5">
-            <div className="eyebrow mb-2">OCR transcript</div>
+          <CollapsibleSection
+            title="OCR transcript"
+            collapsed={mounted && isCollapsed(rail, "ocr")}
+            onToggle={() => toggleRail("ocr")}
+          >
             <pre className="text-[12px] whitespace-pre-wrap leading-snug max-h-[260px] overflow-auto">
 {rec.ocr?.text || rec.ocr_text || "(no OCR text on record)"}
             </pre>
@@ -307,43 +335,62 @@ export default function ShotDetail({
                 {rec.ocr.mean_confidence?.toFixed?.(2) ?? "n/a"}
               </div>
             )}
-          </div>
+          </CollapsibleSection>
 
-          <div className="panel-dark p-5">
-            <div className="eyebrow mb-2" style={{ color: "var(--color-chalk)" }}>
-              Rationale
-            </div>
+          <CollapsibleSection
+            title="Rationale"
+            dark
+            collapsed={mounted && isCollapsed(rail, "rationale")}
+            onToggle={() => toggleRail("rationale")}
+          >
             <p className="text-[12px] opacity-90 leading-relaxed">
               {rec.classification?.rationale ||
                 "The model called this class on visual layout, density, and OCR cues. No verbal rationale on file for this record."}
             </p>
-          </div>
+          </CollapsibleSection>
 
-          <UmpireControls
-            id={rec.id}
-            primary={rec.primary_category}
-            corrected={rec.user_corrected_to ?? null}
-            disabled={isSample}
-          />
+          <CollapsibleSection
+            title="Umpire review"
+            collapsed={mounted && isCollapsed(rail, "umpire")}
+            onToggle={() => toggleRail("umpire")}
+          >
+            <UmpireControls
+              id={rec.id}
+              primary={rec.primary_category}
+              corrected={rec.user_corrected_to ?? null}
+              disabled={isSample}
+              embedded
+            />
+          </CollapsibleSection>
 
-          <LabelTagsEditor
-            id={rec.id}
-            label={rec.label ?? null}
-            tags={rec.tags ?? []}
-            filenameFallback={rec.filename}
-            disabled={isSample}
-          />
+          <CollapsibleSection
+            title="Label & tags"
+            collapsed={mounted && isCollapsed(rail, "tags")}
+            onToggle={() => toggleRail("tags")}
+          >
+            <LabelTagsEditor
+              id={rec.id}
+              label={rec.label ?? null}
+              tags={rec.tags ?? []}
+              filenameFallback={rec.filename}
+              disabled={isSample}
+              embedded
+            />
+          </CollapsibleSection>
 
           {rec.image_path && (
-            <div className="panel p-3">
-              <div className="eyebrow mb-2">Frame</div>
+            <CollapsibleSection
+              title="Frame"
+              collapsed={mounted && isCollapsed(rail, "frame")}
+              onToggle={() => toggleRail("frame")}
+            >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={`/api/proxy/v1/blobs/${rec.id}`}
                 alt={rec.filename}
                 className="w-full rounded-sm"
               />
-            </div>
+            </CollapsibleSection>
           )}
         </div>
       </section>
