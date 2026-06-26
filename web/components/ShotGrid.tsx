@@ -12,6 +12,11 @@ import { Star, CheckSquare, Square, Scales } from "@phosphor-icons/react/dist/ss
 import { Chip } from "@/components/Chip";
 import { ConfBadge } from "@/components/ConfBadge";
 import { ms, shortId, type Category } from "@/lib/categories";
+import {
+  gridColumnsClass,
+  GRID_DENSITY_DEFAULT,
+  type GridDensity,
+} from "@/lib/grid-density";
 
 export type ShotGridRow = {
   id: string;
@@ -41,6 +46,7 @@ export function ShotGrid({
   bulk,
   picked,
   isSample,
+  density = GRID_DENSITY_DEFAULT,
   onToggleBulk,
   onTogglePick,
   onTogglePin,
@@ -50,6 +56,7 @@ export function ShotGrid({
   bulk: Set<string>;
   picked: string[];
   isSample: boolean;
+  density?: GridDensity;
   onToggleBulk: (id: string) => void;
   onTogglePick: (id: string) => void;
   onTogglePin: (row: ShotGridRow) => void;
@@ -57,8 +64,9 @@ export function ShotGrid({
 }) {
   return (
     <ul
-      className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-3"
+      className={`grid ${gridColumnsClass(density)} gap-3 p-3`}
       data-testid="shots-grid"
+      data-density={density}
     >
       {rows.map((r) => {
         const selected = bulk.has(r.id);

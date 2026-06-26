@@ -16,6 +16,15 @@ import { SkeletonRows } from "@/components/Skeleton";
 import { SavedViewsBar, type SavedViewFilters } from "@/components/SavedViewsBar";
 import { FilterBreadcrumb } from "@/components/FilterBreadcrumb";
 import { ShotGrid } from "@/components/ShotGrid";
+import {
+  parseGridDensity,
+  writeGridDensity,
+  labelForGridDensity,
+  GRID_DENSITIES,
+  GRID_DENSITY_DEFAULT,
+  GRID_DENSITY_STORAGE_KEY,
+  type GridDensity,
+} from "@/lib/grid-density";
 import CopyViewLinkButton from "@/components/CopyViewLinkButton";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
@@ -95,6 +104,7 @@ function ShotsPageInner() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [tagInput, setTagInput] = useState("");
   const [view, setView] = useState<ShotsViewMode>("table");
+  const [gridDensity, setGridDensity] = useState<GridDensity>(GRID_DENSITY_DEFAULT);
   const { mutate: globalMutate } = useSWRConfig();
 
   // Load the persisted view mode once on mount (SSR can't know it).
@@ -105,6 +115,25 @@ function ShotsPageInner() {
       // Storage blocked -- stay on the table default.
     }
   }, []);
+
+  // Load the persisted grid density once on mount (F29), mirroring the view
+  // load. A return visit to the grid reopens on the column density you last
+  // picked. Storage failures leave the default intact.
+  useEffect(() => {
+    try {
+      setGridDensity(
+        parseGridDensity(window.localStorage.getItem(GRID_DENSITY_STORAGE_KEY)),
+      );
+    } catch {
+      // Storage blocked -- stay on the default density.
+    }
+  }, []);
+
+  // Change + persist the grid density together so the next visit reopens here.
+  const setGridDensityPersist = (next: GridDensity) => {
+    setGridDensity(next);
+    writeGridDensity(next);
+  };
 
   // Load the persisted page size once on mount, mirroring the view-mode load
   // (F51). A return visit reopens on the density you last picked instead of
@@ -458,6 +487,41 @@ function ShotsPageInner() {
               );
             })}
           </div>
+
+          {/* Column-density control (F29) -- only meaningful in the grid
+              view, so it appears only when grid is active. Trades card size
+              for scan-density; persisted across visits. */}
+          {view === "grid" && (
+            <div
+              className="inline-flex items-center rounded-sm border overflow-hidden"
+              style={{ borderColor: "var(--color-rule)" }}
+              role="group"
+              aria-label="Grid density"
+            >
+              {GRID_DENSITIES.map((d) => {
+                const active = gridDensity === d;
+                const glyph =
+                  d === "roomy" ? "▢" : d === "default" ? "▦" : "▩";
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setGridDensityPersist(d)}
+                    aria-pressed={active}
+                    aria-label={`${labelForGridDensity(d)} density`}
+                    title={`${labelForGridDensity(d)} density`}
+                    className="inline-flex items-center justify-center w-7 h-7 text-[13px] transition-colors"
+                    style={{
+                      background: active ? "var(--color-felt)" : "transparent",
+                      color: active ? "var(--color-chalk)" : "var(--color-ink)",
+                    }}
+                  >
+                    {glyph}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </header>
 
@@ -853,6 +917,7 @@ function ShotsPageInner() {
             bulk={bulk}
             picked={picked}
             isSample={isSample}
+            density={gridDensity}
             onToggleBulk={toggleBulk}
             onTogglePick={togglePick}
             onTogglePin={(r) => void togglePin(r as Row)}
