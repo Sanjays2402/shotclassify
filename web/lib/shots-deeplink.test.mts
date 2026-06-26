@@ -5,7 +5,10 @@ import assert from "node:assert/strict";
 import {
   parseShotsDeepLink,
   hasDeepLink,
+  buildShotsQuery,
+  buildShotsDeepLink,
   type ParamSource,
+  type ShotsFilterState,
 } from "./shots-deeplink.ts";
 
 // Tiny ParamSource over a plain record -- stands in for URLSearchParams.
@@ -103,4 +106,117 @@ test("parseShotsDeepLink: works against a real URLSearchParams", () => {
   assert.equal(link.category, "receipt");
   assert.equal(link.pinnedOnly, true);
   assert.equal(link.minConfPct, 75);
+});
+
+// --- F47: the inverse builder ---------------------------------------------
+
+test("buildShotsQuery: empty / all-default state yields an empty string", () => {
+  assert.equal(buildShotsQuery({}), "");
+  assert.equal(
+    buildShotsQuery({
+      category: "",
+      q: "",
+      tag: "",
+      minConfPct: 0,
+      since: "",
+      until: "",
+      sort: "new", // the inert default
+      pinnedOnly: false,
+    }),
+    "",
+  );
+});
+
+test("buildShotsQuery: only active filters are emitted", () => {
+  const usp = new URLSearchParams(
+    buildShotsQuery({ category: "receipt", pinnedOnly: true, minConfPct: 90 }),
+  );
+  assert.equal(usp.get("category"), "receipt");
+  assert.equal(usp.get("pinned"), "true");
+  assert.equal(usp.get("min_conf"), "90");
+  assert.equal(usp.get("q"), null);
+  assert.equal(usp.get("sort"), null);
+});
+
+test("buildShotsQuery: an unknown category is dropped", () => {
+  assert.equal(buildShotsQuery({ category: "spaceship" as never }), "");
+});
+
+test("buildShotsQuery: the inert sort default is omitted, others kept", () => {
+  assert.equal(buildShotsQuery({ sort: "new" }), "");
+  assert.equal(
+    new URLSearchParams(buildShotsQuery({ sort: "conf_desc" })).get("sort"),
+    "conf_desc",
+  );
+});
+
+test("buildShotsQuery: a 0 conf floor is omitted; >0 clamps to 0..100", () => {
+  assert.equal(buildShotsQuery({ minConfPct: 0 }), "");
+  assert.equal(
+    new URLSearchParams(buildShotsQuery({ minConfPct: 150 })).get("min_conf"),
+    "100",
+  );
+  assert.equal(
+    new URLSearchParams(buildShotsQuery({ minConfPct: 55 })).get("min_conf"),
+    "55",
+  );
+});
+
+test("buildShotsQuery: tag is lowercased + capped like the parser", () => {
+  const usp = new URLSearchParams(buildShotsQuery({ tag: "  URGENT  " }));
+  assert.equal(usp.get("tag"), "urgent");
+  const long = "x".repeat(50);
+  assert.equal(
+    new URLSearchParams(buildShotsQuery({ tag: long })).get("tag")!.length,
+    32,
+  );
+});
+
+test("buildShotsQuery: malformed dates are dropped", () => {
+  assert.equal(buildShotsQuery({ since: "01/02/2026", until: "soon" }), "");
+  const usp = new URLSearchParams(
+    buildShotsQuery({ since: "2026-01-01", until: "2026-02-15" }),
+  );
+  assert.equal(usp.get("since"), "2026-01-01");
+  assert.equal(usp.get("until"), "2026-02-15");
+});
+
+test("buildShotsDeepLink: bare base when no filter is active", () => {
+  assert.equal(buildShotsDeepLink({}), "/shots");
+  assert.equal(buildShotsDeepLink({}, "https://x.app/shots"), "https://x.app/shots");
+});
+
+test("buildShotsDeepLink: appends the query when filters are active", () => {
+  const url = buildShotsDeepLink(
+    { category: "chart", pinnedOnly: true },
+    "https://x.app/shots",
+  );
+  assert.ok(url.startsWith("https://x.app/shots?"));
+  const usp = new URL(url).searchParams;
+  assert.equal(usp.get("category"), "chart");
+  assert.equal(usp.get("pinned"), "true");
+});
+
+test("F47 round trip: parse(build(state)) is stable", () => {
+  const state: ShotsFilterState = {
+    category: "chat_screenshot",
+    q: "invoice",
+    tag: "urgent",
+    minConfPct: 80,
+    since: "2026-01-01",
+    until: "2026-02-15",
+    sort: "conf_asc",
+    pinnedOnly: true,
+  };
+  const link = parseShotsDeepLink(new URLSearchParams(buildShotsQuery(state)));
+  assert.deepEqual(link, {
+    category: "chat_screenshot",
+    q: "invoice",
+    tag: "urgent",
+    minConfPct: 80,
+    since: "2026-01-01",
+    until: "2026-02-15",
+    sort: "conf_asc",
+    pinnedOnly: true,
+  });
 });

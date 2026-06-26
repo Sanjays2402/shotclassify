@@ -111,3 +111,74 @@ export function parseShotsDeepLink(src: ParamSource | null | undefined): ShotsDe
 export function hasDeepLink(link: ShotsDeepLink): boolean {
   return Object.keys(link).length > 0;
 }
+
+// --- Inverse: serialise the live filter state back INTO a deep-link (F47) ---
+// The "Copy link to this view" button on /shots needs the mirror of the
+// parser above: turn the page's current filter state into the same query
+// string the parser consumes, so a shared URL reopens the list pre-filtered.
+// Symmetric with parseShotsDeepLink -- only ACTIVE (non-default) filters are
+// emitted, normalised the same way (tag lowercased+capped, conf as a whole
+// percent, the inert sort="new" default and 0 conf floor omitted) so a
+// round trip through parse(build(state)) is stable.
+export type ShotsFilterState = {
+  category?: Category | "" | null;
+  q?: string | null;
+  tag?: string | null;
+  // Confidence floor as a whole percent (0..100). 0 is the inert default.
+  minConfPct?: number | null;
+  since?: string | null; // yyyy-mm-dd
+  until?: string | null;
+  sort?: ShotsSort | null;
+  pinnedOnly?: boolean | null;
+};
+
+// Build the query string (WITHOUT a leading "?") for the current filter
+// state. Returns "" when no filter is active, so the caller can link to a
+// bare "/shots". Params are emitted in a stable, parser-friendly order.
+export function buildShotsQuery(state: ShotsFilterState): string {
+  const usp = new URLSearchParams();
+
+  const category = typeof state.category === "string" ? state.category.trim() : "";
+  if (category && isCategory(category)) usp.set("category", category);
+
+  const q = typeof state.q === "string" ? state.q.trim() : "";
+  if (q) usp.set("q", q);
+
+  const tag =
+    typeof state.tag === "string"
+      ? state.tag.trim().toLowerCase().slice(0, 32)
+      : "";
+  if (tag) usp.set("tag", tag);
+
+  // Only a meaningful floor (>0) is worth sharing; clamp to 0..100.
+  if (typeof state.minConfPct === "number" && Number.isFinite(state.minConfPct)) {
+    const pct = Math.max(0, Math.min(100, Math.round(state.minConfPct)));
+    if (pct > 0) usp.set("min_conf", String(pct));
+  }
+
+  const since = typeof state.since === "string" ? state.since.trim() : "";
+  if (since && ISO_DATE.test(since)) usp.set("since", since);
+
+  const until = typeof state.until === "string" ? state.until.trim() : "";
+  if (until && ISO_DATE.test(until)) usp.set("until", until);
+
+  // "new" is the page default -- omit it so the link stays tight; any other
+  // valid sort is explicit.
+  const sort = typeof state.sort === "string" ? state.sort.trim() : "";
+  if (sort && sort !== "new" && VALID_SORTS.has(sort)) usp.set("sort", sort);
+
+  if (state.pinnedOnly === true) usp.set("pinned", "true");
+
+  return usp.toString();
+}
+
+// Build the full deep-link path for the current filter state. Returns the
+// bare base ("/shots") when no filter is active. Pass an absolute origin as
+// `base` (e.g. `${location.origin}/shots`) to produce a shareable URL.
+export function buildShotsDeepLink(
+  state: ShotsFilterState,
+  base = "/shots",
+): string {
+  const qs = buildShotsQuery(state);
+  return qs ? `${base}?${qs}` : base;
+}

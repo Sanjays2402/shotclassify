@@ -16,6 +16,7 @@ import { SkeletonRows } from "@/components/Skeleton";
 import { SavedViewsBar, type SavedViewFilters } from "@/components/SavedViewsBar";
 import { FilterBreadcrumb } from "@/components/FilterBreadcrumb";
 import { ShotGrid } from "@/components/ShotGrid";
+import CopyViewLinkButton from "@/components/CopyViewLinkButton";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
 import type { FilterKey } from "@/lib/filter-summary";
@@ -553,7 +554,20 @@ function ShotsPageInner() {
           <Scales size={14} weight="duotone" /> Compare ({picked.length}/2)
         </button>
 
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <CopyViewLinkButton
+            filters={{
+              category: cat || undefined,
+              q: qDebounced || undefined,
+              tag: tagDebounced || undefined,
+              minConfPct,
+              since: since || undefined,
+              until: until || undefined,
+              sort,
+              pinnedOnly,
+            }}
+            disabled={isSample}
+          />
           <ExportMenu
             category={cat || undefined}
             q={q || undefined}
