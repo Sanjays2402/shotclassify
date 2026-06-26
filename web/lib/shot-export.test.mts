@@ -6,6 +6,10 @@ import {
   toExportObject,
   toJson,
   toMarkdown,
+  toCsv,
+  csvRow,
+  csvCell,
+  CSV_HEADERS,
   type ShotExportInput,
 } from "./shot-export.ts";
 
@@ -131,4 +135,69 @@ test("toMarkdown: corrected-to row appears only when set", () => {
   assert.match(withCorrection, /\| Corrected to \| `document` \|/);
   const without = toMarkdown(FULL);
   assert.doesNotMatch(without, /Corrected to/);
+});
+
+// --- CSV (single-shot F80, shared with bulk F64) -------------------------
+
+test("CSV_HEADERS is the stable documented column order", () => {
+  assert.deepEqual(
+    [...CSV_HEADERS],
+    ["id", "class", "confidence_pct", "file", "tags", "captured", "source"],
+  );
+});
+
+test("csvCell: only quotes fields containing comma / quote / CR / LF", () => {
+  assert.equal(csvCell("plain"), "plain");
+  assert.equal(csvCell("a,b"), '"a,b"');
+  assert.equal(csvCell('she said "hi"'), '"she said ""hi"""');
+  assert.equal(csvCell("line1\nline2"), '"line1\nline2"');
+  assert.equal(csvCell("carriage\rreturn"), '"carriage\rreturn"');
+});
+
+test("toCsv: header row + exactly one record, CRLF-separated", () => {
+  const csv = toCsv(FULL);
+  const lines = csv.split("\r\n");
+  assert.equal(lines.length, 2, "header + one record");
+  assert.equal(lines[0], CSV_HEADERS.join(","));
+  // Confidence is a bare one-decimal percent; label wins the file column.
+  assert.ok(lines[1].startsWith("abc12345def,receipt,91.7,Uber ride home,"));
+  // Tags join with "; " inside one cell.
+  assert.ok(lines[1].includes("important; reimburse"));
+});
+
+test("toCsv: clamps wild confidence and prefers label over filename", () => {
+  const row = toCsv({
+    id: "x",
+    filename: "ugly.png",
+    primary_category: "receipt",
+    confidence: 1.7,
+    label: "  Nice  ",
+  }).split("\r\n")[1];
+  assert.ok(row.includes(",Nice,"), `file column should hold the label: ${row}`);
+  assert.ok(!row.includes("ugly.png"));
+  assert.ok(row.includes(",100.0,"), "confidence clamps to 100.0");
+});
+
+test("toCsv: a label with a comma can't add a phantom column", () => {
+  const row = toCsv({
+    id: "x",
+    filename: "f.png",
+    primary_category: "receipt",
+    confidence: 0.5,
+    label: 'Lunch, "deluxe"',
+  }).split("\r\n")[1];
+  assert.ok(row.includes('"Lunch, ""deluxe"""'));
+});
+
+test("csvRow + CSV_HEADERS are the single source the bulk CSV reuses", async () => {
+  // F80 extracted these primitives so the single-shot and bulk CSV exporters
+  // can't drift. A single-shot toCsv data row must be byte-identical to the
+  // bulk exporter's row for the same shot.
+  const { toBulkCsv, BULK_CSV_HEADERS } = await import("./shot-export-bulk.ts");
+  const singleRow = toCsv(FULL).split("\r\n")[1];
+  const bulkRow = toBulkCsv([FULL]).split("\r\n")[1];
+  assert.equal(singleRow, bulkRow);
+  assert.equal(singleRow, csvRow(FULL));
+  // The historical bulk headers alias the shared headers exactly.
+  assert.deepEqual([...BULK_CSV_HEADERS], [...CSV_HEADERS]);
 });

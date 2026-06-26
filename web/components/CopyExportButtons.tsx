@@ -7,8 +7,17 @@
 // success / failure feedback instead of inline state.
 
 import { useCallback } from "react";
-import { BracketsCurly, MarkdownLogo } from "@phosphor-icons/react/dist/ssr";
-import { toJson, toMarkdown, type ShotExportInput } from "@/lib/shot-export";
+import {
+  BracketsCurly,
+  MarkdownLogo,
+  Table,
+} from "@phosphor-icons/react/dist/ssr";
+import {
+  toJson,
+  toMarkdown,
+  toCsv,
+  type ShotExportInput,
+} from "@/lib/shot-export";
 import { toast } from "@/lib/toast-store";
 
 async function writeClipboard(text: string): Promise<void> {
@@ -34,15 +43,18 @@ async function writeClipboard(text: string): Promise<void> {
 
 export default function CopyExportButtons({ shot }: { shot: ShotExportInput }) {
   const copy = useCallback(
-    async (format: "json" | "markdown") => {
-      const text = format === "json" ? toJson(shot) : toMarkdown(shot);
+    async (format: "json" | "markdown" | "csv") => {
+      const text =
+        format === "json"
+          ? toJson(shot)
+          : format === "markdown"
+            ? toMarkdown(shot)
+            : toCsv(shot);
+      const noun =
+        format === "json" ? "JSON" : format === "markdown" ? "Markdown" : "CSV";
       try {
         await writeClipboard(text);
-        toast.success(
-          format === "json"
-            ? "Copied shot as JSON."
-            : "Copied shot as Markdown.",
-        );
+        toast.success(`Copied shot as ${noun}.`);
       } catch {
         toast.error("Copy failed. Your browser blocked clipboard access.");
       }
@@ -71,6 +83,16 @@ export default function CopyExportButtons({ shot }: { shot: ShotExportInput }) {
         style={{ borderColor: "var(--color-rule)" }}
       >
         <MarkdownLogo size={14} weight="duotone" /> Markdown
+      </button>
+      <button
+        type="button"
+        onClick={() => copy("csv")}
+        aria-label="Copy shot as CSV"
+        title="Copy one spreadsheet row (same columns as the bulk CSV export)"
+        className="num text-[11px] inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm border hover:bg-black/[0.03] focus:outline-none focus-visible:ring-2"
+        style={{ borderColor: "var(--color-rule)" }}
+      >
+        <Table size={14} weight="duotone" /> CSV
       </button>
     </div>
   );
