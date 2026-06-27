@@ -24,7 +24,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (209 features tracked, 192 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (221 features tracked, 197 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -382,7 +382,7 @@ F80. [x] Web: shot-detail single-shot "copy as CSV" -- shipped tick 35. Extracte
 F81. [x] Web: `<ShotNav>` keyboard hint -- shipped tick 36. A faint `[ ]` kbd pair beside the "2 of 6" position counter in ShotNav.tsx, hidden < sm, aria-hidden (the chevron buttons already spell the keys for SR). Pure render; no lib change. (d75ef82)
 F82. [x] Web: "Expand all / Collapse all" control for the shot-detail rail -- shipped tick 36. `lib/detail-rail` gained pure `collapseAll()` / `expandAll()` / `allCollapsed()` / `allExpanded()`; the page renders a mounted-gated header button that offers the action that does something. 6 tests. (ccdc380)
 F83. [x] Web: recently-viewed COUNT badge on the palette Shots nav row -- shipped tick 36. Pure `recentCountLabel(href, count)` + `RECENT_BADGE_ROUTE` in command-palette.ts ("N recent" only for /shots with a positive finite count, null otherwise); the component reads `recents.length`. 3 tests. (b21b26d)
-F84. [ ] Web: per-row inline preview drawer on `/shots` (the long-open F11/F28/F72) -- click the ID-column chevron to expand a drawer under the row with OCR snippet + a mini confidence bar + rationale, without leaving the list. Pure row-expand state (Set<id>) + a presentational `<ShotPreviewDrawer>`; data already on the row.
+F84. [x] Web: per-row inline preview drawer on `/shots` -- shipped tick 41 (closes the long-open F11/F28/F72/F84). Clicking a table row's new ID-column chevron expands a drawer UNDER the row with an OCR snippet + the top confidence classes as mini bars + the classifier rationale, without leaving the list. New pure lib/shot-preview view-model (previewOcr nested-vs-flat resolution + word-boundary truncation, previewConfidences sort/cap/clamp/drop-malformed + summary-fallback synthetic row, previewRationale, buildShotPreview + previewHasContent; 14 tests) + presentational `<ShotPreviewDrawer>` (loading/error/nothing-captured states) + connected `<ShotPreviewRow>` whose SWR fetch is naturally lazy (only mounts while expanded, reuses the detail endpoint so a visited shot is cache-served). Expand-state Set<id> + aria-expanded chevron in the page; applies to the compact view too. (55162da)
 F85. [ ] Web: `/stats` window selector keyboard hint -- show a faint "press W" affordance beside the 24h/7d/30d buttons (mirrors how F81 surfaces `[ ]` on ShotNav) so the new F79 cycle is discoverable on the page, not just the ? overlay. Pure render; no lib. NOTE (tick 36): the buttons already carry "(press W to cycle)" in their title tooltip -- a VISIBLE faint hint is the remaining work, keep it to one small affordance so it doesn't clutter the header.
 F86. [x] Web: shared export-format catalogue (single + bulk parity) -- shipped tick 36. `EXPORT_FORMATS` + `exportFormatByKey()` in lib/shot-export ({key, noun, short} per format); CopyExportButtons (full noun) and BulkExportButtons (compact `short`) both render by mapping the catalogue, per-surface presentation (icons/tooltips/serializer) stays local. 4 tests. (98b989b)
 F87. [ ] Web: keyboard-driven filter chips on `/shots` (the open F20/F75) -- `Tab` cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box. Pure tabIndex ordering helper + a roving-focus hook; test the order helper.
@@ -401,7 +401,7 @@ F96. [x] Web: per-section "Expand"/"Collapse" affordance copy unifies with the r
 ### Frontend backlog refill (tick 37 -- F97-F108, frontend-override still active)
 F85. [x] Web: visible "press W" hint beside the `/stats` window selector -- shipped tick 37. Faint W kbd hint next to the 24h/7d/30d buttons so the F79 cycle is discoverable on-page; hidden < sm, aria-hidden (the buttons' titles already say "press W to cycle"). Pure render. (5246779)
 F97. [x] Web: "Copy as ..." single-shot export menu on `/shots` rows -- shipped tick 39. <RowExportMenu> compact per-row dots dropdown (JSON / Markdown / CSV) reusing EXPORT_FORMATS (F86) + the shot-export serializers so the list / detail / bulk surfaces stay in lockstep; toast feedback via the existing store. Covers F94 too. (dddac11)
-F98. [ ] Web: reuse `<EmptyState>` on `/webhooks` + `/admin/seats` + `/digest` (the long-open F6/F74/F89) -- three pages still hand-roll "no rows" markup. Consolidate onto the canonical component now that emptyCopyForList exists. Component-level; reuse the existing lib.
+F98. [x] Web: reuse `<EmptyState>` on `/digest` + `/admin/seats` (the long-open F6/F74/F89) -- shipped tick 41. Both bespoke "no rows" panels now render the canonical `<EmptyState>`: /digest empty recap uses the Sparkle icon + "Try the demo" cue; /admin/seats empty members uses the bare variant (the section already wraps it in bordered chrome) with the Users icon + "Invite teammates" cue, turning the prose Members link into a proper primary action. (The /webhooks deliveries empty state already shipped via F108.) Component-level, no new lib. (f0a97fb)
 F99. [ ] Web: keyboard-driven filter chips on `/shots` (the open F20/F75/F87) -- `Tab` cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box. Pure tabIndex ordering helper + a roving-focus hook; test the order helper.
 F100. [x] Web: `g <x>` chord pattern caption in the `?` overlay -- shipped tick 38. The "Jump to a section" group header in ShortcutsHelp.tsx gained a one-line "Tip: press G, then a letter." caption (scopeOrder rows carry an optional `caption` field; the section map renders it when present, so any future group can carry its own explainer). Closes the long-open F69/F90. Pure render. (dc73a20)
 F101. [x] Web: status-color legend chips above the `/webhooks` deliveries table -- shipped tick 38. A success/failed/pending swatch row with LIVE counts (felt-green/red/amber) so the status mix reads at a glance; each swatch is a one-click status filter (clicking the active one clears it; aria-pressed reflects state). New pure `deliveryStatusCounts()` in lib/webhook-delivery-chips (always the 3 known statuses in stable order, zero when absent, trims, ignores unknown + prototype keys via hasOwnProperty tally, safe on non-array). 4 tests. (14a6c65)
@@ -422,17 +422,60 @@ consolidation as F6/F74/F89/F98). These fresh items are unblocked + non-duplicat
 F109. [x] Web: `RowExportMenu` (F97) reaches the GRID view -- shipped tick 40. Added the per-row JSON/MD/CSV menu to the ShotGrid card footer beside Compare. COMPACT already had it (the compact view reuses the table markup via isTabular, so the table's RowExportMenu already rendered there). New pure shotRowToExportInput() in lib/shot-export is the single list-row->export mapper (optionals normalised to null/[]); the table page's inline object was replaced with it so all three layouts feed identical data. 5 tests. (d83b4d3)
 F110. [x] Web: `/webhooks` deliveries event-filter "N seen" affordance -- shipped tick 40. Live distinct-event count beside the Event label ("Event · 3 seen") via new pure distinctEventCountLabel() (null when empty -> the select is disabled then). 3 tests incl. a compose-with-distinctDeliveryEvents case. (ba55424)
 F111. [x] Web: shot-detail rail collapse-state count badge -- shipped tick 40. Faint "(N folded)" beside Expand/Collapse-all when partially folded. New pure collapsedCount() + foldedCountLabel() in lib/detail-rail; label returns null at zero AND at all-folded (the Expand-all button already says so) so it shows only for the in-between state; counts known slots only so a corrupt blob can't over-count. 5 tests. (46df86a)
-F112. [ ] Web: `/notifications` "Filtering N of M" reuses a shared count-label helper -- the page hand-rolls `${matched} of ${total} match`; extract the shots/webhooks/notif "N of M" phrasing into one tested pure helper (singular/plural, clamp, null-when-inert) and wire all three onto it, continuing the consolidation theme. NOTE (tick 40): deliveryFilterCountLabel (F102) is the closest existing shape but says "Filtering N of M deliveries" not "N of M match"; a true shared helper needs a noun/verb-configurable signature -- worth doing but skipped this tick to keep the batch focused, not filler-padded.
+F112. [x] Web: `/notifications` "Filtering N of M" reuses a shared count-label helper -- shipped tick 41. New pure lib/count-label `ofTotalLabel(shown, total, {prefix, singular, plural, onlyWhenNarrowed})` is the single source of truth for the "N of M <noun>" phrasing; deliveryFilterCountLabel now delegates to it (byte-identical, all 15 webhook tests stay green) and /notifications reads its "N of M match" line off it too. 10 tests. (8d6d818)
 F113. [x] Web: copy-link affordance on the `/webhooks` deliveries view -- shipped tick 40. "Copy link" button beside the deliveries filter selects (mirrors shots CopyViewLinkButton); disabled until a filter is active. New pure buildDeliveryDeepLink() + deliveryLinkToastMessage() in lib/webhook-delivery-url reuse the F103 query builder + validators so prose/URL/persisted-filter never disagree; toast names the constraints. New CopyDeliveryLinkButton component. 4 tests. (492d4e7)
 F114. [x] Web: `RowExportMenu` open-state arrow-key navigation -- shipped tick 40. Up/Down/Home/End roving nav between the three format items (open primes first item, Arrows wrap, Enter/Space fire natively, Escape closes); roving tabindex so Tab leaves the menu. New pure lib/roving-index (rovingIndex + isRovingKey): wrap, Home/End, unfocused-landing (Down->first, Up->last), stale-clamp, single-item + fractional guards. 10 tests. (5edfd12)
-F115. [ ] Web: `/shots` table "Export column" header tooltip + a11y polish -- the new trailing export column header is an empty `<th aria-label>`; add a small visible dots glyph + a hover title so the column's purpose is discoverable, not just announced to AT. Pure render.
-F116. [ ] Web: deliveries status-legend swatch keyboard focus ring -- the F101 status swatches are buttons but lean on hover; add a visible focus-visible ring + ensure the aria-pressed group reads as a rad/toggle set for keyboard triagers. Pure CSS/class polish; no lib.
+F115. [x] Web: `/shots` table "Export column" header glyph + a11y polish -- shipped tick 41. The empty `<th aria-label>` now shows the same faint DotsThreeOutline glyph the row menu uses (aria-hidden, inside a labelled span) with a "Copy a row as JSON, Markdown, or CSV" hover title, so the column's purpose is discoverable on screen, not only announced to AT. Pure render. (245fa2e)
+F116. [x] Web: deliveries status-legend swatch keyboard focus ring + announce -- shipped tick 41. New pure statusSwatchAria(label, count, active) builds an explicit action-oriented aria-label ("Success, 3 deliveries. Show only success deliveries") + matching title (count finite-guarded/floored/singular-aware, blank label degrades); the swatch hides its decorative spans from AT so that name wins and gains a cue-yellow focus-visible ring. 5 tests. (3de56af)
+
+### Frontend backlog refill (tick 41 -- F117-F128, frontend-override still active)
+NOTE (tick 41): the row-preview drawer (F11/F28/F72/F84) and the EmptyState
+consolidation (F6/F74/F89/F98) are now CLOSED. Remaining long-open stale
+duplicates: keyboard filter-chip Tab order (F20/F75/F87/F99 -- still one real
+item), the /stats confidence sparkline (F16/F27/F41/F54/F65 -- BLOCKED on a
+backend per-hour mean-conf field; F125 below is that backend slice), and the
+API-key modal (F23/F78). These fresh items are unblocked + non-duplicate.
+F117. [ ] Web: shot-preview drawer reaches the GRID view (F84 follow-on) -- the grid cards get an "expand" affordance that opens the same `<ShotPreviewDrawer>` content inline below the card. Reuse lib/shot-preview + the lazy-fetch pattern (a non-table wrapper since the grid isn't `<tr>`-based). Component-level; the view-model + tests already exist.
+F118. [ ] Web: keyboard `o` on `/shots` toggles the focused/first row's preview drawer (F84 follow-on) -- so the new drawer is reachable without the mouse. Pure key handler in the shots scope + a SHORTCUTS catalogue entry so it shows in the `?` overlay; input-guarded + chord-guarded. Pairs with the existing `v`/`d` shots-scope keys.
+F119. [ ] Web: "expand/collapse all previews" control on the `/shots` toolbar (F84 follow-on) -- a small button that opens every visible row's drawer at once (and collapses them). Pure helper mapping the current page's row ids to the expanded Set + an allExpanded/allCollapsed predicate (mirrors the detail-rail F82 pattern); test the set math.
+F120. [ ] Web: API-key creation modal polish (the open F23/F78) -- replace the inline create cards on `/keys` with a focused modal reusing the chalk-surface + felt-green icon-well pattern; the new key + scopes selection feels intentional. Component-level; reuse existing modal chrome.
+F121. [ ] Web: keyboard-driven filter-chip Tab order on `/shots` (the open F20/F75/F87/F99) -- `Tab` cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box. Pure tabIndex ordering helper + a roving-focus hook; test the order helper.
+F122. [ ] Web: shared `ofTotalLabel` reaches the `/shots` pagination + grid count (F112 follow-on) -- audit the remaining hand-rolled count strings (the "Showing N of M" pagination line, any grid footer) and route them through the new shared helper so every count phrase in the app agrees. Pure wiring + tests for any new call shape.
+F123. [ ] Web: `/webhooks` deliveries "copy as JSON" per-row affordance -- mirror the /shots RowExportMenu on the deliveries table so a single delivery's payload/headers/status can be grabbed for a bug report. New pure delivery->export serializer + tests; reuse the RowExportMenu dropdown shell.
+F124. [ ] Web: shot-preview drawer "copy OCR" inline button (F84 follow-on) -- a tiny copy button beside the drawer's OCR snippet that copies the FULL ocr_text (not the truncated snippet) via the toast store. Pure "what to copy" selector (full vs snippet) + a test; reuse the clipboard fallback from RowExportMenu.
+F125. [ ] Web: `/stats` per-hour mean-confidence BACKEND slice (unblocks the 5x-tracked sparkline) -- add a per-hour mean-confidence field to `/api/aggregate` `hourly` (currently count-only) wired straight to a new client field. Minimal FastAPI change + the matching TS type; THEN the F16/F27/F41/F54/F65 sparkline becomes honest. (This is the one allowed backend touch -- a frontend feature truly needs the endpoint.)
+F126. [ ] Web: notifications row dismiss-affordance hint on touch -- a faint "swipe to dismiss" hint on touch viewports for the inbox rows (the dismiss action exists; the affordance is undiscoverable on mobile). Pure viewport/touch predicate + render; respects reduced-motion.
+F127. [ ] Web: `/shots` empty-preview drawer suggests the demo (F84 follow-on) -- when an expanded row's preview has no content (previewHasContent === false), the "Nothing captured" line gains a subtle "Run the demo" link so the dead-end state has a next step. Component-level; reuse the previewHasContent predicate.
+F128. [ ] Web: status-legend swatches become a true radio-group (F116 follow-on) -- promote the aria-pressed toggle buttons to `role="radiogroup"` + `role="radio"` with roving tabindex (reuse lib/roving-index from F114) so arrow keys move between statuses and only the active one is tabbable. Pure roving wiring + tests.
 
 
 
 
 
 ## Tick log
+- 2026-06-27 14:0x PT (tick 41, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  - 8d6d818 feat(web): shared N-of-M count-label helper (F112)
+  - f0a97fb feat(web): canonical EmptyState on /digest and /admin/seats (F98)
+  - 3de56af feat(web): keyboard a11y for the webhooks status-legend swatches (F116)
+  - 55162da feat(web): per-row inline preview drawer on /shots (F84)
+  - 245fa2e feat(web): visible glyph on the /shots export-column header (F115)
+  - Gate: tsc --noEmit clean (whole web project) + `npx tsx --test --test-force-exit
+    lib/*.test.mts` 597 passed / 0 failed (568 baseline at tick 40 + net new 29:
+    F112=10 NEW lib/count-label.test.mts; F116=5 statusSwatchAria APPENDED to
+    webhook-delivery-chips.test (25->30); F84=14 NEW lib/shot-preview.test.mts) +
+    `next build` compiled successfully in 5.6s, 62/62 static pages -- /shots AND
+    /webhooks still prerender static, /shots/[id] dynamic as expected (the F84
+    drawer's lazy SWR fetch lives in a child that only mounts on expand, so it
+    didn't force /shots dynamic). ZERO Python touched -- all web/ TS/TSX -- so the
+    pytest baseline cannot regress. Used --test-force-exit for the clean glob exit
+    (documented gotcha). EVERY test addition to a pre-existing *.test.mts was done
+    by `patch` (append), never write_file; only the two brand-new test files
+    (count-label, shot-preview) used write_file. Heeded the lib-import convention:
+    non-test lib source imports carry NO extension (`from "./count-label"`), only
+    *.test.mts imports use `.ts` -- the LSP flagged a stale `.ts` import mid-edit,
+    fixed before gating.
+
+## Tick log (older)
 - 2026-06-27 09:16 PT (tick 40, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   - d83b4d3 feat(web): per-row Copy-as export menu reaches the grid view (F109)
   - 5edfd12 feat(web): arrow-key navigation in the per-row export menu (F114)
