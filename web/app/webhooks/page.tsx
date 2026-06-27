@@ -1,9 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Skeleton } from "@/components/Skeleton";
 import { WebhookDeliveryBreadcrumb } from "@/components/WebhookDeliveryBreadcrumb";
+import {
+  readDeliveryFilterFromUrl,
+  writeDeliveryFilterToUrl,
+} from "@/lib/webhook-delivery-url";
 import {
   filterDeliveries,
   distinctDeliveryEvents,
@@ -98,6 +102,24 @@ export default function WebhooksPage() {
   // (success / failed / pending) and event name. "all" means no constraint.
   const [statusFilter, setStatusFilter] = useState("all");
   const [eventFilter, setEventFilter] = useState("all");
+
+  // Persist the deliveries filter to the URL query (F103) so a reload -- or a
+  // shared link -- keeps the triage view. Read once on mount (the page has no
+  // router/searchParams, so we read window.location directly), then mirror
+  // every change back via history.replaceState. The guard ref keeps the
+  // write-effect from clobbering the URL before the initial read has applied,
+  // and stops a redundant replaceState on the very first render.
+  const filterHydrated = useRef(false);
+  useEffect(() => {
+    const seed = readDeliveryFilterFromUrl();
+    if (typeof seed.status === "string") setStatusFilter(seed.status);
+    if (typeof seed.event === "string") setEventFilter(seed.event);
+    filterHydrated.current = true;
+  }, []);
+  useEffect(() => {
+    if (!filterHydrated.current) return;
+    writeDeliveryFilterToUrl({ status: statusFilter, event: eventFilter });
+  }, [statusFilter, eventFilter]);
 
   const load = useCallback(async () => {
     try {
