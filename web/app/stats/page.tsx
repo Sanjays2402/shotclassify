@@ -207,6 +207,11 @@ export default function StatsPage() {
   const agg = live ? data! : sampleAggregate(hours);
   const perClassTotal = totalCount(agg.per_class);
 
+  // Short window label ("24h" / "7d" / "30d") threaded into each KPI card's
+  // sub-label (F106) so the scope of every stat is unambiguous at a glance --
+  // the cards previously said "in window" / bare rates without naming it.
+  const winLabel = labelForStatsWindow(hours);
+
   // Show chart skeletons before mount or while the very first aggregate is
   // still loading with nothing to draw yet (F37). `data` is the real SWR
   // payload -- once it (or the seeded fallback after an error) is available
@@ -293,28 +298,28 @@ export default function StatsPage() {
         <Stat
           label="Lifetime shots"
           value={agg.total.toLocaleString()}
-          hint={`${agg.window_count.toLocaleString()} in window`}
+          hint={`${agg.window_count.toLocaleString()} in last ${winLabel}`}
           icon={<Stack weight="duotone" size={18} />}
           info={<StatInfoPopover stat="lifetime" hours={hours} />}
         />
         <Stat
           label="Mean confidence"
           value={pct(agg.mean_confidence, 1)}
-          hint={`${agg.latency_ms.count} timed`}
+          hint={`${agg.latency_ms.count} timed · last ${winLabel}`}
           icon={<Gauge weight="duotone" size={18} />}
           info={<StatInfoPopover stat="mean_confidence" hours={hours} />}
         />
         <Stat
           label="P95 latency"
           value={ms(agg.latency_ms.p95)}
-          hint={`p50 ${ms(agg.latency_ms.p50)} · p99 ${ms(agg.latency_ms.p99)}`}
+          hint={`p50 ${ms(agg.latency_ms.p50)} · p99 ${ms(agg.latency_ms.p99)} · last ${winLabel}`}
           icon={<Timer weight="duotone" size={18} />}
           info={<StatInfoPopover stat="p95_latency" hours={hours} />}
         />
         <Stat
           label="Corrections"
           value={agg.corrections.toLocaleString()}
-          hint={`${pct(agg.correction_rate, 1)} rate`}
+          hint={`${pct(agg.correction_rate, 1)} rate · last ${winLabel}`}
           icon={<PencilSimple weight="duotone" size={18} />}
           info={<StatInfoPopover stat="corrections" hours={hours} />}
         />
