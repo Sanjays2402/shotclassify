@@ -11,6 +11,7 @@ import {
   allExpanded,
   collapseAll,
   expandAll,
+  railChordAction,
   readDetailRail,
   writeDetailRail,
   DETAIL_RAIL_SLOTS,
@@ -132,6 +133,51 @@ test("collapseAll / expandAll return fresh sets (new references)", () => {
   // singleton -- two calls must be distinct objects.
   assert.notEqual(collapseAll(), collapseAll());
   assert.notEqual(expandAll(), expandAll());
+});
+
+// --- F93: Shift+E / Shift+C rail chords ----------------------------------
+
+test("railChordAction: Shift+E expands, Shift+C collapses", () => {
+  assert.equal(railChordAction({ key: "E", shiftKey: true }), "expand");
+  assert.equal(railChordAction({ key: "C", shiftKey: true }), "collapse");
+  // Case-insensitive on the letter (some layouts deliver lowercase + shift).
+  assert.equal(railChordAction({ key: "e", shiftKey: true }), "expand");
+  assert.equal(railChordAction({ key: "c", shiftKey: true }), "collapse");
+});
+
+test("railChordAction: a bare e / c (no shift) is NOT a chord", () => {
+  // Critical: a plain letter must never fold the rail -- this is exactly the
+  // case the generic matcher mishandles, which is why this helper exists.
+  assert.equal(railChordAction({ key: "e" }), null);
+  assert.equal(railChordAction({ key: "c" }), null);
+  assert.equal(railChordAction({ key: "E", shiftKey: false }), null);
+});
+
+test("railChordAction: Cmd / Ctrl / Alt + Shift never fires", () => {
+  assert.equal(
+    railChordAction({ key: "C", shiftKey: true, metaKey: true }),
+    null,
+  );
+  assert.equal(
+    railChordAction({ key: "E", shiftKey: true, ctrlKey: true }),
+    null,
+  );
+  assert.equal(
+    railChordAction({ key: "C", shiftKey: true, altKey: true }),
+    null,
+  );
+});
+
+test("railChordAction: other shifted letters are not chords", () => {
+  for (const k of ["A", "Z", "X", "S", "1", "?"]) {
+    assert.equal(railChordAction({ key: k, shiftKey: true }), null, k);
+  }
+});
+
+test("railChordAction: junk input is safe", () => {
+  assert.equal(railChordAction(null as never), null);
+  assert.equal(railChordAction({ key: 42 as never, shiftKey: true }), null);
+  assert.equal(railChordAction({} as never), null);
 });
 
 test("readDetailRail: SSR (no window) returns an empty set", () => {

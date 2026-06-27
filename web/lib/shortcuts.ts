@@ -109,6 +109,20 @@ export const SHORTCUTS: readonly Shortcut[] = [
     label: "Older shot you viewed",
     hint: "Steps the recently-viewed trail",
   },
+  {
+    id: "rail-expand-all",
+    scope: "detail",
+    combo: { keys: ["Shift", "E"], match: "shift+e" },
+    label: "Expand all rail sections",
+    hint: "Unfolds OCR / rationale / umpire / tags / frame",
+  },
+  {
+    id: "rail-collapse-all",
+    scope: "detail",
+    combo: { keys: ["Shift", "C"], match: "shift+c" },
+    label: "Collapse all rail sections",
+    hint: "Folds every section at once",
+  },
   // Linear-style "go to" chords: press G, then the section letter. The
   // routes + this catalogue's source of truth live in lib/goto-chords.ts;
   // these entries exist so the sequence tracker recognises the chords and the
@@ -325,8 +339,11 @@ export function createSequenceTracker(
 
   function feed(ev: KeyLike, nowMs: number): string | null {
     // Modifier keys / sequence-aware shortcuts only accept bare letters /
-    // digits. Drop on any active modifier so Cmd-G doesn't seed "g".
-    if (ev.metaKey || ev.ctrlKey || ev.altKey) {
+    // digits. Drop on any active modifier so Cmd-G doesn't seed "g" -- and so
+    // a Shift-letter chord owned by a page (e.g. the shot-detail rail's
+    // Shift+E / Shift+C, F93) can't complete or extend an in-flight `g <x>`
+    // sequence. No goto chord uses shift, so this is always safe.
+    if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey) {
       reset();
       return null;
     }

@@ -34,6 +34,7 @@ import {
   allCollapsed,
   collapseAll,
   expandAll,
+  railChordAction,
   type DetailRailState,
   type DetailRailSlot,
 } from "@/lib/detail-rail";
@@ -112,6 +113,36 @@ export default function ShotDetail({
     writeDetailRail(next);
     setRail(next);
   };
+
+  // Keyboard chords for the rail (F93): Shift+E expands every section, Shift+C
+  // collapses every section -- registered under the "detail" scope in the ?
+  // overlay so they self-document. Input-guarded so typing into the tag editor
+  // never folds the rail. railChordAction (pure, requires shift, forbids
+  // Cmd/Ctrl/Alt) keeps the matching testable; HotKeys' bare-letter nav now
+  // skips Shift-held keys, so Shift+C won't ALSO route to /calibration.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      const action = railChordAction(e);
+      if (action === "expand") {
+        e.preventDefault();
+        setAllRail(false);
+      } else if (action === "collapse") {
+        e.preventDefault();
+        setAllRail(true);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const { data, error, isLoading } = useSWR<Detail>(
     ENDPOINTS.historyItem(id),
     fetcher
@@ -338,7 +369,7 @@ export default function ShotDetail({
               load. Offers the action that does something: when everything is
               folded it invites "Expand all", otherwise "Collapse all". */}
           {mounted && (
-            <div className="flex items-center justify-end -mb-2">
+            <div className="flex items-center justify-end gap-1.5 -mb-2">
               <button
                 type="button"
                 onClick={() => setAllRail(!allCollapsed(rail))}
@@ -350,12 +381,26 @@ export default function ShotDetail({
                 }
                 title={
                   allCollapsed(rail)
-                    ? "Unfold every section"
-                    : "Fold every section"
+                    ? "Unfold every section (Shift+E)"
+                    : "Fold every section (Shift+C)"
                 }
               >
                 {allCollapsed(rail) ? "Expand all" : "Collapse all"}
               </button>
+              {/* Tiny chord hint so the Shift+E / Shift+C keys (F93) are
+                  discoverable on-page, not just in the ? overlay. Mirrors the
+                  ShotNav [ ] hint. aria-hidden because the button label +
+                  title already convey the action for screen readers. */}
+              <span
+                className="hidden sm:inline-flex items-center gap-0.5 opacity-45"
+                aria-hidden
+                title="Shift+E expands every section, Shift+C collapses every section"
+              >
+                <kbd className="kbd text-[9px] leading-none">⇧</kbd>
+                <kbd className="kbd text-[9px] leading-none">
+                  {allCollapsed(rail) ? "E" : "C"}
+                </kbd>
+              </span>
             </div>
           )}
 

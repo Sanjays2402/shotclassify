@@ -208,3 +208,32 @@ test("bare 'w' shortcut shares its letter only with the 'g w' chord", () => {
   // The Webhooks chord exists and is the two-stroke "g w" -- distinct match.
   assert.ok(SHORTCUTS.some((s) => s.combo.match === "g w"));
 });
+
+// --- F93: shot-detail rail expand/collapse-all chords --------------------
+
+test("rail expand/collapse-all: registered under the detail scope", () => {
+  const expand = SHORTCUTS.find((s) => s.id === "rail-expand-all");
+  const collapse = SHORTCUTS.find((s) => s.id === "rail-collapse-all");
+  assert.ok(expand, "rail-expand-all must exist");
+  assert.ok(collapse, "rail-collapse-all must exist");
+  assert.equal(expand!.scope, "detail");
+  assert.equal(collapse!.scope, "detail");
+  // These render in the ? overlay; the actual key handling lives in
+  // lib/detail-rail's railChordAction (tested there) because the generic
+  // matcher's bare-combo path is built around shifted glyphs, not Shift+letter.
+  assert.equal(expand!.combo.match, "shift+e");
+  assert.equal(collapse!.combo.match, "shift+c");
+});
+
+test("createSequenceTracker: a shift-held key resets the buffer (F93)", () => {
+  // After `g`, a Shift+C (rail collapse-all) must NOT complete the `g c`
+  // calibration chord -- the tracker drops shift-modified keys.
+  const tr = createSequenceTracker(SHORTCUTS, 1000);
+  assert.equal(tr.feed(ev({ key: "g" }), 0), null);
+  assert.equal(tr.feed(ev({ key: "C", shiftKey: true }), 100), null);
+  // The buffer was reset, so a following bare "c" alone matches nothing.
+  assert.equal(tr.feed(ev({ key: "c" }), 200), null);
+  // And a clean g-then-c still fires.
+  assert.equal(tr.feed(ev({ key: "g" }), 300), null);
+  assert.equal(tr.feed(ev({ key: "c" }), 400), "g c");
+});

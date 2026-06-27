@@ -106,6 +106,38 @@ export function expandAll(): DetailRailState {
   return new Set();
 }
 
+// --- Expand/collapse-all keyboard chords (F93) ---------------------------
+// Shift+E expands every rail section, Shift+C collapses every section. A pure
+// matcher keeps the page handler thin and unit-testable. We check shift
+// EXPLICITLY (rather than reusing lib/shortcuts' matchesShortcut, whose
+// bare-combo path is built around shifted glyphs like "?" and would also
+// accept a bare "e" / "c") so a plain letter press never folds the rail.
+
+// The minimal key-event shape the matcher reads -- KeyboardEvent satisfies it.
+export type RailChordKey = {
+  key: string;
+  shiftKey?: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+};
+
+export type RailChordAction = "expand" | "collapse";
+
+// Resolve a key event to a rail chord action, or null when it isn't one.
+// Requires SHIFT and forbids Cmd / Ctrl / Alt so the chord never collides
+// with a browser / OS shortcut. Case-insensitive on the letter (Shift makes
+// the browser deliver an uppercase "E" / "C", but we tolerate either).
+export function railChordAction(ev: RailChordKey): RailChordAction | null {
+  if (!ev || typeof ev.key !== "string") return null;
+  if (!ev.shiftKey) return null;
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return null;
+  const k = ev.key.toLowerCase();
+  if (k === "e") return "expand";
+  if (k === "c") return "collapse";
+  return null;
+}
+
 // --- Browser wrappers (no-throw) -----------------------------------------
 
 // Read the persisted collapse state. Returns an empty set (all expanded) on

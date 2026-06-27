@@ -55,8 +55,12 @@ export default function HotKeys() {
       }
 
       // Then bare single-letter nav. Skip when any modifier is held so we
-      // never collide with Cmd-S "save page" / Ctrl-U "view source".
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // never collide with Cmd-S "save page" / Ctrl-U "view source", and so
+      // Shift-letter chords owned by a page (e.g. the shot-detail rail's
+      // Shift+E / Shift+C expand/collapse, F93) don't ALSO navigate. This
+      // matches matchesShortcut's bare-combo rule, which rejects an
+      // unrequested shift.
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
       const k = e.key.toLowerCase();
       if (k === "u") {
         router.push("/upload");
