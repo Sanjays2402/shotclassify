@@ -24,7 +24,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (196 features tracked, 176 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (196 features tracked, 182 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -403,20 +403,54 @@ F85. [x] Web: visible "press W" hint beside the `/stats` window selector -- ship
 F97. [ ] Web: "Copy as ..." single-shot export menu on `/shots` rows (the open F94) -- a compact per-row menu (JSON / Markdown / CSV) reusing EXPORT_FORMATS (F86) + the shot-export serializers so the list and detail surfaces stay in lockstep. Pure wiring + a small `<RowExportMenu>`; toast feedback via the existing store.
 F98. [ ] Web: reuse `<EmptyState>` on `/webhooks` + `/admin/seats` + `/digest` (the long-open F6/F74/F89) -- three pages still hand-roll "no rows" markup. Consolidate onto the canonical component now that emptyCopyForList exists. Component-level; reuse the existing lib.
 F99. [ ] Web: keyboard-driven filter chips on `/shots` (the open F20/F75/F87) -- `Tab` cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box. Pure tabIndex ordering helper + a roving-focus hook; test the order helper.
-F100. [ ] Web: `g <x>` chord pattern caption in the `?` overlay (the open F69/F90) -- a one-line "Tip: press G then a letter" caption under the "Jump to a section" group header so the chord PATTERN is explained once, not just enumerated. Pure copy + a render tweak in ShortcutsHelp.tsx.
-F101. [ ] Web: status-color legend chips above the `/webhooks` deliveries table -- a tiny success/failed/pending swatch row (felt-green / red / amber) so the status column reads at a glance AND clicking a swatch sets the F92 status filter. Pure render off DELIVERY_STATUSES + a click->setStatusFilter wire.
-F102. [ ] Web: "Filtering N of M deliveries" count line on `/webhooks` when the F92 filter is active -- mirrors the shots filter-count pill (F91) so the narrowed deliveries view signals how much it hid. Pure render off filteredDeliveries.length vs deliveries.length.
+F100. [x] Web: `g <x>` chord pattern caption in the `?` overlay -- shipped tick 38. The "Jump to a section" group header in ShortcutsHelp.tsx gained a one-line "Tip: press G, then a letter." caption (scopeOrder rows carry an optional `caption` field; the section map renders it when present, so any future group can carry its own explainer). Closes the long-open F69/F90. Pure render. (dc73a20)
+F101. [x] Web: status-color legend chips above the `/webhooks` deliveries table -- shipped tick 38. A success/failed/pending swatch row with LIVE counts (felt-green/red/amber) so the status mix reads at a glance; each swatch is a one-click status filter (clicking the active one clears it; aria-pressed reflects state). New pure `deliveryStatusCounts()` in lib/webhook-delivery-chips (always the 3 known statuses in stable order, zero when absent, trims, ignores unknown + prototype keys via hasOwnProperty tally, safe on non-array). 4 tests. (14a6c65)
+F102. [x] Web: "Filtering N of M deliveries" count line on `/webhooks` when the F92 filter is active -- shipped tick 38. New pure `deliveryFilterCountLabel(shown,total)` (null when nothing hidden, singular/plural aware, clamps over-range, truncates fractional, no-throw on non-finite). Wired beside the breadcrumb, renders only when narrowed. Mirrors the shots pill (F91). 5 tests. (98e9d0c)
 F103. [ ] Web: persist the `/webhooks` deliveries filter to the URL (or localStorage) so a reload keeps the triage view -- mirror the shots deep-link pattern (F30/F47) at small scale: serialize status+event to query params, read once on mount. Pure serialize/parse + tests.
-F104. [ ] Web: command-palette "Clear all filters" / facet-reset affordance -- when a `class:` / `>90%` facet is active, show a one-click "clear" chip in the facet pill row (today you must backspace it out). Pure render + a setQ that strips the facet span; small helper in palette-facets.
+F104. [x] Web: command-palette "Clear all filters" / facet-reset affordance -- shipped tick 38. New pure `stripFacets(query)` in lib/palette-facets reuses parseFacets (strips exactly what it recognised, keeps residual free text, idempotent, trims, preserves an unresolved class: value, safe on non-string). A "Clear" button in the facet pill row applies it + refocuses the input. 7 tests. (465de1e)
 F105. [ ] Web: shot-detail rail "reset to defaults" affordance -- next to Expand/Collapse all, a tiny "reset" that clears the persisted per-slot collapse state entirely (back to the friendly all-expanded default). Reuse expandAll() + a writeDetailRail clear; pure handler.
-F106. [ ] Web: `/stats` KPI cards show the active window in their sub-label -- e.g. "1,240 in window" already exists, but the mean-conf / p95 / corrections cards don't name the window; thread labelForStatsWindow into each card's hint so the scope is unambiguous. Pure render.
-F107. [ ] Web: notifications inbox "N of M" count line when the F88 filter is active -- mirrors F102/F91 so the filtered inbox signals how much it hid. Pure render off the filtered vs total list length.
+F106. [x] Web: `/stats` KPI cards show the active window in their sub-label -- shipped tick 38. `winLabel = labelForStatsWindow(hours)` threaded into all 4 KPI card hints ("N in last 7d", "N timed - last 7d", "p50.. p99.. - last 7d", "X% rate - last 7d") so each stat's scope is unambiguous. Pure render, no new lib (F85 precedent). (68f231e)
+F107. [x] Web: notifications inbox "N of M" count line when the F88 filter is active -- ALREADY SHIPPED. The /notifications page already renders `${matched} of ${total} match` whenever filtersActive (page.tsx ~line 347). Marked done tick 38 (no new work needed; would have been filler).
 F108. [ ] Web: empty-state for the `/webhooks` deliveries filter uses `<EmptyState>` -- today the "no deliveries match" branch (F92) is a plain sentence; upgrade it to the canonical bare-variant EmptyState with a "Clear filter" action for consistency with the shots empty state. Component-level; reuse emptyCopyForList shape.
 
 
 
 
 ## Tick log
+- 2026-06-27 01:25 PT (tick 38, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  - 98e9d0c feat(web): "Filtering N of M deliveries" count line on webhooks (F102)
+  - 14a6c65 feat(web): clickable status legend with live counts on webhooks (F101)
+  - 465de1e feat(web): one-click facet reset on the command palette (F104)
+  - 68f231e feat(web): name the active window in each stats KPI sub-label (F106)
+  - dc73a20 feat(web): explain the G-then-letter chord pattern in the help overlay (F100)
+  - Gate: tsc --noEmit clean (whole web project) + `npx tsx --test --test-force-exit
+    lib/*.test.mts` 522 passed / 0 failed (508 baseline at tick 37 + net new: F102=5
+    deliveryFilterCountLabel + F101=4 deliveryStatusCounts, both APPENDED to the
+    existing webhook-delivery-chips test file via patch -- 13->22; F104=7 stripFacets
+    APPENDED to palette-facets test -- 13->20; F106 + F100 are pure render, no test)
+    + `next build` compiled successfully in 5.1s -- /shots AND /stats AND /webhooks
+    still prerender static, /shots/[id] dynamic as expected. All work is web/ TS/TSX
+    -- ZERO Python touched, so the pytest baseline cannot regress. Used
+    --test-force-exit for the clean glob exit (documented gotcha).
+  - HEEDED tick-37's lesson: both test additions to pre-existing *.test.mts files were
+    done by `patch` (append), NEVER write_file, so no baseline coverage was clobbered.
+    Both files re-run green standalone (22 + 20) and inside the glob (522 total).
+  - Theme: filter legibility + keyboard/affordance discoverability. F101 turns the
+    webhooks status mix into a live, clickable legend (triage in one click); F102 + the
+    notifications N-of-M (found already shipped, F107 marked done) + the shots pill
+    (F91) now consistently signal "how much did the filter hide" across all three list
+    surfaces; F104 makes the palette facet pill removable in one click; F106 names the
+    window on every stats KPI; F100 explains the `g <x>` chord pattern once.
+  - Frontend backlog: F100/F101/F102/F104/F106 marked done; F107 marked done (already
+    shipped, no work). Backlog still has ~45 open (well above the < 5 refill threshold),
+    so NO refill this tick. Notable still-open: F103/F105/F108 (this batch's neighbours),
+    plus the long-open F6/F9/F11/F16/F20-F25, F26-F28, F33, F38-F41, F43, F46, F48,
+    F53-F56, F65, F67, F71-F75, F78, F84, F87, F89, F94, F96, F97-F99.
+  - NOTE (carried from tick 35/36/37, still true): repo-wide `ruff check` reports ~536
+    PRE-EXISTING errors from ruff-version drift. My batch touched ZERO Python and added
+    zero new lint errors. Still flagged for Sanjay; needs a separate `ruff check --fix`
+    + pin bump, out of scope for the frontend override.
+
 - 2026-06-26 23:34 PT (tick 37, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   - 0ff0507 feat(web): status + event filter and removable breadcrumb on webhook deliveries (F92)
   - 4c288c4 feat(web): active-filter count pill on the shots toolbar (F91)
