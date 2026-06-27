@@ -122,3 +122,24 @@ export function countActiveDeliveryFilters(
 ): number {
   return activeDeliveryChips(f).length;
 }
+
+// "Filtering N of M deliveries" count line for when the F92 filter narrows the
+// recent-deliveries table (F102). Mirrors the shots filter-count pill (F91)
+// and the notifications "N of M" line so a triaging user can see at a glance
+// how much the active filter hid. Returns null when nothing is hidden -- the
+// filter is inert, or it happens to match every row -- so the caller renders
+// no inert noise. Singular/plural aware on the noun. Defensive against
+// non-finite / negative inputs (treated as no-op) and a shown count that
+// exceeds the total (clamped) so a transient render can never print nonsense.
+export function deliveryFilterCountLabel(
+  shown: number,
+  total: number,
+): string | null {
+  if (!Number.isFinite(shown) || !Number.isFinite(total)) return null;
+  const t = Math.max(0, Math.trunc(total));
+  const s = Math.min(Math.max(0, Math.trunc(shown)), t);
+  if (t <= 0) return null;
+  // Only signal when the view is actually narrowed.
+  if (s >= t) return null;
+  return `Filtering ${s} of ${t} ${t === 1 ? "delivery" : "deliveries"}`;
+}

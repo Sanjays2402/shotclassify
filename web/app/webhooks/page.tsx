@@ -8,6 +8,7 @@ import {
   filterDeliveries,
   distinctDeliveryEvents,
   deliveryStatusLabel,
+  deliveryFilterCountLabel,
   DELIVERY_STATUSES,
   type WebhookDeliveryFilterKey,
 } from "@/lib/webhook-delivery-chips";
@@ -651,6 +652,21 @@ export default function WebhooksPage() {
           onClear={clearDeliveryFilter}
           onClearAll={clearAllDeliveryFilters}
         />
+        {/* "Filtering N of M deliveries" line (F102) -- signals how much the
+            active F92 filter hid, mirroring the shots filter-count pill (F91)
+            and the notifications N-of-M line. Renders only when the view is
+            actually narrowed (the helper returns null otherwise). */}
+        {(() => {
+          const label = deliveryFilterCountLabel(
+            filteredDeliveries.length,
+            deliveries.length,
+          );
+          return label ? (
+            <p className="num text-[11px] opacity-60 mb-2" role="status">
+              {label}
+            </p>
+          ) : null;
+        })()}
         {deliveries.length === 0 ? (
           <p className="text-sm opacity-60">
             No deliveries yet. Send a test event or run a classification.

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   activeDeliveryChips,
   countActiveDeliveryFilters,
+  deliveryFilterCountLabel,
   distinctDeliveryEvents,
   filterDeliveries,
   deliveryStatusLabel,
@@ -144,4 +145,30 @@ test("countActiveDeliveryFilters: counts the active constraints", () => {
     countActiveDeliveryFilters({ status: "failed", event: "a.b" }),
     2,
   );
+});
+
+test("deliveryFilterCountLabel: narrowed view names shown-of-total", () => {
+  assert.equal(deliveryFilterCountLabel(3, 10), "Filtering 3 of 10 deliveries");
+  assert.equal(deliveryFilterCountLabel(0, 4), "Filtering 0 of 4 deliveries");
+});
+
+test("deliveryFilterCountLabel: nothing hidden -> null (no inert noise)", () => {
+  assert.equal(deliveryFilterCountLabel(10, 10), null);
+  assert.equal(deliveryFilterCountLabel(0, 0), null);
+});
+
+test("deliveryFilterCountLabel: singular noun at a total of one", () => {
+  assert.equal(deliveryFilterCountLabel(0, 1), "Filtering 0 of 1 delivery");
+});
+
+test("deliveryFilterCountLabel: defensive against bad / over-range input", () => {
+  // shown > total clamps to total -> reads as not-narrowed -> null.
+  assert.equal(deliveryFilterCountLabel(12, 10), null);
+  // negatives floor at zero.
+  assert.equal(deliveryFilterCountLabel(-3, 5), "Filtering 0 of 5 deliveries");
+  // non-finite inputs no-op.
+  assert.equal(deliveryFilterCountLabel(NaN, 5), null);
+  assert.equal(deliveryFilterCountLabel(2, Infinity), null);
+  // fractional inputs truncate.
+  assert.equal(deliveryFilterCountLabel(2.9, 9.4), "Filtering 2 of 9 deliveries");
 });
