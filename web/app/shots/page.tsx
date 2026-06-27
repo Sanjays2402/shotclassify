@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { Scales, CaretLeft, CaretRight, Trash, Tag, CheckSquare, Square, Star, Crosshair, Table, GridFour, Rows } from "@phosphor-icons/react/dist/ssr";
+import { Scales, CaretLeft, CaretRight, Trash, Tag, CheckSquare, Square, Star, Crosshair, Table, GridFour, Rows, Funnel } from "@phosphor-icons/react/dist/ssr";
 import { useSWRConfig } from "swr";
 import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
@@ -31,7 +31,7 @@ import BulkExportButtons from "@/components/BulkExportButtons";
 import type { ShotExportInput } from "@/lib/shot-export";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
-import type { FilterKey } from "@/lib/filter-summary";
+import { filterCountLabel, type FilterKey } from "@/lib/filter-summary";
 import {
   parseViewMode,
   nextViewMode,
@@ -607,6 +607,38 @@ function ShotsPageInner() {
         role="toolbar"
         aria-label="Filters"
       >
+        {(() => {
+          // Compact active-filter count pill (F91): a quick "3 filters" signal
+          // so a scrolled/narrowed toolbar still reads as filtered at a glance.
+          // Reuses the same active-filter rules the breadcrumb + query use.
+          const label = filterCountLabel({
+            category: cat || undefined,
+            q: qDebounced || undefined,
+            tag: tagDebounced || undefined,
+            minConfPct,
+            since: since || undefined,
+            until: until || undefined,
+            pinnedOnly,
+          });
+          if (!label) return null;
+          return (
+            <button
+              type="button"
+              onClick={resetAllFilters}
+              className="num inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-sm transition-opacity hover:opacity-90"
+              style={{
+                background: "var(--color-felt)",
+                color: "var(--color-chalk)",
+              }}
+              aria-label={`${label} active. Clear all filters.`}
+              title="Clear all filters"
+              data-testid="shots-filter-count"
+            >
+              <Funnel size={11} weight="fill" />
+              {label}
+            </button>
+          );
+        })()}
         <select
           className="num text-[12px] px-2 py-1.5 rounded-sm border bg-white"
           style={{ borderColor: "var(--color-rule)" }}

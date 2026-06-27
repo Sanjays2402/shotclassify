@@ -105,6 +105,16 @@ export function countActiveFilters(f: ShotFilterState): number {
   return activeFilterChips(f).length;
 }
 
+// A compact "3 filters" / "1 filter" pill label for the toolbar (F91). When
+// the toolbar is scrolled or the breadcrumb is off-screen, this pill signals
+// at a glance that the list is narrowed. Returns null at zero so the caller
+// renders nothing (no inert "0 filters" noise). Singular/plural aware.
+export function filterCountLabel(f: ShotFilterState): string | null {
+  const n = countActiveFilters(f);
+  if (n <= 0) return null;
+  return `${n} filter${n === 1 ? "" : "s"}`;
+}
+
 // Return a copy of the filter state with a single filter reset to its
 // inert default. Pure -- the component can apply the result or, more
 // commonly, route the cleared key to the matching individual setter.
