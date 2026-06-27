@@ -28,6 +28,7 @@ import {
   type ExportFormatKey,
   type ShotExportInput,
 } from "@/lib/shot-export";
+import { rovingIndex, isRovingKey } from "@/lib/roving-index";
 import { toast } from "@/lib/toast-store";
 
 // Clipboard write with a non-secure-context fallback, mirroring
@@ -78,6 +79,10 @@ export default function RowExportMenu({
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  // Roving focus for keyboard navigation (F114): which menu item is active.
+  // -1 = "nothing focused yet" so the first ArrowDown lands on the top item.
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -96,6 +101,31 @@ export default function RowExportMenu({
       document.removeEventListener("keydown", onEsc);
     };
   }, [open]);
+
+  // On open, prime the roving focus to the first item; on close, reset it so
+  // the next open starts clean. Move actual DOM focus when the active index
+  // changes while open so Arrow keys visibly walk the list.
+  useEffect(() => {
+    if (open) setActiveIndex(0);
+    else setActiveIndex(-1);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || activeIndex < 0) return;
+    itemRefs.current[activeIndex]?.focus();
+  }, [open, activeIndex]);
+
+  // Arrow / Home / End navigation between the format items. Enter / Space fire
+  // the focused item via the button's native activation; Escape is handled by
+  // the document listener above. preventDefault on a handled nav key stops the
+  // dropdown from scrolling the table behind it.
+  function onMenuKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (!isRovingKey(e.key)) return;
+    const next = rovingIndex(activeIndex, EXPORT_FORMATS.length, e.key);
+    if (next == null) return;
+    e.preventDefault();
+    setActiveIndex(next);
+  }
 
   async function copy(format: ExportFormatKey, noun: string) {
     try {
@@ -130,13 +160,20 @@ export default function RowExportMenu({
           role="menu"
           className="absolute right-0 top-full mt-1 z-20 min-w-[150px] panel p-1 shadow-lg bg-white"
           style={{ borderColor: "var(--color-rule)" }}
+          onKeyDown={onMenuKeyDown}
         >
-          {EXPORT_FORMATS.map((f) => (
+          {EXPORT_FORMATS.map((f, i) => (
             <button
               key={f.key}
+              ref={(el) => {
+                itemRefs.current[i] = el;
+              }}
               role="menuitem"
               type="button"
-              className="num w-full text-left px-2.5 py-1.5 text-[12px] hover:bg-black/5 rounded-sm flex items-center gap-2"
+              // Roving tabindex: only the active item is in the tab order so
+              // Tab leaves the menu instead of walking each item (F114).
+              tabIndex={activeIndex === i ? 0 : -1}
+              className="num w-full text-left px-2.5 py-1.5 text-[12px] hover:bg-black/5 focus:bg-black/5 focus:outline-none rounded-sm flex items-center gap-2"
               onClick={(e) => {
                 e.preventDefault();
                 void copy(f.key, f.noun);
