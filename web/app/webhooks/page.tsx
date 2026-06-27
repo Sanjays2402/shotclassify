@@ -18,6 +18,7 @@ import {
   deliveryStatusLabel,
   deliveryFilterCountLabel,
   deliveryStatusCounts,
+  statusSwatchAria,
   DELIVERY_STATUSES,
   type WebhookDeliveryFilterKey,
 } from "@/lib/webhook-delivery-chips";
@@ -743,18 +744,16 @@ export default function WebhooksPage() {
             {statusCounts.map(({ status, label, count }) => {
               const active = statusFilter === status;
               const color = STATUS_SWATCH[status] ?? "var(--color-ink)";
+              const a11y = statusSwatchAria(label, count, active);
               return (
                 <button
                   key={status}
                   type="button"
                   onClick={() => toggleStatusFilter(status)}
                   aria-pressed={active}
-                  title={
-                    active
-                      ? `Clear the ${label} filter`
-                      : `Show only ${label} deliveries`
-                  }
-                  className="inline-flex items-center gap-1.5 rounded-sm border px-2 py-[3px] text-[11px] transition-colors hover:bg-black/[0.04]"
+                  aria-label={a11y.ariaLabel}
+                  title={a11y.title}
+                  className="inline-flex items-center gap-1.5 rounded-sm border px-2 py-[3px] text-[11px] transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-cue)] focus-visible:ring-offset-1"
                   style={{
                     borderColor: active ? color : "var(--color-rule)",
                     background: active ? `${color}14` : "transparent",
@@ -765,8 +764,8 @@ export default function WebhooksPage() {
                     style={{ background: color }}
                     aria-hidden
                   />
-                  <span className="opacity-80">{label}</span>
-                  <span className="num font-medium" style={{ color }}>
+                  <span className="opacity-80" aria-hidden>{label}</span>
+                  <span className="num font-medium" style={{ color }} aria-hidden>
                     {count}
                   </span>
                 </button>

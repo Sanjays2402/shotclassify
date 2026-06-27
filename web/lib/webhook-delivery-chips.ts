@@ -200,3 +200,38 @@ export function deliveryStatusCounts(
     count: tally[status],
   }));
 }
+
+// Accessible name + tooltip for one status-legend swatch (F116). The swatch
+// renders as a toggle button (aria-pressed) whose visible content is a colour
+// dot (aria-hidden) + the status label + a bare count. Relying on that
+// concatenated text for the accessible name reads as "Success 3" with no hint
+// that it's a filter toggle or what activating it does -- poor for a keyboard /
+// screen-reader triager. This pure helper builds an explicit, action-oriented
+// aria-label + matching title so the announced name always states the toggle's
+// effect ("Show only ... deliveries" vs "Clear the ... filter") and folds in
+// the live count. Keeping it here (framework-free) makes the wording testable
+// and the button a thin renderer.
+export type StatusSwatchAria = {
+  // Full accessible name, e.g. "Success, 3 deliveries. Show only success deliveries."
+  ariaLabel: string;
+  // Hover tooltip mirroring the action half of the label.
+  title: string;
+};
+
+export function statusSwatchAria(
+  label: string,
+  count: number,
+  active: boolean,
+): StatusSwatchAria {
+  const name = typeof label === "string" && label.trim() ? label.trim() : "status";
+  const n = Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0;
+  const lower = name.toLowerCase();
+  const countPhrase = `${n} ${n === 1 ? "delivery" : "deliveries"}`;
+  const action = active
+    ? `Clear the ${lower} filter`
+    : `Show only ${lower} deliveries`;
+  return {
+    ariaLabel: `${name}, ${countPhrase}. ${action}`,
+    title: action,
+  };
+}

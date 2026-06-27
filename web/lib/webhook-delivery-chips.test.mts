@@ -12,6 +12,7 @@ import {
   distinctEventCountLabel,
   filterDeliveries,
   deliveryStatusLabel,
+  statusSwatchAria,
   DELIVERY_STATUSES,
   DELIVERY_STATUS_LABELS,
   type DeliveryLike,
@@ -244,3 +245,47 @@ test("distinctEventCountLabel: composes with distinctDeliveryEvents", () => {
   ]);
   assert.equal(distinctEventCountLabel(events), "2 seen");
 });
+
+test("statusSwatchAria: inactive swatch announces the show-only action + count", () => {
+  const { ariaLabel, title } = statusSwatchAria("Success", 3, false);
+  assert.equal(ariaLabel, "Success, 3 deliveries. Show only success deliveries");
+  assert.equal(title, "Show only success deliveries");
+});
+
+test("statusSwatchAria: active swatch announces the clear action", () => {
+  const { ariaLabel, title } = statusSwatchAria("Failed", 5, true);
+  assert.equal(ariaLabel, "Failed, 5 deliveries. Clear the failed filter");
+  assert.equal(title, "Clear the failed filter");
+});
+
+test("statusSwatchAria: singular delivery noun at a count of one", () => {
+  const { ariaLabel } = statusSwatchAria("Pending", 1, false);
+  assert.equal(ariaLabel, "Pending, 1 delivery. Show only pending deliveries");
+});
+
+test("statusSwatchAria: zero / non-finite / negative counts floor to a sane phrase", () => {
+  assert.equal(
+    statusSwatchAria("Success", 0, false).ariaLabel,
+    "Success, 0 deliveries. Show only success deliveries",
+  );
+  assert.equal(
+    statusSwatchAria("Success", NaN, false).ariaLabel,
+    "Success, 0 deliveries. Show only success deliveries",
+  );
+  assert.equal(
+    statusSwatchAria("Success", -4, false).ariaLabel,
+    "Success, 0 deliveries. Show only success deliveries",
+  );
+  // fractional counts truncate toward zero.
+  assert.equal(
+    statusSwatchAria("Success", 2.9, false).ariaLabel,
+    "Success, 2 deliveries. Show only success deliveries",
+  );
+});
+
+test("statusSwatchAria: blank label degrades to a generic 'status' name", () => {
+  const { ariaLabel, title } = statusSwatchAria("   ", 2, false);
+  assert.equal(ariaLabel, "status, 2 deliveries. Show only status deliveries");
+  assert.equal(title, "Show only status deliveries");
+});
+
