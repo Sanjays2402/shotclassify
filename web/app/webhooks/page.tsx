@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Skeleton } from "@/components/Skeleton";
+import { EmptyState as FilterEmptyState } from "@/components/EmptyState";
+import { emptyCopyForList } from "@/lib/empty-state";
 import { WebhookDeliveryBreadcrumb } from "@/components/WebhookDeliveryBreadcrumb";
 import {
   readDeliveryFilterFromUrl,
@@ -327,6 +329,20 @@ export default function WebhooksPage() {
 
   const deliveryFilterState = useMemo(
     () => ({ status: statusFilter, event: eventFilter }),
+    [statusFilter, eventFilter],
+  );
+
+  // Body copy for the filtered-empty deliveries state (F108). Reuses
+  // emptyCopyForList so the "Active: ..." summary reads like the shots empty
+  // state -- we map the deliveries filter onto its category/tag slots (status
+  // as the class, event as the tag) purely to drive the shared phrasing.
+  const deliveryEmptyBody = useMemo(
+    () =>
+      emptyCopyForList("deliveries", {
+        category:
+          statusFilter !== "all" ? deliveryStatusLabel(statusFilter) : null,
+        tag: eventFilter !== "all" ? eventFilter : null,
+      }).body,
     [statusFilter, eventFilter],
   );
 
@@ -761,17 +777,22 @@ export default function WebhooksPage() {
             No deliveries yet. Send a test event or run a classification.
           </p>
         ) : filteredDeliveries.length === 0 ? (
-          <p className="text-sm opacity-60">
-            No deliveries match the current filter.{" "}
-            <button
-              type="button"
-              className="underline opacity-80 hover:opacity-100"
-              onClick={clearAllDeliveryFilters}
-            >
-              Clear the filter
-            </button>{" "}
-            to see all {deliveries.length}.
-          </p>
+          // Filtered-to-empty (F108): the canonical bare EmptyState instead of
+          // a plain sentence, matching the /shots filtered empty state. The
+          // copy names the active filter and the primary CTA clears it.
+          <FilterEmptyState
+            variant="bare"
+            eyebrow="No matches"
+            icon={<PaperPlaneTilt size={24} weight="duotone" />}
+            title="No deliveries match that filter"
+            body={deliveryEmptyBody}
+            primary={{
+              label: "Clear the filter",
+              kind: "cue",
+              onClick: clearAllDeliveryFilters,
+            }}
+            data-testid="webhook-deliveries-empty"
+          />
         ) : (
           <div
             className="rounded border overflow-x-auto"
