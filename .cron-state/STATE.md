@@ -24,7 +24,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (190 features tracked, 171 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (196 features tracked, 176 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -379,19 +379,60 @@ F80. [x] Web: shot-detail single-shot "copy as CSV" -- shipped tick 35. Extracte
 
 
 ### Frontend backlog refill (tick 35 -- F81-F90, frontend-override still active)
-F81. [ ] Web: `<ShotNav>` keyboard hint (the open F71) -- when the prev/next chevrons are visible, render a tiny `[ ]` kbd pair beside the position counter ("2 of 6  [ ]") so the keys are discoverable without the ? overlay. Pure render tweak in ShotNav.tsx; no lib change.
-F82. [ ] Web: "Expand all / Collapse all" control for the shot-detail rail (pairs with F77) -- a small header affordance that folds or unfolds every CollapsibleSection at once, writing the full set via lib/detail-rail. Pure `allCollapsed()` / `collapseAll()` / `expandAll()` helpers in detail-rail.ts + a button row; test the set helpers.
-F83. [ ] Web: command-palette "go to section" rows should show the recently-viewed COUNT as a faint badge on the Shots nav row (e.g. "Shots · 4 recent") so the user knows the ring has entries before opening. Pure render off the existing recents length; no new lib.
+F81. [x] Web: `<ShotNav>` keyboard hint -- shipped tick 36. A faint `[ ]` kbd pair beside the "2 of 6" position counter in ShotNav.tsx, hidden < sm, aria-hidden (the chevron buttons already spell the keys for SR). Pure render; no lib change. (d75ef82)
+F82. [x] Web: "Expand all / Collapse all" control for the shot-detail rail -- shipped tick 36. `lib/detail-rail` gained pure `collapseAll()` / `expandAll()` / `allCollapsed()` / `allExpanded()`; the page renders a mounted-gated header button that offers the action that does something. 6 tests. (ccdc380)
+F83. [x] Web: recently-viewed COUNT badge on the palette Shots nav row -- shipped tick 36. Pure `recentCountLabel(href, count)` + `RECENT_BADGE_ROUTE` in command-palette.ts ("N recent" only for /shots with a positive finite count, null otherwise); the component reads `recents.length`. 3 tests. (b21b26d)
 F84. [ ] Web: per-row inline preview drawer on `/shots` (the long-open F11/F28/F72) -- click the ID-column chevron to expand a drawer under the row with OCR snippet + a mini confidence bar + rationale, without leaving the list. Pure row-expand state (Set<id>) + a presentational `<ShotPreviewDrawer>`; data already on the row.
-F85. [ ] Web: `/stats` window selector keyboard hint -- show a faint "press W" affordance beside the 24h/7d/30d buttons (mirrors how F71 surfaces `[ ]` on ShotNav) so the new F79 cycle is discoverable on the page, not just the ? overlay. Pure render; no lib.
-F86. [ ] Web: shot-detail "copy as CSV" should also land in the bulk-actions bar's format set if not already obvious -- audit BulkExportButtons vs CopyExportButtons so both surfaces expose JSON/MD/CSV identically (F64 added bulk CSV, F80 added single CSV; confirm parity + a shared label helper). Pure component audit + a tiny shared labels constant; test the constant.
+F85. [ ] Web: `/stats` window selector keyboard hint -- show a faint "press W" affordance beside the 24h/7d/30d buttons (mirrors how F81 surfaces `[ ]` on ShotNav) so the new F79 cycle is discoverable on the page, not just the ? overlay. Pure render; no lib. NOTE (tick 36): the buttons already carry "(press W to cycle)" in their title tooltip -- a VISIBLE faint hint is the remaining work, keep it to one small affordance so it doesn't clutter the header.
+F86. [x] Web: shared export-format catalogue (single + bulk parity) -- shipped tick 36. `EXPORT_FORMATS` + `exportFormatByKey()` in lib/shot-export ({key, noun, short} per format); CopyExportButtons (full noun) and BulkExportButtons (compact `short`) both render by mapping the catalogue, per-surface presentation (icons/tooltips/serializer) stays local. 4 tests. (98b989b)
 F87. [ ] Web: keyboard-driven filter chips on `/shots` (the open F20/F75) -- `Tab` cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box. Pure tabIndex ordering helper + a roving-focus hook; test the order helper.
-F88. [ ] Web: filter breadcrumb on `/notifications` + `/webhooks` lists (the open F33/F73) -- reuse `<FilterBreadcrumb>` + a small adapter mapping each page's filter state to FilterKey pills + a clearOne handler. Pure adapter; test the mapping.
+F88. [x] Web: filter breadcrumb on `/notifications` -- shipped tick 36. `lib/notif-filter-chips` (pure: Search/Kind/Unread chips with kind-label resolution + fallback) + `<NotifFilterBreadcrumb>` mirroring the shots breadcrumb; page wires a `clearOneFilter()` router reading the debounced query. 9 tests. (`/webhooks` half still open -- see F92.) (5bfebf7)
 F89. [ ] Web: reuse `<EmptyState>` on `/notifications` (filter-aware), `/webhooks`, `/admin/seats`, `/digest` (the long-open F6/F74) -- consolidate the bespoke "no rows" markup onto the canonical component now that emptyCopyForList exists. Component-level; reuse the existing lib.
 F90. [ ] Web: `g <x>` chord pattern caption in the `?` overlay (the open F69) -- add a one-line "Tip: press G then a letter" caption under the "Jump to a section" group header so the chord PATTERN is explained once, not just enumerated. Pure copy + a render tweak in ShortcutsHelp.tsx; no lib change.
 
+### Frontend backlog refill (tick 36 -- F91-F96, frontend-override still active)
+F91. [ ] Web: count-active-filters badge on the `/shots` filter toolbar -- a small "3 filters" pill (from `countActiveFilters`) so a collapsed/scrolled toolbar still signals the list is narrowed. Pure render off the existing helper; pairs with the FilterBreadcrumb.
+F92. [ ] Web: filter breadcrumb on `/webhooks` (the other half of F88/F33/F73) -- the deliveries view filters by status/event; add a small chip lib mirroring notif-filter-chips + a thin breadcrumb so the consolidation theme finishes. Pure adapter; test the mapping.
+F93. [ ] Web: `Expand all / Collapse all` keyboard chord on the shot-detail rail (pairs with F82) -- bind a bare key (e.g. shift+E / shift+C, input-guarded) to fold/unfold the whole rail, registered under the "detail" scope in the ? overlay so it self-documents. Reuse the F82 set helpers; pure handler + a SHORTCUTS entry.
+F94. [ ] Web: "Copy as ..." export trio reaches the `/shots` row hover actions -- a single-shot CopyExportButtons (or a compact menu) per row so you can grab one shot's JSON/MD/CSV without opening it. Reuse EXPORT_FORMATS (F86) so it stays in lockstep; pure wiring + the shared catalogue.
+F95. [ ] Web: palette "N recent" badge pattern extended to the Inbox row -- show the unread-count as a faint badge on the palette's Inbox nav row (mirrors F83's Shots badge) so unread activity is visible from the palette. Pure render off a count source; small lib helper like recentCountLabel.
+F96. [ ] Web: per-section "Expand"/"Collapse" affordance copy unifies with the rail -- audit CollapsibleSection's caret-only header vs the new F82 all-control so the wording/iconography reads consistently (e.g. a hover "Collapse" tooltip on each section header). Pure component polish; no lib.
+
 
 ## Tick log
+- 2026-06-26 18:55 PT (tick 36, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  - 98b989b feat(web): shared export-format catalogue for single + bulk surfaces (F86)
+  - ccdc380 feat(web): expand all / collapse all control for the shot-detail rail (F82)
+  - b21b26d feat(web): recently-viewed count badge on the palette Shots row (F83)
+  - 5bfebf7 feat(web): filter breadcrumb on the notifications inbox (F88)
+  - d75ef82 feat(web): keyboard hint on the shot-detail prev/next nav (F81)
+  - Gate: tsc --noEmit clean (whole web project) + `npx tsx --test --test-force-exit
+    lib/*.test.mts` 480 passed / 0 failed (458 baseline at tick 35 + 22 new: F86=4
+    on shot-export EXPORT_FORMATS, F82=6 on detail-rail set helpers, F83=3 on
+    command-palette recentCountLabel, F88=9 on the new notif-filter-chips lib) +
+    `next build` compiled successfully -- /shots AND /stats still prerender static,
+    /notifications still static, /shots/[id] dynamic as expected. All work is web/
+    TS/TSX -- ZERO Python touched, so the pytest baseline cannot regress. `next lint`
+    is NOT configured in this repo; tsc + 480 web tests + the production build are
+    the reliable web gates, all green. NOTE: the glob run needs `--test-force-exit`
+    (one suite leaves a dangling handle -- documented at the top of STATE.md).
+  - Theme: consistency + discoverability polish. F86 makes the single-shot +
+    bulk export trios render from ONE catalogue so they can't drift; F82 adds an
+    expand-all/collapse-all to the detail rail (reusing F77's lib); F83 surfaces
+    the recents-ring count on the palette Shots row; F88 brings the shots-style
+    removable filter breadcrumb to the notifications inbox (new pure chip lib);
+    F81 shows the `[ ]` keys on ShotNav so the trail-stepping is discoverable.
+    Five small, revertible, tested slices.
+  - Frontend backlog: F81/F82/F83/F86/F88 marked done. Refilled with F91-F96
+    (6 new). Still open from earlier: F6/F9/F11/F16/F20-F25, F26-F28, F33,
+    F38-F41, F43, F46, F48, F53-F56, F65, F67, F69, F71-F75, F78, F84, F85, F87,
+    F89, F90. (F88's `/webhooks` half re-tracked as F92.)
+  - NOTE (carried from tick 35, still true): repo-wide `ruff check` reports ~536
+    PRE-EXISTING errors from ruff-version drift (pins >=0.6, resolved to a newer
+    release with new UP/I/F rules). My batch touched ZERO Python and added zero
+    new lint errors. Still flagged for Sanjay; needs a separate `ruff check
+    --fix` + pin bump, out of scope for the frontend override.
+
 - 2026-06-26 13:40 PT (tick 35, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   - b47b0c9 feat(web): keyboard cycle for the /stats time window (F79)
   - 0962bf9 feat(web): copy a single shot as CSV on the detail page (F80)
