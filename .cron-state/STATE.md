@@ -7,7 +7,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - Python 3.11+, uv workspace, FastAPI API, worker, web (Next.js), packages: classify/common/extract/ocr/route/store, cli.
 - Pipeline: OCR (tesseract) -> classify (vision LLM with heuristic fallback) -> extract (per-category) -> route (yaml rules) -> store (SQLAlchemy).
 - Test runner: `uv run pytest` (~2:06 full suite, 1137 tests). `uv run ruff check .` for lint.
-  Web: `npm test` (= `npx tsx --test lib/*.test.mts`, 508 tests as of tick 37) + `npx tsc --noEmit` + `npx next build`.
+  Web: `npm test` (= `npx tsx --test lib/*.test.mts`, 568 tests as of tick 40) + `npx tsc --noEmit` + `npx next build`.
   GOTCHA: the web glob run hangs after all assertions pass (one suite leaves a
   dangling handle); use `npx tsx --test --test-force-exit lib/*.test.mts` to get
   a clean 458/0 exit. tsc + build never hang.
@@ -24,7 +24,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (204 features tracked, 187 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (209 features tracked, 192 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -419,12 +419,12 @@ NOTE (tick 39): 38 older F-items remain open but many are stale near-duplicates
 BLOCKED on a backend per-hour mean-conf field; the row preview drawer 4x as
 F11/F28/F72/F84; keyboard filter chips 4x as F20/F75/F87/F99; EmptyState
 consolidation as F6/F74/F89/F98). These fresh items are unblocked + non-duplicate.
-F109. [ ] Web: `RowExportMenu` (F97) reaches the GRID + COMPACT views too -- the new per-row export menu only renders in the table view; add it to the ShotGrid card footer + the compact row so all three list layouts expose the same one-shot JSON/MD/CSV grab. Pure wiring; reuse the component.
-F110. [ ] Web: `/webhooks` deliveries event-filter keyboard hint + "N events" affordance -- the event <select> is built from distinctDeliveryEvents; surface the live distinct-event count beside the label ("Event · 3 seen") so a triager knows the breadth without opening the dropdown. Pure render off the existing memo.
-F111. [ ] Web: shot-detail rail collapse-state count badge -- next to Expand/Collapse all, a faint "(2 folded)" count when some-but-not-all sections are collapsed, so the partial state is legible at a glance. New pure collapsedCount(state) in lib/detail-rail + a render; test the counter.
-F112. [ ] Web: `/notifications` "Filtering N of M" reuses a shared count-label helper -- the page hand-rolls `${matched} of ${total} match`; extract the shots/webhooks/notif "N of M" phrasing into one tested pure helper (singular/plural, clamp, null-when-inert) and wire all three onto it, continuing the consolidation theme.
-F113. [ ] Web: copy-link affordance on the `/webhooks` deliveries view -- now that F103 persists the filter to the URL, add a small "Copy link" button (mirroring the shots CopyViewLinkButton) that copies the absolute pre-filtered deliveries URL; disabled when no filter is active. Reuse buildDeliveryFilterQuery + toast.
-F114. [ ] Web: `RowExportMenu` open-state arrow-key navigation -- the per-row export dropdown is mouse/Enter only; add Up/Down to move between the three format items + Enter to fire, Escape already closes. Pure roving-index hook; test the index math.
+F109. [x] Web: `RowExportMenu` (F97) reaches the GRID view -- shipped tick 40. Added the per-row JSON/MD/CSV menu to the ShotGrid card footer beside Compare. COMPACT already had it (the compact view reuses the table markup via isTabular, so the table's RowExportMenu already rendered there). New pure shotRowToExportInput() in lib/shot-export is the single list-row->export mapper (optionals normalised to null/[]); the table page's inline object was replaced with it so all three layouts feed identical data. 5 tests. (d83b4d3)
+F110. [x] Web: `/webhooks` deliveries event-filter "N seen" affordance -- shipped tick 40. Live distinct-event count beside the Event label ("Event · 3 seen") via new pure distinctEventCountLabel() (null when empty -> the select is disabled then). 3 tests incl. a compose-with-distinctDeliveryEvents case. (ba55424)
+F111. [x] Web: shot-detail rail collapse-state count badge -- shipped tick 40. Faint "(N folded)" beside Expand/Collapse-all when partially folded. New pure collapsedCount() + foldedCountLabel() in lib/detail-rail; label returns null at zero AND at all-folded (the Expand-all button already says so) so it shows only for the in-between state; counts known slots only so a corrupt blob can't over-count. 5 tests. (46df86a)
+F112. [ ] Web: `/notifications` "Filtering N of M" reuses a shared count-label helper -- the page hand-rolls `${matched} of ${total} match`; extract the shots/webhooks/notif "N of M" phrasing into one tested pure helper (singular/plural, clamp, null-when-inert) and wire all three onto it, continuing the consolidation theme. NOTE (tick 40): deliveryFilterCountLabel (F102) is the closest existing shape but says "Filtering N of M deliveries" not "N of M match"; a true shared helper needs a noun/verb-configurable signature -- worth doing but skipped this tick to keep the batch focused, not filler-padded.
+F113. [x] Web: copy-link affordance on the `/webhooks` deliveries view -- shipped tick 40. "Copy link" button beside the deliveries filter selects (mirrors shots CopyViewLinkButton); disabled until a filter is active. New pure buildDeliveryDeepLink() + deliveryLinkToastMessage() in lib/webhook-delivery-url reuse the F103 query builder + validators so prose/URL/persisted-filter never disagree; toast names the constraints. New CopyDeliveryLinkButton component. 4 tests. (492d4e7)
+F114. [x] Web: `RowExportMenu` open-state arrow-key navigation -- shipped tick 40. Up/Down/Home/End roving nav between the three format items (open primes first item, Arrows wrap, Enter/Space fire natively, Escape closes); roving tabindex so Tab leaves the menu. New pure lib/roving-index (rovingIndex + isRovingKey): wrap, Home/End, unfocused-landing (Down->first, Up->last), stale-clamp, single-item + fractional guards. 10 tests. (5edfd12)
 F115. [ ] Web: `/shots` table "Export column" header tooltip + a11y polish -- the new trailing export column header is an empty `<th aria-label>`; add a small visible dots glyph + a hover title so the column's purpose is discoverable, not just announced to AT. Pure render.
 F116. [ ] Web: deliveries status-legend swatch keyboard focus ring -- the F101 status swatches are buttons but lean on hover; add a visible focus-visible ring + ensure the aria-pressed group reads as a rad/toggle set for keyboard triagers. Pure CSS/class polish; no lib.
 
@@ -433,6 +433,46 @@ F116. [ ] Web: deliveries status-legend swatch keyboard focus ring -- the F101 s
 
 
 ## Tick log
+- 2026-06-27 09:16 PT (tick 40, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  - d83b4d3 feat(web): per-row Copy-as export menu reaches the grid view (F109)
+  - 5edfd12 feat(web): arrow-key navigation in the per-row export menu (F114)
+  - 46df86a feat(web): partial-fold count badge on the shot-detail rail (F111)
+  - ba55424 feat(web): "N seen" breadth affordance on the webhooks event filter (F110)
+  - 492d4e7 feat(web): Copy-link button on the webhooks deliveries view (F113)
+  - Gate: tsc --noEmit clean (whole web project) + `npx tsx --test --test-force-exit
+    lib/*.test.mts` 568 passed / 0 failed (543 baseline at tick 39 + net new 25:
+    F109=5 shotRowToExportInput APPENDED to shot-export.test (18->23); F114=10 NEW
+    lib/roving-index.test.mts; F111=5 collapsedCount+foldedCountLabel APPENDED to
+    detail-rail.test (29->34); F110=3 distinctEventCountLabel APPENDED to
+    webhook-delivery-chips.test (22->25); F113=4 buildDeliveryDeepLink+
+    deliveryLinkToastMessage APPENDED to webhook-delivery-url.test (15->19)) +
+    `next build` compiled successfully in 5.1s -- /shots AND /webhooks still
+    prerender static, /shots/[id] dynamic as expected. All work is web/ TS/TSX --
+    ZERO Python touched, so the pytest baseline cannot regress. Used
+    --test-force-exit for the clean glob exit (documented gotcha). HEEDED the
+    tick-37 lesson: EVERY test addition to a pre-existing *.test.mts was done by
+    `patch` (append), never write_file -- only the brand-new roving-index test
+    file used write_file. (The tooling flagged "sibling subagent" touched two test
+    files mid-tick; verified by re-running each standalone -- nothing clobbered,
+    counts all went UP.)
+  - Theme: finish the per-row export arc + webhooks triage polish. F109 closes the
+    last list-layout gap (grid) for the export menu AND extracts the one shared
+    row->export mapper so table/grid/compact can never drift; F114 makes that menu
+    fully keyboard-navigable; F111 surfaces the rail's partial-fold count; F110 +
+    F113 round out the webhooks deliveries view (breadth-at-a-glance + shareable
+    filtered link), building straight on F92/F101/F102/F103.
+  - Frontend backlog: F109/F110/F111/F113/F114 marked done. F112 left open with a
+    note (needs a noun/verb-configurable shared helper; skipped to avoid filler).
+    Backlog still has F112 + F115 + F116 fresh + ~38 older items, well above the
+    < 5 refill threshold, so NO refill this tick. Next-tick candidates: F115
+    (export-column header glyph/tooltip), F116 (legend swatch focus ring), F112
+    (shared N-of-M helper).
+  - NOTE (carried from tick 35-39, still true): repo-wide `ruff check` reports ~536
+    PRE-EXISTING Python errors from ruff-version drift. My batch touched ZERO
+    Python and added zero new lint errors. Still flagged for Sanjay; needs a
+    separate `ruff check --fix` + pin bump, out of scope for the frontend override.
+
+
 - 2026-06-27 05:13 PT (tick 39, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   - 0ebd240 feat(web): persist the webhooks deliveries filter to the URL (F103)
   - de74fa9 feat(web): canonical EmptyState for the webhooks filtered-empty deliveries (F108)
