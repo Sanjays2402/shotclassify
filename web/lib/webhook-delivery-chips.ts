@@ -8,6 +8,8 @@
 // surfaces consolidate on one pattern. Framework-free so it's unit-testable
 // and the page + breadcrumb component stay thin renderers.
 
+import { ofTotalLabel } from "./count-label";
+
 // The minimal shape of a delivery row this module needs to reason about. The
 // page's Delivery type is a superset; we only read status + event so the
 // filter stays decoupled from the wire schema.
@@ -152,13 +154,14 @@ export function deliveryFilterCountLabel(
   shown: number,
   total: number,
 ): string | null {
-  if (!Number.isFinite(shown) || !Number.isFinite(total)) return null;
-  const t = Math.max(0, Math.trunc(total));
-  const s = Math.min(Math.max(0, Math.trunc(shown)), t);
-  if (t <= 0) return null;
-  // Only signal when the view is actually narrowed.
-  if (s >= t) return null;
-  return `Filtering ${s} of ${t} ${t === 1 ? "delivery" : "deliveries"}`;
+  // Delegates to the shared ofTotalLabel helper (F112) so the "N of M" phrasing
+  // can't drift from the shots pill / notifications line. The prefix + plural
+  // noun reproduce this surface's historical wording byte-for-byte.
+  return ofTotalLabel(shown, total, {
+    prefix: "Filtering ",
+    singular: "delivery",
+    plural: "deliveries",
+  });
 }
 
 // Per-status delivery counts for the status legend (F101). Above the

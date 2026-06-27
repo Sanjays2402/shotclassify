@@ -19,6 +19,7 @@ import {
 import { NotificationPrefsCard } from "@/components/NotificationPrefsCard";
 import { NotifFilterBreadcrumb } from "@/components/NotifFilterBreadcrumb";
 import type { NotifFilterKey } from "@/lib/notif-filter-chips";
+import { ofTotalLabel } from "@/lib/count-label";
 
 type Notif = {
   id: string;
@@ -344,7 +345,10 @@ export default function NotificationsPage() {
           {loading
             ? "Searching"
             : filtersActive
-              ? `${matched} of ${total} match`
+              ? ofTotalLabel(matched, total, {
+                  singular: "match",
+                  onlyWhenNarrowed: false,
+                }) ?? `${total} total`
               : `${total} total`}
         </span>
         {page && (
