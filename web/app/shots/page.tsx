@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, Suspense } from "react";
+import { useEffect, useMemo, useRef, useState, Suspense, Fragment } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { Scales, CaretLeft, CaretRight, Trash, Tag, CheckSquare, Square, Star, Crosshair, Table, GridFour, Rows, Funnel } from "@phosphor-icons/react/dist/ssr";
+import { Scales, CaretLeft, CaretRight, CaretDown, Trash, Tag, CheckSquare, Square, Star, Crosshair, Table, GridFour, Rows, Funnel } from "@phosphor-icons/react/dist/ssr";
 import { useSWRConfig } from "swr";
 import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
@@ -29,6 +29,7 @@ import {
 import CopyViewLinkButton from "@/components/CopyViewLinkButton";
 import BulkExportButtons from "@/components/BulkExportButtons";
 import RowExportMenu from "@/components/RowExportMenu";
+import { ShotPreviewRow } from "@/components/ShotPreviewDrawer";
 import { shotRowToExportInput, type ShotExportInput } from "@/lib/shot-export";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
@@ -109,7 +110,19 @@ function ShotsPageInner() {
   const [tagInput, setTagInput] = useState("");
   const [view, setView] = useState<ShotsViewMode>("table");
   const [gridDensity, setGridDensity] = useState<GridDensity>(GRID_DENSITY_DEFAULT);
+  // Per-row inline preview drawer (F84): the set of row ids currently expanded
+  // under the table. A row's detail is lazily fetched only while it's open.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const { mutate: globalMutate } = useSWRConfig();
+
+  function toggleExpanded(id: string) {
+    setExpanded((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   // Load the persisted view mode once on mount (SSR can't know it).
   useEffect(() => {
@@ -1094,7 +1107,8 @@ function ShotsPageInner() {
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id} data-picked={picked.includes(r.id)}>
+                  <Fragment key={r.id}>
+                  <tr data-picked={picked.includes(r.id)}>
                     <td>
                       <input
                         type="checkbox"
@@ -1127,12 +1141,32 @@ function ShotsPageInner() {
                       </button>
                     </td>
                     <td>
-                      <Link
-                        href={`/shots/${r.id}`}
-                        className="num text-[12px] hover:text-[color:var(--color-felt)]"
-                      >
-                        {shortId(r.id)}
-                      </Link>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => toggleExpanded(r.id)}
+                          aria-expanded={expanded.has(r.id)}
+                          aria-label={
+                            expanded.has(r.id)
+                              ? `Collapse preview of ${shortId(r.id)}`
+                              : `Preview ${shortId(r.id)} inline`
+                          }
+                          title={expanded.has(r.id) ? "Hide preview" : "Quick preview"}
+                          className="inline-flex items-center justify-center w-5 h-5 rounded-sm hover:bg-black/[0.06] text-[color:rgba(0,0,0,0.4)]"
+                        >
+                          {expanded.has(r.id) ? (
+                            <CaretDown size={13} weight="bold" />
+                          ) : (
+                            <CaretRight size={13} weight="bold" />
+                          )}
+                        </button>
+                        <Link
+                          href={`/shots/${r.id}`}
+                          className="num text-[12px] hover:text-[color:var(--color-felt)]"
+                        >
+                          {shortId(r.id)}
+                        </Link>
+                      </div>
                     </td>
                     <td>
                       <Chip cat={r.primary_category} />
@@ -1205,6 +1239,10 @@ function ShotsPageInner() {
                       />
                     </td>
                   </tr>
+                  {expanded.has(r.id) && (
+                    <ShotPreviewRow id={r.id} colSpan={11} />
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
