@@ -7,6 +7,7 @@ import {
   activeDeliveryChips,
   countActiveDeliveryFilters,
   deliveryFilterCountLabel,
+  deliveryStatusCounts,
   distinctDeliveryEvents,
   filterDeliveries,
   deliveryStatusLabel,
@@ -171,4 +172,52 @@ test("deliveryFilterCountLabel: defensive against bad / over-range input", () =>
   assert.equal(deliveryFilterCountLabel(2, Infinity), null);
   // fractional inputs truncate.
   assert.equal(deliveryFilterCountLabel(2.9, 9.4), "Filtering 2 of 9 deliveries");
+});
+
+test("deliveryStatusCounts: tallies into all three statuses, stable order", () => {
+  const counts = deliveryStatusCounts(SAMPLE);
+  assert.deepEqual(
+    counts.map((c) => c.status),
+    ["success", "failed", "pending"],
+  );
+  assert.deepEqual(
+    counts.map((c) => c.count),
+    [2, 1, 1],
+  );
+  // Labels come from the canonical map.
+  assert.deepEqual(
+    counts.map((c) => c.label),
+    ["Success", "Failed", "Pending"],
+  );
+});
+
+test("deliveryStatusCounts: absent statuses report zero, never omitted", () => {
+  const counts = deliveryStatusCounts([
+    { status: "success", event: "a" },
+    { status: "success", event: "b" },
+  ]);
+  assert.deepEqual(
+    counts.map((c) => c.count),
+    [2, 0, 0],
+  );
+  // Always exactly the three known statuses.
+  assert.equal(counts.length, DELIVERY_STATUSES.length);
+});
+
+test("deliveryStatusCounts: ignores unknown statuses + prototype keys", () => {
+  const counts = deliveryStatusCounts([
+    { status: "retrying", event: "a" },
+    { status: "toString", event: "b" }, // would corrupt a naive `in` tally
+    { status: " failed ", event: "c" }, // trimmed -> counts
+    { status: "failed", event: "d" },
+  ]);
+  const byStatus = Object.fromEntries(counts.map((c) => [c.status, c.count]));
+  assert.equal(byStatus.success, 0);
+  assert.equal(byStatus.failed, 2);
+  assert.equal(byStatus.pending, 0);
+});
+
+test("deliveryStatusCounts: empty / non-array input is all zeros", () => {
+  for (const c of deliveryStatusCounts([])) assert.equal(c.count, 0);
+  for (const c of deliveryStatusCounts(null as never)) assert.equal(c.count, 0);
 });

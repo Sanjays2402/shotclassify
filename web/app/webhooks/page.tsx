@@ -9,6 +9,7 @@ import {
   distinctDeliveryEvents,
   deliveryStatusLabel,
   deliveryFilterCountLabel,
+  deliveryStatusCounts,
   DELIVERY_STATUSES,
   type WebhookDeliveryFilterKey,
 } from "@/lib/webhook-delivery-chips";
@@ -67,6 +68,14 @@ function fmtDate(iso: string | null): string {
     second: "2-digit",
   });
 }
+
+// Swatch colours for the status legend (F101). Felt-green for success matches
+// the table's status column; red for failed; amber for in-flight pending.
+const STATUS_SWATCH: Record<string, string> = {
+  success: "var(--color-felt)",
+  failed: "#b00020",
+  pending: "#b45309",
+};
 
 export default function WebhooksPage() {
   const [hooks, setHooks] = useState<WebhookRow[] | null>(null);
@@ -270,6 +279,19 @@ export default function WebhooksPage() {
     () => distinctDeliveryEvents(deliveries),
     [deliveries],
   );
+
+  // Live per-status tallies for the legend swatch row (F101) -- always the
+  // three known statuses in a stable order, counts read off the full list.
+  const statusCounts = useMemo(
+    () => deliveryStatusCounts(deliveries),
+    [deliveries],
+  );
+
+  // Toggle a status swatch: clicking the active status clears the filter,
+  // clicking another sets it -- so the legend doubles as a one-click filter.
+  const toggleStatusFilter = useCallback((status: string) => {
+    setStatusFilter((cur) => (cur === status ? "all" : status));
+  }, []);
 
   // The delivery log narrowed by the active status + event filter (F92).
   const filteredDeliveries = useMemo(
@@ -652,6 +674,51 @@ export default function WebhooksPage() {
           onClear={clearDeliveryFilter}
           onClearAll={clearAllDeliveryFilters}
         />
+        {/* Status legend swatch row (F101) -- success / failed / pending with
+            LIVE counts so a glance reads the delivery health, and each swatch
+            is a one-click status filter (clicking the active one clears it).
+            Mirrors the felt-green / red / amber the status column already uses.
+            Only shown once there are deliveries to summarise. */}
+        {deliveries.length > 0 && (
+          <div
+            className="flex flex-wrap items-center gap-2 mb-2"
+            role="group"
+            aria-label="Filter deliveries by status"
+          >
+            {statusCounts.map(({ status, label, count }) => {
+              const active = statusFilter === status;
+              const color = STATUS_SWATCH[status] ?? "var(--color-ink)";
+              return (
+                <button
+                  key={status}
+                  type="button"
+                  onClick={() => toggleStatusFilter(status)}
+                  aria-pressed={active}
+                  title={
+                    active
+                      ? `Clear the ${label} filter`
+                      : `Show only ${label} deliveries`
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-sm border px-2 py-[3px] text-[11px] transition-colors hover:bg-black/[0.04]"
+                  style={{
+                    borderColor: active ? color : "var(--color-rule)",
+                    background: active ? `${color}14` : "transparent",
+                  }}
+                >
+                  <span
+                    className="inline-block w-2 h-2 rounded-full shrink-0"
+                    style={{ background: color }}
+                    aria-hidden
+                  />
+                  <span className="opacity-80">{label}</span>
+                  <span className="num font-medium" style={{ color }}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         {/* "Filtering N of M deliveries" line (F102) -- signals how much the
             active F92 filter hid, mirroring the shots filter-count pill (F91)
             and the notifications N-of-M line. Renders only when the view is

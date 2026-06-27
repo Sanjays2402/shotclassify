@@ -143,3 +143,40 @@ export function deliveryFilterCountLabel(
   if (s >= t) return null;
   return `Filtering ${s} of ${t} ${t === 1 ? "delivery" : "deliveries"}`;
 }
+
+// Per-status delivery counts for the status legend (F101). Above the
+// deliveries table we show a tiny success / failed / pending swatch row whose
+// counts read live off the data -- so a glance tells you "3 failed" without
+// scanning rows -- and clicking a swatch sets the F92 status filter. This
+// pure helper tallies the list into the three known statuses (always present,
+// zero when absent, in DELIVERY_STATUSES order) so the legend is stable and
+// never reorders as data arrives. Unknown statuses are ignored (they have no
+// swatch). Non-array input is safe.
+export type DeliveryStatusCount = {
+  status: DeliveryStatus;
+  label: string;
+  count: number;
+};
+
+export function deliveryStatusCounts(
+  deliveries: readonly DeliveryLike[],
+): DeliveryStatusCount[] {
+  const tally: Record<DeliveryStatus, number> = {
+    success: 0,
+    failed: 0,
+    pending: 0,
+  };
+  if (Array.isArray(deliveries)) {
+    for (const d of deliveries) {
+      const s = typeof d?.status === "string" ? d.status.trim() : "";
+      if (Object.prototype.hasOwnProperty.call(tally, s)) {
+        tally[s as DeliveryStatus] += 1;
+      }
+    }
+  }
+  return DELIVERY_STATUSES.map((status) => ({
+    status,
+    label: DELIVERY_STATUS_LABELS[status],
+    count: tally[status],
+  }));
+}
