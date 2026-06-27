@@ -44,6 +44,7 @@ import {
   hasFacets,
   facetsToHistoryParams,
   describeFacets,
+  stripFacets,
 } from "@/lib/palette-facets";
 import { readRecentShots, clearRecentShots, type RecentShot } from "@/lib/recent-shots";
 import { relativeTime } from "@/lib/relative-time";
@@ -397,6 +398,22 @@ export default function CommandPalette() {
                 matching &ldquo;{facets.text}&rdquo;
               </span>
             )}
+            {/* One-click facet reset (F104). Strips the structured tokens out
+                of the query (reusing the parser, so only what it recognised is
+                removed) and keeps the residual free text, then refocuses the
+                input so typing continues naturally. */}
+            <button
+              type="button"
+              onClick={() => {
+                setQ(stripFacets(q));
+                requestAnimationFrame(() => inputRef.current?.focus());
+              }}
+              className="ml-auto opacity-60 hover:opacity-100 underline underline-offset-2"
+              aria-label="Clear filters"
+              title="Clear the active filters"
+            >
+              Clear
+            </button>
           </div>
         )}
 

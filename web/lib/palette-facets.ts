@@ -181,3 +181,17 @@ export function describeFacets(f: PaletteFacets): string {
   if (f.tag) parts.push(`#${f.tag}`);
   return parts.join(" · ");
 }
+
+// Strip every structured facet token out of a palette query, keeping only the
+// residual free text (F104). When a `class:` / `>90%` / `tag:` facet is
+// active, the palette shows a "Filtering ..." pill; today the only way to drop
+// it is to backspace the token out of the input. This backs a one-click
+// "Clear" affordance on that pill: it reuses the parser (so it strips exactly
+// what parseFacets recognised -- never a free-text word that happens to look
+// facet-ish) and returns the leftover query. Empty when the query was nothing
+// but facets, so the caller can reset the input to "". Idempotent: a query
+// with no facets comes back trimmed but otherwise unchanged.
+export function stripFacets(query: string): string {
+  if (typeof query !== "string") return "";
+  return parseFacets(query).text;
+}

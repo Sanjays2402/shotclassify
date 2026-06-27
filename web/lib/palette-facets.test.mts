@@ -9,6 +9,7 @@ import {
   hasFacets,
   facetsToHistoryParams,
   describeFacets,
+  stripFacets,
 } from "./palette-facets.ts";
 
 test("resolveCategory: enum value, short label, and aliases all resolve", () => {
@@ -123,4 +124,36 @@ test("describeFacets: builds a readable summary, empty when none", () => {
   assert.match(s, /class receipt/);
   assert.match(s, />=90%/);
   assert.match(s, /#x/);
+});
+
+test("stripFacets: removes facet tokens, keeps residual free text", () => {
+  assert.equal(stripFacets("class:receipt >90% coffee shop"), "coffee shop");
+  assert.equal(stripFacets("tag:urgent ledger"), "ledger");
+  assert.equal(stripFacets("invoice <50% #draft total"), "invoice total");
+});
+
+test("stripFacets: pure-facet query strips to empty", () => {
+  assert.equal(stripFacets("class:receipt >90% tag:x"), "");
+  assert.equal(stripFacets("class:code"), "");
+});
+
+test("stripFacets: no-facet query is just trimmed, otherwise unchanged", () => {
+  assert.equal(stripFacets("just some words"), "just some words");
+  assert.equal(stripFacets("  spaced out  "), "spaced out");
+});
+
+test("stripFacets: idempotent (re-stripping a stripped query is stable)", () => {
+  const once = stripFacets("class:receipt >90% coffee shop");
+  assert.equal(stripFacets(once), once);
+});
+
+test("stripFacets: unresolved class: keeps the value as search text", () => {
+  // parseFacets drops the `class:` prefix on an unknown category and keeps the
+  // value -- stripFacets inherits that, so a typo'd facet isn't silently lost.
+  assert.equal(stripFacets("class:nonsense ledger"), "nonsense ledger");
+});
+
+test("stripFacets: non-string input is safe", () => {
+  assert.equal(stripFacets(null as never), "");
+  assert.equal(stripFacets(undefined as never), "");
 });
