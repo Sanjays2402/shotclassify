@@ -31,6 +31,9 @@ import {
   writeDetailRail,
   toggleSlot,
   isCollapsed,
+  allCollapsed,
+  collapseAll,
+  expandAll,
   type DetailRailState,
   type DetailRailSlot,
 } from "@/lib/detail-rail";
@@ -99,6 +102,15 @@ export default function ShotDetail({
       writeDetailRail(next);
       return next;
     });
+  };
+
+  // Fold or unfold every rail section at once (F82). Writes the full set so
+  // the choice persists like an individual toggle does. The header control
+  // decides which action to offer from the current state.
+  const setAllRail = (collapsed: boolean) => {
+    const next = collapsed ? collapseAll() : expandAll();
+    writeDetailRail(next);
+    setRail(next);
   };
   const { data, error, isLoading } = useSWR<Detail>(
     ENDPOINTS.historyItem(id),
@@ -321,6 +333,32 @@ export default function ShotDetail({
         </div>
 
         <div className="flex flex-col gap-5">
+          {/* Expand all / Collapse all for the whole rail (F82). Mounted-gated
+              so SSR and the first client render agree before persisted folds
+              load. Offers the action that does something: when everything is
+              folded it invites "Expand all", otherwise "Collapse all". */}
+          {mounted && (
+            <div className="flex items-center justify-end -mb-2">
+              <button
+                type="button"
+                onClick={() => setAllRail(!allCollapsed(rail))}
+                className="num text-[10px] uppercase tracking-wider opacity-55 hover:opacity-100 transition-opacity inline-flex items-center gap-1"
+                aria-label={
+                  allCollapsed(rail)
+                    ? "Expand all rail sections"
+                    : "Collapse all rail sections"
+                }
+                title={
+                  allCollapsed(rail)
+                    ? "Unfold every section"
+                    : "Fold every section"
+                }
+              >
+                {allCollapsed(rail) ? "Expand all" : "Collapse all"}
+              </button>
+            </div>
+          )}
+
           <CollapsibleSection
             title="OCR transcript"
             collapsed={mounted && isCollapsed(rail, "ocr")}

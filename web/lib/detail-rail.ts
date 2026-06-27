@@ -78,6 +78,34 @@ export function toggleSlot(
   return next;
 }
 
+// --- Expand all / Collapse all (F82) -------------------------------------
+// A header affordance on the rail folds or unfolds every section at once.
+// These pure helpers back it: collapseAll() returns the full set, expandAll()
+// returns the empty set, and allCollapsed() / allExpanded() let the control
+// pick which action to offer (and disable the no-op one).
+
+// True when EVERY known slot is collapsed -- the "Expand all" state.
+export function allCollapsed(state: DetailRailState): boolean {
+  return DETAIL_RAIL_SLOTS.every((slot) => state.has(slot));
+}
+
+// True when nothing is collapsed -- the friendly default / "Collapse all"
+// state. Cheap convenience so the control can disable a no-op button.
+export function allExpanded(state: DetailRailState): boolean {
+  return state.size === 0;
+}
+
+// A fresh state with every known slot collapsed. New Set so React sees a
+// changed reference.
+export function collapseAll(): DetailRailState {
+  return new Set(DETAIL_RAIL_SLOTS);
+}
+
+// A fresh state with nothing collapsed (everything expanded).
+export function expandAll(): DetailRailState {
+  return new Set();
+}
+
 // --- Browser wrappers (no-throw) -----------------------------------------
 
 // Read the persisted collapse state. Returns an empty set (all expanded) on

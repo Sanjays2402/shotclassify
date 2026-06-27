@@ -7,6 +7,10 @@ import {
   serializeDetailRail,
   isCollapsed,
   toggleSlot,
+  allCollapsed,
+  allExpanded,
+  collapseAll,
+  expandAll,
   readDetailRail,
   writeDetailRail,
   DETAIL_RAIL_SLOTS,
@@ -91,6 +95,43 @@ test("toggleSlot: an unknown slot is ignored (copy unchanged)", () => {
   const a = new Set<DetailRailSlot>(["ocr"]);
   const b = toggleSlot(a, "bogus" as never);
   assert.deepEqual([...b], ["ocr"]);
+});
+
+// --- F82: expand all / collapse all --------------------------------------
+
+test("collapseAll: returns every known slot", () => {
+  const s = collapseAll();
+  assert.equal(s.size, DETAIL_RAIL_SLOTS.length);
+  for (const slot of DETAIL_RAIL_SLOTS) assert.ok(s.has(slot));
+});
+
+test("expandAll: returns the empty (all-expanded) set", () => {
+  assert.equal(expandAll().size, 0);
+});
+
+test("allCollapsed: true only when every slot is folded", () => {
+  assert.equal(allCollapsed(collapseAll()), true);
+  assert.equal(allCollapsed(new Set()), false);
+  // A partial fold isn't "all collapsed".
+  assert.equal(allCollapsed(new Set<DetailRailSlot>(["ocr", "frame"])), false);
+});
+
+test("allExpanded: true only for the empty set", () => {
+  assert.equal(allExpanded(expandAll()), true);
+  assert.equal(allExpanded(new Set<DetailRailSlot>(["ocr"])), false);
+  assert.equal(allExpanded(collapseAll()), false);
+});
+
+test("collapseAll round-trips through serialize/parse as the full set", () => {
+  const round = parseDetailRail(serializeDetailRail(collapseAll()));
+  assert.ok(allCollapsed(round));
+});
+
+test("collapseAll / expandAll return fresh sets (new references)", () => {
+  // The page swaps state by reference, so the helpers must not alias a shared
+  // singleton -- two calls must be distinct objects.
+  assert.notEqual(collapseAll(), collapseAll());
+  assert.notEqual(expandAll(), expandAll());
 });
 
 test("readDetailRail: SSR (no window) returns an empty set", () => {
