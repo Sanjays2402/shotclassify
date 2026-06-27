@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fuzzyScore, rankNav, digitJumpIndex, paletteRestingHint, PALETTE_RESTING_HINT, shotsScopeHints, shortLabelForHint, recentCountLabel, RECENT_BADGE_ROUTE } from "./command-palette";
+import { fuzzyScore, rankNav, digitJumpIndex, paletteRestingHint, PALETTE_RESTING_HINT, shotsScopeHints, shortLabelForHint, recentCountLabel, RECENT_BADGE_ROUTE, inboxCountLabel, INBOX_BADGE_ROUTE } from "./command-palette";
 
 test("fuzzyScore: empty query yields neutral score", () => {
   assert.equal(fuzzyScore("", "Shots", "Browse history"), 1);
@@ -193,4 +193,31 @@ test("recentCountLabel: null for an empty / invalid count", () => {
   assert.equal(recentCountLabel("/shots", -1), null);
   assert.equal(recentCountLabel("/shots", NaN), null);
   assert.equal(recentCountLabel("/shots", Infinity), null);
+});
+
+// --- F95: unread count badge on the Inbox nav row ------------------------
+
+test("inboxCountLabel: shows 'N unread' only on the Inbox row", () => {
+  assert.equal(inboxCountLabel("/notifications", 3), "3 unread");
+  assert.equal(inboxCountLabel("/notifications", 1), "1 unread");
+  assert.equal(INBOX_BADGE_ROUTE, "/notifications");
+});
+
+test("inboxCountLabel: null for any other route", () => {
+  assert.equal(inboxCountLabel("/shots", 5), null);
+  assert.equal(inboxCountLabel("/", 9), null);
+  assert.equal(inboxCountLabel("/usage", 2), null);
+});
+
+test("inboxCountLabel: null for an empty / invalid count", () => {
+  assert.equal(inboxCountLabel("/notifications", 0), null);
+  assert.equal(inboxCountLabel("/notifications", -2), null);
+  assert.equal(inboxCountLabel("/notifications", NaN), null);
+  assert.equal(inboxCountLabel("/notifications", Infinity), null);
+});
+
+test("inboxCountLabel: caps a large count at 99+ (matches the bell badge)", () => {
+  assert.equal(inboxCountLabel("/notifications", 99), "99 unread");
+  assert.equal(inboxCountLabel("/notifications", 100), "99+ unread");
+  assert.equal(inboxCountLabel("/notifications", 5000), "99+ unread");
 });

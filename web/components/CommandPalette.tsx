@@ -36,7 +36,7 @@ import {
   Snowflake,
 } from "@phosphor-icons/react";
 
-import { fuzzyScore as _fuzzy, rankNav, digitJumpIndex, paletteRestingHint, shotsScopeHints, shortLabelForHint, recentCountLabel } from "@/lib/command-palette";
+import { fuzzyScore as _fuzzy, rankNav, digitJumpIndex, paletteRestingHint, shotsScopeHints, shortLabelForHint, recentCountLabel, inboxCountLabel } from "@/lib/command-palette";
 import { chordKeysForRoute } from "@/lib/goto-chords";
 import { SHORTCUTS } from "@/lib/shortcuts";
 import {
@@ -122,6 +122,9 @@ export default function CommandPalette() {
   // when the palette opens so every row measures against the same now and the
   // labels don't drift mid-session.
   const [recentsNow, setRecentsNow] = useState(0);
+  // Unread notification count for the Inbox nav-row badge (F95). Fetched fresh
+  // each time the palette opens so it reflects activity since the last open.
+  const [unread, setUnread] = useState(0);
   const [loading, setLoading] = useState(false);
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -174,6 +177,31 @@ export default function CommandPalette() {
       // focus the input after paint
       requestAnimationFrame(() => inputRef.current?.focus());
     }
+  }, [open]);
+
+  // Pull the unread notification count when the palette opens, for the Inbox
+  // row badge (F95). Best-effort: a failed / unauthenticated fetch silently
+  // leaves the badge hidden (count stays 0). Cancelled if the palette closes
+  // before the response lands.
+  useEffect(() => {
+    if (!open) return;
+    let cancel = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/notifications?limit=1", {
+          credentials: "same-origin",
+        });
+        if (!r.ok) return;
+        const j = await r.json();
+        const n = Number(j?.unread);
+        if (!cancel) setUnread(Number.isFinite(n) ? n : 0);
+      } catch {
+        /* leave the badge hidden on any error */
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
   }, [open]);
 
   // Parse inline facets (`class:receipt`, `>90%`, `tag:foo`) out of the
@@ -415,6 +443,25 @@ export default function CommandPalette() {
                               border: "1px solid var(--color-rule, #e5e7eb)",
                             }}
                             title={`${recents.length} recently-viewed shot${recents.length === 1 ? "" : "s"}`}
+                          >
+                            {badge}
+                          </span>
+                        ) : null;
+                      })()}
+                      {/* Faint "N unread" badge on the Inbox row (F95), mirroring
+                          the Shots recents badge, so pending notifications are
+                          visible straight from the palette. Felt-green to read
+                          as an active signal, not just a count. */}
+                      {(() => {
+                        const badge = inboxCountLabel(n.href, unread);
+                        return badge ? (
+                          <span
+                            className="num ml-2 text-[10px] px-1.5 py-0.5 rounded-sm align-middle"
+                            style={{
+                              background: "var(--color-felt, #1f4d2b)",
+                              color: "var(--color-chalk, #fff)",
+                            }}
+                            title={`${unread} unread notification${unread === 1 ? "" : "s"}`}
                           >
                             {badge}
                           </span>

@@ -149,3 +149,22 @@ export function recentCountLabel(
   if (!Number.isFinite(recentCount) || recentCount <= 0) return null;
   return `${recentCount} recent`;
 }
+
+// Unread-count badge for the palette's Inbox nav row (F95). Mirrors F83's
+// "N recent" Shots badge: surface a faint "N unread" pill on the Inbox row so
+// pending activity is visible straight from the palette, before the user
+// navigates. Pure: returns the label for the inbox route when the count is a
+// positive finite number, null everywhere else (other rows, zero/invalid
+// count) so the component renders nothing. A count over 99 caps at "99+" to
+// match the notification bell's badge cap.
+export const INBOX_BADGE_ROUTE = "/notifications";
+
+export function inboxCountLabel(
+  href: string,
+  unreadCount: number,
+): string | null {
+  if (href !== INBOX_BADGE_ROUTE) return null;
+  if (!Number.isFinite(unreadCount) || unreadCount <= 0) return null;
+  const shown = unreadCount > 99 ? "99+" : String(unreadCount);
+  return `${shown} unread`;
+}
