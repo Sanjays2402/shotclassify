@@ -3,6 +3,14 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Skeleton } from "@/components/Skeleton";
+import { WebhookDeliveryBreadcrumb } from "@/components/WebhookDeliveryBreadcrumb";
+import {
+  filterDeliveries,
+  distinctDeliveryEvents,
+  deliveryStatusLabel,
+  DELIVERY_STATUSES,
+  type WebhookDeliveryFilterKey,
+} from "@/lib/webhook-delivery-chips";
 import {
   Broadcast as Webhooks,
   Plus,
@@ -76,6 +84,10 @@ export default function WebhooksPage() {
   const [allowDraft, setAllowDraft] = useState("");
   const [allowBusy, setAllowBusy] = useState(false);
   const [allowMsg, setAllowMsg] = useState<string | null>(null);
+  // Recent-deliveries filter (F92): triage the delivery log by status
+  // (success / failed / pending) and event name. "all" means no constraint.
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [eventFilter, setEventFilter] = useState("all");
 
   const load = useCallback(async () => {
     try {
@@ -250,6 +262,39 @@ export default function WebhooksPage() {
     const failed = last24h.filter((d) => d.status === "failed").length;
     return { total, active, last24h: last24h.length, failed };
   }, [hooks, deliveries]);
+
+  // Distinct event names actually present, for the event <select> (F92) --
+  // built from the data so a newly-subscribed event shows up automatically.
+  const eventOptions = useMemo(
+    () => distinctDeliveryEvents(deliveries),
+    [deliveries],
+  );
+
+  // The delivery log narrowed by the active status + event filter (F92).
+  const filteredDeliveries = useMemo(
+    () =>
+      filterDeliveries(deliveries, {
+        status: statusFilter,
+        event: eventFilter,
+      }),
+    [deliveries, statusFilter, eventFilter],
+  );
+
+  const deliveryFilterState = useMemo(
+    () => ({ status: statusFilter, event: eventFilter }),
+    [statusFilter, eventFilter],
+  );
+
+  // Clear a single delivery filter from a breadcrumb pill.
+  const clearDeliveryFilter = useCallback((key: WebhookDeliveryFilterKey) => {
+    if (key === "status") setStatusFilter("all");
+    else if (key === "event") setEventFilter("all");
+  }, []);
+
+  const clearAllDeliveryFilters = useCallback(() => {
+    setStatusFilter("all");
+    setEventFilter("all");
+  }, []);
 
   return (
     <div className="space-y-8">
@@ -559,10 +604,68 @@ export default function WebhooksPage() {
       </section>
 
       <section>
-        <h2 className="h-display text-base mb-3">Recent deliveries</h2>
+        <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
+          <h2 className="h-display text-base">Recent deliveries</h2>
+          {deliveries.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="inline-flex items-center gap-1.5 text-[12px]">
+                <span className="eyebrow opacity-70">Status</span>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  aria-label="Filter deliveries by status"
+                  className="rounded border px-2 py-1 text-[12px] bg-white"
+                  style={{ borderColor: "var(--color-rule)" }}
+                >
+                  <option value="all">All</option>
+                  {DELIVERY_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {deliveryStatusLabel(s)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="inline-flex items-center gap-1.5 text-[12px]">
+                <span className="eyebrow opacity-70">Event</span>
+                <select
+                  value={eventFilter}
+                  onChange={(e) => setEventFilter(e.target.value)}
+                  aria-label="Filter deliveries by event"
+                  className="rounded border px-2 py-1 text-[12px] font-mono bg-white"
+                  style={{ borderColor: "var(--color-rule)" }}
+                  disabled={eventOptions.length === 0}
+                >
+                  <option value="all">All</option>
+                  {eventOptions.map((ev) => (
+                    <option key={ev} value={ev}>
+                      {ev}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+        </div>
+        <WebhookDeliveryBreadcrumb
+          filters={deliveryFilterState}
+          onClear={clearDeliveryFilter}
+          onClearAll={clearAllDeliveryFilters}
+        />
         {deliveries.length === 0 ? (
           <p className="text-sm opacity-60">
             No deliveries yet. Send a test event or run a classification.
+          </p>
+        ) : filteredDeliveries.length === 0 ? (
+          <p className="text-sm opacity-60">
+            No deliveries match the current filter.{" "}
+            <button
+              type="button"
+              className="underline opacity-80 hover:opacity-100"
+              onClick={clearAllDeliveryFilters}
+            >
+              Clear the filter
+            </button>{" "}
+            to see all {deliveries.length}.
           </p>
         ) : (
           <div
@@ -582,7 +685,7 @@ export default function WebhooksPage() {
                 </tr>
               </thead>
               <tbody>
-                {deliveries.map((d) => (
+                {filteredDeliveries.map((d) => (
                   <tr
                     key={d.id}
                     className="border-t"
