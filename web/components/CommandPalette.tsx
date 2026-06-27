@@ -36,7 +36,7 @@ import {
   Snowflake,
 } from "@phosphor-icons/react";
 
-import { fuzzyScore as _fuzzy, rankNav, digitJumpIndex, paletteRestingHint, shotsScopeHints, shortLabelForHint } from "@/lib/command-palette";
+import { fuzzyScore as _fuzzy, rankNav, digitJumpIndex, paletteRestingHint, shotsScopeHints, shortLabelForHint, recentCountLabel } from "@/lib/command-palette";
 import { chordKeysForRoute } from "@/lib/goto-chords";
 import { SHORTCUTS } from "@/lib/shortcuts";
 import {
@@ -401,6 +401,25 @@ export default function CommandPalette() {
                     <span className="flex-1 truncate">
                       <span className="font-medium">{n.label}</span>
                       <span className="opacity-60 ml-2 text-[12px]">{n.hint}</span>
+                      {/* Faint "N recent" badge on the Shots row (F83) so the
+                          user knows the recently-viewed trail has entries
+                          before they scroll down to the (query-empty-only)
+                          Recently viewed section. */}
+                      {(() => {
+                        const badge = recentCountLabel(n.href, recents.length);
+                        return badge ? (
+                          <span
+                            className="num ml-2 text-[10px] px-1.5 py-0.5 rounded-sm align-middle opacity-70"
+                            style={{
+                              background: "var(--color-chalk-2, #f3f3ee)",
+                              border: "1px solid var(--color-rule, #e5e7eb)",
+                            }}
+                            title={`${recents.length} recently-viewed shot${recents.length === 1 ? "" : "s"}`}
+                          >
+                            {badge}
+                          </span>
+                        ) : null;
+                      })()}
                     </span>
                     {(() => {
                       // Surface the Linear-style `g <x>` section chord for any

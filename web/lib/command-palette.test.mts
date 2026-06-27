@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fuzzyScore, rankNav, digitJumpIndex, paletteRestingHint, PALETTE_RESTING_HINT, shotsScopeHints, shortLabelForHint } from "./command-palette";
+import { fuzzyScore, rankNav, digitJumpIndex, paletteRestingHint, PALETTE_RESTING_HINT, shotsScopeHints, shortLabelForHint, recentCountLabel, RECENT_BADGE_ROUTE } from "./command-palette";
 
 test("fuzzyScore: empty query yields neutral score", () => {
   assert.equal(fuzzyScore("", "Shots", "Browse history"), 1);
@@ -171,4 +171,26 @@ test("shortLabelForHint: falls back to the trimmed label when nothing to strip",
   assert.equal(shortLabelForHint("Pin shot"), "Pin shot");
   assert.equal(shortLabelForHint("  Spaced  "), "Spaced");
   assert.equal(shortLabelForHint(undefined as never), "");
+});
+
+// --- F83: recently-viewed count badge on the Shots nav row ---------------
+
+test("recentCountLabel: shows 'N recent' only on the Shots row", () => {
+  assert.equal(recentCountLabel("/shots", 4), "4 recent");
+  assert.equal(recentCountLabel("/shots", 1), "1 recent");
+  // The badge route constant is the shots page.
+  assert.equal(RECENT_BADGE_ROUTE, "/shots");
+});
+
+test("recentCountLabel: null for any other route", () => {
+  assert.equal(recentCountLabel("/stats", 4), null);
+  assert.equal(recentCountLabel("/", 9), null);
+  assert.equal(recentCountLabel("/upload", 2), null);
+});
+
+test("recentCountLabel: null for an empty / invalid count", () => {
+  assert.equal(recentCountLabel("/shots", 0), null);
+  assert.equal(recentCountLabel("/shots", -1), null);
+  assert.equal(recentCountLabel("/shots", NaN), null);
+  assert.equal(recentCountLabel("/shots", Infinity), null);
 });

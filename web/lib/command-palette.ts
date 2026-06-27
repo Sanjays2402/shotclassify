@@ -130,3 +130,22 @@ export function shortLabelForHint(label: string): string {
   if (/^cycle\s+/i.test(s)) s = s.replace(/^cycle\s+/i, "");
   return s.trim();
 }
+
+// Recently-viewed count badge for the palette's Shots nav row (F83). The
+// "Recently viewed" section only appears below the nav once the ring has
+// entries AND the query is empty -- so on a freshly-opened palette a user
+// can't tell their last few shots are one keystroke away. Tag the Shots nav
+// row with a faint "N recent" badge so the trail is discoverable before they
+// scroll. Pure: returns the label for the shots route when the ring is
+// non-empty, null everywhere else (other rows, empty / invalid count) so the
+// component renders nothing.
+export const RECENT_BADGE_ROUTE = "/shots";
+
+export function recentCountLabel(
+  href: string,
+  recentCount: number,
+): string | null {
+  if (href !== RECENT_BADGE_ROUTE) return null;
+  if (!Number.isFinite(recentCount) || recentCount <= 0) return null;
+  return `${recentCount} recent`;
+}
