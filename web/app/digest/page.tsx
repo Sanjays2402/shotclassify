@@ -13,6 +13,7 @@ import {
 } from "@phosphor-icons/react/dist/ssr";
 
 import { fetcher } from "@/lib/api";
+import { EmptyState } from "@/components/EmptyState";
 
 type CategoryCount = {
   category: string;
@@ -171,25 +172,18 @@ export default function DigestPage() {
       )}
 
       {summary && !isLoading && summary.empty && (
-        <div className="panel p-8 text-center">
-          <div
-            className="mx-auto w-12 h-12 rounded-full flex items-center justify-center mb-3"
-            style={{ background: "var(--color-chalk)", border: "1px solid var(--color-rule)" }}
-          >
-            <Sparkle size={22} weight="duotone" />
-          </div>
-          <h2 className="h-display text-[20px] mb-1">Nothing to recap yet</h2>
-          <p className="text-[13px] opacity-70 mb-4">
-            Run a classification and your activity will show up here.
-          </p>
-          <Link
-            href="/demo"
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-[13px]"
-            style={{ background: "var(--color-felt)", color: "var(--color-chalk)" }}
-          >
-            <PaperPlaneTilt size={16} weight="duotone" /> Try the demo
-          </Link>
-        </div>
+        <EmptyState
+          icon={<Sparkle size={22} weight="duotone" />}
+          eyebrow="Box score"
+          title="Nothing to recap yet"
+          body="Run a classification and your activity will show up here."
+          primary={{
+            label: "Try the demo",
+            href: "/demo",
+            kind: "cue",
+          }}
+          data-testid="digest-empty"
+        />
       )}
 
       {summary && !isLoading && !summary.empty && (

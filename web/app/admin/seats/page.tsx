@@ -21,6 +21,7 @@ import {
   Clock,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
+import { EmptyState } from "@/components/EmptyState";
 
 type SeatRow = {
   principal: string;
@@ -294,13 +295,19 @@ export default function SeatsUsagePage() {
           </div>
         </header>
         {empty ? (
-          <div className="p-8 text-center text-sm text-neutral-500 dark:text-neutral-400">
-            No members in this workspace yet. Invite teammates from{" "}
-            <Link href="/settings/members" className="underline">
-              Members
-            </Link>
-            .
-          </div>
+          <EmptyState
+            variant="bare"
+            icon={<Users size={22} weight="duotone" />}
+            eyebrow="No seats"
+            title="No members yet"
+            body="No members in this workspace yet. Invite teammates to start tracking per-seat usage."
+            primary={{
+              label: "Invite teammates",
+              href: "/settings/members",
+              kind: "cue",
+            }}
+            data-testid="seats-empty"
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
