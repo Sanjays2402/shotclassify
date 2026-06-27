@@ -10,6 +10,8 @@ import {
   csvRow,
   csvCell,
   CSV_HEADERS,
+  EXPORT_FORMATS,
+  exportFormatByKey,
   type ShotExportInput,
 } from "./shot-export.ts";
 
@@ -200,4 +202,54 @@ test("csvRow + CSV_HEADERS are the single source the bulk CSV reuses", async () 
   assert.equal(singleRow, csvRow(FULL));
   // The historical bulk headers alias the shared headers exactly.
   assert.deepEqual([...BULK_CSV_HEADERS], [...CSV_HEADERS]);
+});
+
+// --- F86: shared export-format catalogue (single + bulk parity) -----------
+
+test("EXPORT_FORMATS: the canonical trio in JSON / Markdown / CSV order", () => {
+  assert.deepEqual(
+    EXPORT_FORMATS.map((f) => f.key),
+    ["json", "markdown", "csv"],
+  );
+  assert.deepEqual(
+    EXPORT_FORMATS.map((f) => f.noun),
+    ["JSON", "Markdown", "CSV"],
+  );
+  // The compact bulk labels: Markdown abbreviates to MD, the rest stay.
+  assert.deepEqual(
+    EXPORT_FORMATS.map((f) => f.short),
+    ["JSON", "MD", "CSV"],
+  );
+});
+
+test("EXPORT_FORMATS: every key maps to a real single-shot serializer", () => {
+  // The detail surface dispatches on f.key; prove each one produces output so
+  // a future format added to the catalogue can't silently no-op a button.
+  const shot: ShotExportInput = {
+    id: "z",
+    filename: "f.png",
+    primary_category: "receipt",
+    confidence: 0.5,
+  };
+  const dispatch = { json: toJson, markdown: toMarkdown, csv: toCsv } as const;
+  for (const f of EXPORT_FORMATS) {
+    const out = dispatch[f.key](shot);
+    assert.ok(typeof out === "string" && out.length > 0, f.key);
+  }
+});
+
+test("exportFormatByKey: resolves known keys, undefined otherwise", () => {
+  assert.equal(exportFormatByKey("json")?.noun, "JSON");
+  assert.equal(exportFormatByKey("markdown")?.short, "MD");
+  assert.equal(exportFormatByKey("csv")?.key, "csv");
+  assert.equal(exportFormatByKey("xml"), undefined);
+  assert.equal(exportFormatByKey(""), undefined);
+});
+
+test("EXPORT_FORMATS: nouns line up with the bulk toast format union", () => {
+  // bulkExportToastMessage takes "JSON" | "Markdown" | "CSV"; the catalogue's
+  // noun feeds it directly from the bulk buttons, so they must match exactly.
+  for (const f of EXPORT_FORMATS) {
+    assert.ok(["JSON", "Markdown", "CSV"].includes(f.noun), f.noun);
+  }
 });

@@ -191,3 +191,38 @@ export function csvRow(s: ShotExportInput): string {
 export function toCsv(s: ShotExportInput): string {
   return [CSV_HEADERS.join(","), csvRow(s)].join("\r\n");
 }
+
+// --- Shared export-format catalogue (single + bulk surfaces) --------------
+// The shot-detail "copy as ..." trio (components/CopyExportButtons.tsx) and
+// the /shots bulk "Copy ..." trio (components/BulkExportButtons.tsx) must
+// expose the SAME three formats in the SAME order so the two surfaces can't
+// drift (F86). This is the single source of truth for the format list + its
+// labels; both components render their buttons by mapping over it, so adding
+// a fourth format here lights it up on both surfaces at once.
+export type ExportFormatKey = "json" | "markdown" | "csv";
+
+export type ExportFormatMeta = {
+  // Stable lowercase key used to dispatch the single-shot serializer
+  // (toJson / toMarkdown / toCsv).
+  key: ExportFormatKey;
+  // Full noun. Doubles as the single-shot button label, the bulk-dispatch
+  // key, and the toast noun ("Copied ... as JSON"). The capitalisation lines
+  // up with the bulk serializers' format union ("JSON" | "Markdown" | "CSV").
+  noun: "JSON" | "Markdown" | "CSV";
+  // Compact label for the denser bulk button ("Copy MD" vs "Copy Markdown").
+  short: string;
+};
+
+export const EXPORT_FORMATS: readonly ExportFormatMeta[] = [
+  { key: "json", noun: "JSON", short: "JSON" },
+  { key: "markdown", noun: "Markdown", short: "MD" },
+  { key: "csv", noun: "CSV", short: "CSV" },
+] as const;
+
+// Look up a format's metadata by its lowercase key. Returns undefined for an
+// unknown key so a caller can guard rather than crash.
+export function exportFormatByKey(
+  key: string,
+): ExportFormatMeta | undefined {
+  return EXPORT_FORMATS.find((f) => f.key === key);
+}

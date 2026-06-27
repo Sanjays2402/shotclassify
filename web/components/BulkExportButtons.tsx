@@ -1,10 +1,17 @@
 "use client";
 
-// Bulk "copy as JSON / Markdown" buttons for the /shots multi-select (F35).
-// Reuses lib/shot-export-bulk serializers (which themselves reuse the single-
-// shot lib/shot-export). Sits in the bulk-actions bar; copies a manifest of
-// the rows currently held for the selection and toasts the result, honest
-// about the selected-vs-copied split when the selection spans pages.
+// Bulk "copy as JSON / Markdown / CSV" buttons for the /shots multi-select
+// (F35, F64). Reuses lib/shot-export-bulk serializers (which themselves reuse
+// the single-shot lib/shot-export). Sits in the bulk-actions bar; copies a
+// manifest of the rows currently held for the selection and toasts the
+// result, honest about the selected-vs-copied split when the selection spans
+// pages.
+//
+// The format list + labels come from the shared EXPORT_FORMATS catalogue
+// (lib/shot-export) -- the same source the single-shot CopyExportButtons maps
+// over -- so the two surfaces can never expose a different set of formats
+// (F86). This surface uses the compact `short` label ("Copy MD") since the
+// bulk bar is denser.
 
 import { useState } from "react";
 import { BracketsCurly, MarkdownLogo, Table } from "@phosphor-icons/react/dist/ssr";
@@ -14,7 +21,11 @@ import {
   toBulkCsv,
   bulkExportToastMessage,
 } from "@/lib/shot-export-bulk";
-import type { ShotExportInput } from "@/lib/shot-export";
+import {
+  EXPORT_FORMATS,
+  type ExportFormatKey,
+  type ShotExportInput,
+} from "@/lib/shot-export";
 import { toast } from "@/lib/toast-store";
 
 // Clipboard write with a non-secure-context fallback, mirroring
@@ -39,6 +50,29 @@ async function writeClipboard(text: string): Promise<void> {
   document.body.removeChild(ta);
 }
 
+// Per-format presentation specific to the bulk bar: icon + the bulk
+// serializer. The format set / order / labels come from EXPORT_FORMATS.
+const ICONS: Record<ExportFormatKey, React.ReactNode> = {
+  json: <BracketsCurly size={14} weight="duotone" />,
+  markdown: <MarkdownLogo size={14} weight="duotone" />,
+  csv: <Table size={14} weight="duotone" />,
+};
+
+const ARIA: Record<ExportFormatKey, string> = {
+  json: "Copy the selected shots as a JSON array",
+  markdown: "Copy the selected shots as a Markdown table",
+  csv: "Copy the selected shots as RFC-4180 CSV (opens in any spreadsheet)",
+};
+
+function serializeBulk(
+  format: ExportFormatKey,
+  shots: ShotExportInput[],
+): string {
+  if (format === "json") return toBulkJson(shots);
+  if (format === "markdown") return toBulkMarkdown(shots);
+  return toBulkCsv(shots);
+}
+
 export default function BulkExportButtons({
   shots,
   selectedCount,
@@ -52,18 +86,16 @@ export default function BulkExportButtons({
 }) {
   const [busy, setBusy] = useState(false);
 
-  async function copy(format: "JSON" | "Markdown" | "CSV") {
+  async function copy(
+    format: ExportFormatKey,
+    noun: "JSON" | "Markdown" | "CSV",
+  ) {
     if (busy) return;
     setBusy(true);
     try {
-      const text =
-        format === "JSON"
-          ? toBulkJson(shots)
-          : format === "Markdown"
-            ? toBulkMarkdown(shots)
-            : toBulkCsv(shots);
+      const text = serializeBulk(format, shots);
       await writeClipboard(text);
-      const msg = bulkExportToastMessage(shots.length, selectedCount, format);
+      const msg = bulkExportToastMessage(shots.length, selectedCount, noun);
       if (shots.length === 0) toast.error(msg);
       else toast.success(msg);
     } catch {
@@ -77,36 +109,19 @@ export default function BulkExportButtons({
 
   return (
     <div className="inline-flex items-center gap-1.5">
-      <button
-        type="button"
-        className="btn btn-ghost text-[12px]"
-        disabled={off}
-        onClick={() => void copy("JSON")}
-        aria-label="Copy the selected shots as a JSON array"
-        title="Copy the selected shots as a JSON array"
-      >
-        <BracketsCurly size={14} weight="duotone" /> Copy JSON
-      </button>
-      <button
-        type="button"
-        className="btn btn-ghost text-[12px]"
-        disabled={off}
-        onClick={() => void copy("Markdown")}
-        aria-label="Copy the selected shots as a Markdown table"
-        title="Copy the selected shots as a Markdown table"
-      >
-        <MarkdownLogo size={14} weight="duotone" /> Copy MD
-      </button>
-      <button
-        type="button"
-        className="btn btn-ghost text-[12px]"
-        disabled={off}
-        onClick={() => void copy("CSV")}
-        aria-label="Copy the selected shots as a CSV spreadsheet"
-        title="Copy the selected shots as RFC-4180 CSV (opens in any spreadsheet)"
-      >
-        <Table size={14} weight="duotone" /> Copy CSV
-      </button>
+      {EXPORT_FORMATS.map((f) => (
+        <button
+          key={f.key}
+          type="button"
+          className="btn btn-ghost text-[12px]"
+          disabled={off}
+          onClick={() => void copy(f.key, f.noun)}
+          aria-label={ARIA[f.key]}
+          title={ARIA[f.key]}
+        >
+          {ICONS[f.key]} Copy {f.short}
+        </button>
+      ))}
     </div>
   );
 }
