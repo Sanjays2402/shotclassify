@@ -100,6 +100,47 @@ export function deliveryFilterUrl(
   return qs ? `${base}?${qs}` : base;
 }
 
+// --- Shareable link (F113) -----------------------------------------------
+// The "Copy link" button on the deliveries view serialises the CURRENT filter
+// into an absolute URL a teammate can open to land on the same triage view.
+// Mirrors lib/shots-deeplink's buildShotsDeepLink: pass an absolute origin as
+// `base` (e.g. `${location.origin}/webhooks`) to get a shareable URL; the bare
+// base comes back when no filter is active (the caller disables the button in
+// that case, so the link is never just the plain page).
+export function buildDeliveryDeepLink(
+  f: WebhookDeliveryFilterState,
+  base = "/webhooks",
+): string {
+  const qs = buildDeliveryFilterQuery(f);
+  return qs ? `${base}?${qs}` : base;
+}
+
+// Title-cased status word for the toast. Reuses the param validator so the
+// toast and the URL can never disagree on what counts as a status.
+function statusPhrase(f: WebhookDeliveryFilterState): string | null {
+  const s = statusConstraint(f.status);
+  if (!s) return null;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// The toast line for a successful copy. Names the active constraints so the
+// user trusts the link carries their filter ("Copied a link to Failed
+// classify.completed deliveries."), else a generic confirmation. Pure; reuses
+// the same constraint rules as the query builder so prose + URL stay in sync.
+export function deliveryLinkToastMessage(
+  f: WebhookDeliveryFilterState,
+): string {
+  const parts: string[] = [];
+  const status = statusPhrase(f);
+  if (status) parts.push(status);
+  const event = eventConstraint(f.event);
+  if (event) parts.push(event);
+  if (parts.length === 0) {
+    return "Copied a link to this deliveries view.";
+  }
+  return `Copied a link to ${parts.join(" ")} deliveries.`;
+}
+
 // --- Browser wrappers (no-throw) -----------------------------------------
 
 // Read the persisted filter from the live URL. Returns the all/all default on

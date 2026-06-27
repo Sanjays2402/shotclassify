@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/Skeleton";
 import { EmptyState as FilterEmptyState } from "@/components/EmptyState";
 import { emptyCopyForList } from "@/lib/empty-state";
 import { WebhookDeliveryBreadcrumb } from "@/components/WebhookDeliveryBreadcrumb";
+import CopyDeliveryLinkButton from "@/components/CopyDeliveryLinkButton";
 import {
   readDeliveryFilterFromUrl,
   writeDeliveryFilterToUrl,
@@ -716,6 +717,10 @@ export default function WebhooksPage() {
                   ))}
                 </select>
               </label>
+              {/* Copy link (F113) -- share the exact filtered deliveries view.
+                  Reuses the F103 URL serializer; disabled until a filter is
+                  active (a bare link is just the page). */}
+              <CopyDeliveryLinkButton filters={deliveryFilterState} />
             </div>
           )}
         </div>

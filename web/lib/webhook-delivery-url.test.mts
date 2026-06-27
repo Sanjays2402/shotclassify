@@ -10,6 +10,8 @@ import {
   hasDeliveryFilter,
   buildDeliveryFilterQuery,
   deliveryFilterUrl,
+  buildDeliveryDeepLink,
+  deliveryLinkToastMessage,
   readDeliveryFilterFromUrl,
   writeDeliveryFilterToUrl,
 } from "./webhook-delivery-url.ts";
@@ -211,4 +213,53 @@ test("writeDeliveryFilterToUrl: a throwing History API is swallowed", () => {
   } finally {
     delete g.window;
   }
+});
+
+test("buildDeliveryDeepLink: bare filter returns just the base", () => {
+  assert.equal(
+    buildDeliveryDeepLink({ status: "all", event: "all" }),
+    "/webhooks",
+  );
+  assert.equal(
+    buildDeliveryDeepLink(
+      { status: "all", event: "all" },
+      "https://x.test/webhooks",
+    ),
+    "https://x.test/webhooks",
+  );
+});
+
+test("buildDeliveryDeepLink: active filter appends the query, round-trips", () => {
+  const url = buildDeliveryDeepLink(
+    { status: "failed", event: "classify.completed" },
+    "https://x.test/webhooks",
+  );
+  assert.ok(url.startsWith("https://x.test/webhooks?"));
+  // The query parses back to the same constraints.
+  const qs = url.slice(url.indexOf("?") + 1);
+  const back = parseDeliveryFilterFromParams(new URLSearchParams(qs));
+  assert.equal(back.status, "failed");
+  assert.equal(back.event, "classify.completed");
+});
+
+test("deliveryLinkToastMessage: names the active constraints", () => {
+  assert.equal(
+    deliveryLinkToastMessage({ status: "failed", event: "classify.completed" }),
+    "Copied a link to Failed classify.completed deliveries.",
+  );
+  assert.equal(
+    deliveryLinkToastMessage({ status: "pending", event: "all" }),
+    "Copied a link to Pending deliveries.",
+  );
+  assert.equal(
+    deliveryLinkToastMessage({ status: "all", event: "shot.created" }),
+    "Copied a link to shot.created deliveries.",
+  );
+});
+
+test("deliveryLinkToastMessage: generic when nothing's active", () => {
+  assert.equal(
+    deliveryLinkToastMessage({ status: "all", event: "all" }),
+    "Copied a link to this deliveries view.",
+  );
 });
