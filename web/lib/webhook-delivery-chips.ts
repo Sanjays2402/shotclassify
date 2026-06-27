@@ -77,6 +77,23 @@ export function distinctDeliveryEvents(
   return Array.from(seen).sort((a, b) => a.localeCompare(b));
 }
 
+// "N seen" affordance for the event filter label (F110). The event <select> is
+// built from distinctDeliveryEvents, but its breadth is hidden until you open
+// the dropdown. This surfaces the live distinct-event count beside the "Event"
+// label ("Event · 3 seen") so a triager knows how many event types the log
+// holds without opening it. Takes the already-derived distinct list (the page
+// memoises it) rather than re-deriving. Returns null when there are no events
+// to count -- the select is empty/disabled in that case, so the affordance
+// would be inert noise. "seen" is an adjective so no singular/plural swing.
+export function distinctEventCountLabel(
+  events: readonly string[] | null | undefined,
+): string | null {
+  if (!Array.isArray(events)) return null;
+  const n = events.length;
+  if (n <= 0) return null;
+  return `${n} seen`;
+}
+
 // Apply the active filter to a delivery list. Pure: returns a new array with
 // only the rows matching every active constraint. An inert filter returns the
 // list unchanged (same elements). Status / event comparisons are exact.

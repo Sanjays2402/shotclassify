@@ -9,6 +9,7 @@ import {
   deliveryFilterCountLabel,
   deliveryStatusCounts,
   distinctDeliveryEvents,
+  distinctEventCountLabel,
   filterDeliveries,
   deliveryStatusLabel,
   DELIVERY_STATUSES,
@@ -220,4 +221,26 @@ test("deliveryStatusCounts: ignores unknown statuses + prototype keys", () => {
 test("deliveryStatusCounts: empty / non-array input is all zeros", () => {
   for (const c of deliveryStatusCounts([])) assert.equal(c.count, 0);
   for (const c of deliveryStatusCounts(null as never)) assert.equal(c.count, 0);
+});
+
+test("distinctEventCountLabel: counts the distinct events seen", () => {
+  assert.equal(distinctEventCountLabel(["a", "b", "c"]), "3 seen");
+  assert.equal(distinctEventCountLabel(["only"]), "1 seen");
+});
+
+test("distinctEventCountLabel: empty / non-array -> null (inert noise)", () => {
+  assert.equal(distinctEventCountLabel([]), null);
+  assert.equal(distinctEventCountLabel(null), null);
+  assert.equal(distinctEventCountLabel(undefined), null);
+  assert.equal(distinctEventCountLabel("nope" as never), null);
+});
+
+test("distinctEventCountLabel: composes with distinctDeliveryEvents", () => {
+  // End-to-end: derive the distinct list from raw deliveries, then label it.
+  const events = distinctDeliveryEvents([
+    { status: "success", event: "classify.completed" },
+    { status: "failed", event: "classify.completed" }, // dup -> one
+    { status: "pending", event: "shot.created" },
+  ]);
+  assert.equal(distinctEventCountLabel(events), "2 seen");
 });

@@ -13,6 +13,7 @@ import {
 import {
   filterDeliveries,
   distinctDeliveryEvents,
+  distinctEventCountLabel,
   deliveryStatusLabel,
   deliveryFilterCountLabel,
   deliveryStatusCounts,
@@ -687,7 +688,18 @@ export default function WebhooksPage() {
                 </select>
               </label>
               <label className="inline-flex items-center gap-1.5 text-[12px]">
-                <span className="eyebrow opacity-70">Event</span>
+                <span className="eyebrow opacity-70">
+                  Event
+                  {/* "N seen" affordance (F110) -- the live distinct-event
+                      count so a triager knows the log's breadth without
+                      opening the dropdown. Null/hidden when nothing's arrived. */}
+                  {(() => {
+                    const seen = distinctEventCountLabel(eventOptions);
+                    return seen ? (
+                      <span className="num opacity-60"> · {seen}</span>
+                    ) : null;
+                  })()}
+                </span>
                 <select
                   value={eventFilter}
                   onChange={(e) => setEventFilter(e.target.value)}
