@@ -24,7 +24,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (196 features tracked, 182 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (204 features tracked, 187 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -394,29 +394,74 @@ F90. [ ] Web: `g <x>` chord pattern caption in the `?` overlay (the open F69) --
 F91. [x] Web: count-active-filters badge on the `/shots` filter toolbar -- shipped tick 37. Compact felt-green "N filters" pill leads the toolbar whenever the list is narrowed; clicking it clears all. New pure `filterCountLabel()` in lib/filter-summary (null at zero, singular/plural aware) reuses the existing active-filter rules. Restored + extended the pre-existing filter-summary test file to 15 tests. (4c288c4 + fix 8945541)
 F92. [x] Web: filter breadcrumb + status/event filter on `/webhooks` -- shipped tick 37. The Recent deliveries table now filters by status (success/failed/pending) and event name, with a removable breadcrumb mirroring shots (F24) + notifications (F88). New pure lib/webhook-delivery-chips (filtering + chip-building + distinct-event derivation; 14 tests) + `<WebhookDeliveryBreadcrumb>`; empty-filter result has a one-click clear. (0ff0507)
 F93. [x] Web: Shift+E / Shift+C rail expand/collapse chords -- shipped tick 37. Pure `railChordAction()` in lib/detail-rail (requires Shift, forbids Cmd/Ctrl/Alt, ignores bare letters -- NOT the generic matcher, whose bare-combo path is built around shifted glyphs and would accept a plain e/c). HotKeys bare-letter nav + the sequence tracker now both skip Shift-held keys so Shift+C never also routes to /calibration nor completes `g c`. New detail-scope SHORTCUTS entries + an on-page kbd hint by the F82 button. 7 new tests. (0d5d703)
-F94. [ ] Web: "Copy as ..." export trio reaches the `/shots` row hover actions -- a single-shot CopyExportButtons (or a compact menu) per row so you can grab one shot's JSON/MD/CSV without opening it. Reuse EXPORT_FORMATS (F86) so it stays in lockstep; pure wiring + the shared catalogue.
+F94. [x] Web: "Copy as ..." export trio reaches the `/shots` row hover actions -- shipped tick 39 as the shared F97 work. New <RowExportMenu> compact dots dropdown per table row (JSON/Markdown/CSV) reusing EXPORT_FORMATS (F86) + the single-shot serializers; toast feedback; outside-click/Escape close; non-secure-context clipboard fallback; disabled on sample rows. A new trailing table column hosts it. (dddac11)
 F95. [x] Web: palette "N unread" badge on the Inbox row -- shipped tick 37. Pure `inboxCountLabel()` in lib/command-palette (null off-route / at zero / on invalid count; caps at 99+ to match the bell badge); the palette fetches the unread count best-effort when it opens and silently hides the badge on any error. Mirrors F83's Shots recents badge, felt-green to read as active. 4 new tests. (7e6fc5c)
-F96. [ ] Web: per-section "Expand"/"Collapse" affordance copy unifies with the rail -- audit CollapsibleSection's caret-only header vs the new F82 all-control so the wording/iconography reads consistently (e.g. a hover "Collapse" tooltip on each section header). Pure component polish; no lib.
+F96. [x] Web: per-section "Expand"/"Collapse" affordance copy unifies with the rail -- shipped tick 39. New pure sectionToggleHint(title, collapsed) in lib/detail-rail builds "Collapse OCR transcript section" / "Expand OCR transcript section"; wired into CollapsibleSection's header as both aria-label + title so every section toggle announces its action consistently with the Expand/Collapse-all control. Blank/non-string title degrades to a generic "section". 3 tests (27->30). (e48b33b)
 
 ### Frontend backlog refill (tick 37 -- F97-F108, frontend-override still active)
 F85. [x] Web: visible "press W" hint beside the `/stats` window selector -- shipped tick 37. Faint W kbd hint next to the 24h/7d/30d buttons so the F79 cycle is discoverable on-page; hidden < sm, aria-hidden (the buttons' titles already say "press W to cycle"). Pure render. (5246779)
-F97. [ ] Web: "Copy as ..." single-shot export menu on `/shots` rows (the open F94) -- a compact per-row menu (JSON / Markdown / CSV) reusing EXPORT_FORMATS (F86) + the shot-export serializers so the list and detail surfaces stay in lockstep. Pure wiring + a small `<RowExportMenu>`; toast feedback via the existing store.
+F97. [x] Web: "Copy as ..." single-shot export menu on `/shots` rows -- shipped tick 39. <RowExportMenu> compact per-row dots dropdown (JSON / Markdown / CSV) reusing EXPORT_FORMATS (F86) + the shot-export serializers so the list / detail / bulk surfaces stay in lockstep; toast feedback via the existing store. Covers F94 too. (dddac11)
 F98. [ ] Web: reuse `<EmptyState>` on `/webhooks` + `/admin/seats` + `/digest` (the long-open F6/F74/F89) -- three pages still hand-roll "no rows" markup. Consolidate onto the canonical component now that emptyCopyForList exists. Component-level; reuse the existing lib.
 F99. [ ] Web: keyboard-driven filter chips on `/shots` (the open F20/F75/F87) -- `Tab` cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box. Pure tabIndex ordering helper + a roving-focus hook; test the order helper.
 F100. [x] Web: `g <x>` chord pattern caption in the `?` overlay -- shipped tick 38. The "Jump to a section" group header in ShortcutsHelp.tsx gained a one-line "Tip: press G, then a letter." caption (scopeOrder rows carry an optional `caption` field; the section map renders it when present, so any future group can carry its own explainer). Closes the long-open F69/F90. Pure render. (dc73a20)
 F101. [x] Web: status-color legend chips above the `/webhooks` deliveries table -- shipped tick 38. A success/failed/pending swatch row with LIVE counts (felt-green/red/amber) so the status mix reads at a glance; each swatch is a one-click status filter (clicking the active one clears it; aria-pressed reflects state). New pure `deliveryStatusCounts()` in lib/webhook-delivery-chips (always the 3 known statuses in stable order, zero when absent, trims, ignores unknown + prototype keys via hasOwnProperty tally, safe on non-array). 4 tests. (14a6c65)
 F102. [x] Web: "Filtering N of M deliveries" count line on `/webhooks` when the F92 filter is active -- shipped tick 38. New pure `deliveryFilterCountLabel(shown,total)` (null when nothing hidden, singular/plural aware, clamps over-range, truncates fractional, no-throw on non-finite). Wired beside the breadcrumb, renders only when narrowed. Mirrors the shots pill (F91). 5 tests. (98e9d0c)
-F103. [ ] Web: persist the `/webhooks` deliveries filter to the URL (or localStorage) so a reload keeps the triage view -- mirror the shots deep-link pattern (F30/F47) at small scale: serialize status+event to query params, read once on mount. Pure serialize/parse + tests.
+F103. [x] Web: persist the `/webhooks` deliveries filter to the URL -- shipped tick 39. New pure lib/webhook-delivery-url.ts (parseDeliveryFilterFromParams validates status against the known set + accepts any non-blank event token since the subscribed-event set is open-ended; buildDeliveryFilterQuery emits only active constraints status-then-event; deliveryFilterUrl cleans back to /webhooks when inert; no-throw read/write wrappers drive window.location + history.replaceState). Page reads window.location once on mount (no router/searchParams) and mirrors changes back behind a hydration guard ref. 15 tests. (0ebd240)
 F104. [x] Web: command-palette "Clear all filters" / facet-reset affordance -- shipped tick 38. New pure `stripFacets(query)` in lib/palette-facets reuses parseFacets (strips exactly what it recognised, keeps residual free text, idempotent, trims, preserves an unresolved class: value, safe on non-string). A "Clear" button in the facet pill row applies it + refocuses the input. 7 tests. (465de1e)
-F105. [ ] Web: shot-detail rail "reset to defaults" affordance -- next to Expand/Collapse all, a tiny "reset" that clears the persisted per-slot collapse state entirely (back to the friendly all-expanded default). Reuse expandAll() + a writeDetailRail clear; pure handler.
+F105. [x] Web: shot-detail rail "reset to defaults" affordance -- shipped tick 39. New no-throw clearDetailRail() removeItem's the storage key (distinct from writeDetailRail(expandAll()) which persists an explicit empty blob), so the rail reopens at the all-expanded default like a brand-new visitor's. A tiny "Reset" control next to Expand/Collapse-all renders only when something is folded (allExpanded guard) and also resets the in-memory state. 3 tests (24->27). (55b2cd7)
 F106. [x] Web: `/stats` KPI cards show the active window in their sub-label -- shipped tick 38. `winLabel = labelForStatsWindow(hours)` threaded into all 4 KPI card hints ("N in last 7d", "N timed - last 7d", "p50.. p99.. - last 7d", "X% rate - last 7d") so each stat's scope is unambiguous. Pure render, no new lib (F85 precedent). (68f231e)
 F107. [x] Web: notifications inbox "N of M" count line when the F88 filter is active -- ALREADY SHIPPED. The /notifications page already renders `${matched} of ${total} match` whenever filtersActive (page.tsx ~line 347). Marked done tick 38 (no new work needed; would have been filler).
-F108. [ ] Web: empty-state for the `/webhooks` deliveries filter uses `<EmptyState>` -- today the "no deliveries match" branch (F92) is a plain sentence; upgrade it to the canonical bare-variant EmptyState with a "Clear filter" action for consistency with the shots empty state. Component-level; reuse emptyCopyForList shape.
+F108. [x] Web: empty-state for the `/webhooks` deliveries filter uses `<EmptyState>` -- shipped tick 39. The filtered-to-empty branch now renders the canonical bare-variant EmptyState (felt-green icon well, eyebrow, h-display title, cue-yellow "Clear the filter" CTA) instead of a plain sentence. Body reuses emptyCopyForList (status->class slot, event->tag slot) so it names the active filter in the shared phrasing. Imported aliased (FilterEmptyState) to avoid colliding with the page's local no-endpoints helper. Component-level, no new lib. (de74fa9)
+
+### Frontend backlog refill (tick 39 -- F109-F116, frontend-override still active)
+NOTE (tick 39): 38 older F-items remain open but many are stale near-duplicates
+(the /stats confidence sparkline is tracked 5x as F16/F27/F41/F54/F65 and is
+BLOCKED on a backend per-hour mean-conf field; the row preview drawer 4x as
+F11/F28/F72/F84; keyboard filter chips 4x as F20/F75/F87/F99; EmptyState
+consolidation as F6/F74/F89/F98). These fresh items are unblocked + non-duplicate.
+F109. [ ] Web: `RowExportMenu` (F97) reaches the GRID + COMPACT views too -- the new per-row export menu only renders in the table view; add it to the ShotGrid card footer + the compact row so all three list layouts expose the same one-shot JSON/MD/CSV grab. Pure wiring; reuse the component.
+F110. [ ] Web: `/webhooks` deliveries event-filter keyboard hint + "N events" affordance -- the event <select> is built from distinctDeliveryEvents; surface the live distinct-event count beside the label ("Event · 3 seen") so a triager knows the breadth without opening the dropdown. Pure render off the existing memo.
+F111. [ ] Web: shot-detail rail collapse-state count badge -- next to Expand/Collapse all, a faint "(2 folded)" count when some-but-not-all sections are collapsed, so the partial state is legible at a glance. New pure collapsedCount(state) in lib/detail-rail + a render; test the counter.
+F112. [ ] Web: `/notifications` "Filtering N of M" reuses a shared count-label helper -- the page hand-rolls `${matched} of ${total} match`; extract the shots/webhooks/notif "N of M" phrasing into one tested pure helper (singular/plural, clamp, null-when-inert) and wire all three onto it, continuing the consolidation theme.
+F113. [ ] Web: copy-link affordance on the `/webhooks` deliveries view -- now that F103 persists the filter to the URL, add a small "Copy link" button (mirroring the shots CopyViewLinkButton) that copies the absolute pre-filtered deliveries URL; disabled when no filter is active. Reuse buildDeliveryFilterQuery + toast.
+F114. [ ] Web: `RowExportMenu` open-state arrow-key navigation -- the per-row export dropdown is mouse/Enter only; add Up/Down to move between the three format items + Enter to fire, Escape already closes. Pure roving-index hook; test the index math.
+F115. [ ] Web: `/shots` table "Export column" header tooltip + a11y polish -- the new trailing export column header is an empty `<th aria-label>`; add a small visible dots glyph + a hover title so the column's purpose is discoverable, not just announced to AT. Pure render.
+F116. [ ] Web: deliveries status-legend swatch keyboard focus ring -- the F101 status swatches are buttons but lean on hover; add a visible focus-visible ring + ensure the aria-pressed group reads as a rad/toggle set for keyboard triagers. Pure CSS/class polish; no lib.
+
 
 
 
 
 ## Tick log
+- 2026-06-27 05:13 PT (tick 39, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  - 0ebd240 feat(web): persist the webhooks deliveries filter to the URL (F103)
+  - de74fa9 feat(web): canonical EmptyState for the webhooks filtered-empty deliveries (F108)
+  - dddac11 feat(web): per-row "Copy as JSON/Markdown/CSV" menu on the shots table (F97/F94)
+  - 55b2cd7 feat(web): shot-detail rail "Reset to defaults" affordance (F105)
+  - e48b33b feat(web): consistent verb-led toggle label on each rail section (F96)
+  - Gate: tsc --noEmit clean (whole web project) + `npx tsx --test --test-force-exit
+    lib/*.test.mts` 543 passed / 0 failed (522 baseline at tick 38 + net new 21:
+    F103=15 NEW lib/webhook-delivery-url.test.mts; F105=3 + F96=3 APPENDED to the
+    existing detail-rail test file via patch 24->30; F108 + F97/F94 are
+    component-only reusing already-covered libs, no new test) + `next build`
+    compiled successfully in 5.6s -- /shots AND /webhooks still prerender static,
+    /shots/[id] dynamic as expected. All work is web/ TS/TSX -- ZERO Python touched,
+    so the pytest baseline cannot regress. Used --test-force-exit for the clean
+    glob exit (documented gotcha).
+  - Design notes: F103 mirrors the shots deep-link pattern at small scale but the
+    /webhooks page has no router/searchParams, so it reads window.location directly
+    on mount and writes via history.replaceState behind a hydration guard ref (so the
+    write-effect never clobbers the initial read). Status validates against the known
+    set; event accepts ANY non-blank token because the subscribed-event set is
+    open-ended (a newly-subscribed event must round-trip). F108 reuses emptyCopyForList
+    by mapping status->class slot + event->tag slot to drive the shared "Active: ..."
+    phrasing; imported the canonical EmptyState aliased (FilterEmptyState) to dodge the
+    page's local no-endpoints helper of the same name. F105's clearDetailRail() removeItem's
+    the key (a true reset) vs writeDetailRail(expandAll()) which persists an empty blob.
+    F96's sectionToggleHint keeps the per-section label in lockstep wording with the
+    F82 all-control. Consolidation themes advanced: webhooks deliveries (F103+F108) and
+    the detail rail (F105+F96).
+
 - 2026-06-27 01:25 PT (tick 38, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   - 98e9d0c feat(web): "Filtering N of M deliveries" count line on webhooks (F102)
   - 14a6c65 feat(web): clickable status legend with live counts on webhooks (F101)
