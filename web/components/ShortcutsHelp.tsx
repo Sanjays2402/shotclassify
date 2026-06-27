@@ -71,9 +71,15 @@ export default function ShortcutsHelp() {
     grouped[s.scope] ??= [];
     grouped[s.scope].push(s);
   }
-  const scopeOrder: Array<{ key: string; title: string }> = [
+  const scopeOrder: Array<{ key: string; title: string; caption?: string }> = [
     { key: "global", title: "Anywhere" },
-    { key: "goto", title: "Jump to a section" },
+    {
+      key: "goto",
+      title: "Jump to a section",
+      // Explain the chord PATTERN once (F69/F90/F100) rather than relying on
+      // the reader to infer it from the enumerated two-key badges below.
+      caption: "Tip: press G, then a letter.",
+    },
     { key: "shots", title: "On the shots list" },
     { key: "stats", title: "On the box score" },
     { key: "detail", title: "On a shot's detail" },
@@ -128,12 +134,15 @@ export default function ShortcutsHelp() {
         </header>
 
         <div className="px-5 py-4 max-h-[60vh] overflow-y-auto">
-          {scopeOrder.map(({ key, title }) => {
+          {scopeOrder.map(({ key, title, caption }) => {
             const items = grouped[key];
             if (!items || items.length === 0) return null;
             return (
               <section key={key} className="mb-5 last:mb-0">
                 <div className="eyebrow mb-2">{title}</div>
+                {caption && (
+                  <p className="text-[11px] opacity-60 -mt-1 mb-2">{caption}</p>
+                )}
                 <ul className="flex flex-col gap-1">
                   {items.map((s) => {
                     const keys = renderKeys(s.combo, platform);
