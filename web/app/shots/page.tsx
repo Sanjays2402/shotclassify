@@ -28,6 +28,7 @@ import {
 } from "@/lib/grid-density";
 import CopyViewLinkButton from "@/components/CopyViewLinkButton";
 import BulkExportButtons from "@/components/BulkExportButtons";
+import RowExportMenu from "@/components/RowExportMenu";
 import type { ShotExportInput } from "@/lib/shot-export";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
@@ -1088,6 +1089,7 @@ function ShotsPageInner() {
                   <th>Source</th>
                   <th>File</th>
                   <th>When</th>
+                  <th className="w-[40px]" aria-label="Copy row export" />
                 </tr>
               </thead>
               <tbody>
@@ -1188,6 +1190,27 @@ function ShotsPageInner() {
                     </td>
                     <td className="num text-[11px] opacity-70 whitespace-nowrap">
                       {fmtTime(r.created_at)}
+                    </td>
+                    <td>
+                      {/* Per-row "Copy as ..." trio (F97/F94) -- grab one
+                          shot's JSON / Markdown / CSV without opening it,
+                          reusing the shared EXPORT_FORMATS + serializers so the
+                          list, detail, and bulk surfaces stay in lockstep. */}
+                      <RowExportMenu
+                        shortId={shortId(r.id)}
+                        disabled={isSample}
+                        shot={{
+                          id: r.id,
+                          filename: r.filename,
+                          created_at: r.created_at,
+                          primary_category: r.primary_category,
+                          confidence: r.confidence,
+                          elapsed_ms: r.elapsed_ms ?? null,
+                          source: r.source ?? null,
+                          label: r.label ?? null,
+                          tags: r.tags ?? [],
+                        }}
+                      />
                     </td>
                   </tr>
                 ))}
