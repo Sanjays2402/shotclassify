@@ -83,6 +83,19 @@ export default function ShotNav({ currentId }: { currentId: string }) {
       >
         {shotNavLabel(nav)}
       </span>
+      {/* Tiny [ ] kbd hint so the keyboard step-through is discoverable
+          without opening the ? overlay (F81). Hidden on very small screens to
+          keep the header compact; the chevrons + their aria-labels still
+          convey the keys there. aria-hidden because the buttons already spell
+          out "( [ )" / "( ] )" for screen readers. */}
+      <span
+        className="hidden sm:inline-flex items-center gap-0.5 opacity-45"
+        aria-hidden
+        title="Use [ and ] to step through your recently-viewed shots"
+      >
+        <kbd className="kbd text-[9px] leading-none">[</kbd>
+        <kbd className="kbd text-[9px] leading-none">]</kbd>
+      </span>
       <NavButton
         dir="next"
         targetId={nav.nextId}
