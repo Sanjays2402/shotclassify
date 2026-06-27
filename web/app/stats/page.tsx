@@ -261,6 +261,20 @@ export default function StatsPage() {
               {labelForStatsWindow(w)}
             </button>
           ))}
+          {/* Faint visible "W" hint so the keyboard cycle (F79) is discoverable
+              on the page, not just in the ? overlay -- mirrors how F81 surfaces
+              [ ] on ShotNav. Hidden < sm to keep the header compact; aria-hidden
+              because the buttons' titles already spell out "press W to cycle". */}
+          <span
+            className="hidden sm:inline-flex items-center gap-1 opacity-45 select-none"
+            aria-hidden
+            title="Press W to cycle the window"
+          >
+            <kbd className="kbd text-[10px] leading-none">W</kbd>
+            <span className="num text-[10px] uppercase tracking-wider">
+              cycle
+            </span>
+          </span>
           {!live && <SampleBadge note="Seeded preview until you ingest data." />}
         </div>
       </header>
