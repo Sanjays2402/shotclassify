@@ -12,6 +12,7 @@ import {
   CSV_HEADERS,
   EXPORT_FORMATS,
   exportFormatByKey,
+  shotRowToExportInput,
   type ShotExportInput,
 } from "./shot-export.ts";
 
@@ -252,4 +253,77 @@ test("EXPORT_FORMATS: nouns line up with the bulk toast format union", () => {
   for (const f of EXPORT_FORMATS) {
     assert.ok(["JSON", "Markdown", "CSV"].includes(f.noun), f.noun);
   }
+});
+
+test("shotRowToExportInput: maps a full row faithfully", () => {
+  const out = shotRowToExportInput({
+    id: "row1",
+    filename: "a.png",
+    primary_category: "code",
+    confidence: 0.81,
+    created_at: "2026-06-27T00:00:00Z",
+    elapsed_ms: 120,
+    source: "upload",
+    label: "snippet",
+    tags: ["x", "y"],
+  });
+  assert.deepEqual(out, {
+    id: "row1",
+    filename: "a.png",
+    created_at: "2026-06-27T00:00:00Z",
+    primary_category: "code",
+    confidence: 0.81,
+    elapsed_ms: 120,
+    source: "upload",
+    label: "snippet",
+    tags: ["x", "y"],
+  });
+});
+
+test("shotRowToExportInput: normalises absent optionals to null / []", () => {
+  // A bare row (only the required fields) yields stable null / [] slots so the
+  // table + grid feed RowExportMenu the same shape regardless of optionals.
+  const out = shotRowToExportInput({
+    id: "row2",
+    filename: "b.png",
+    primary_category: "receipt",
+    confidence: 0.5,
+  });
+  assert.equal(out.created_at, undefined);
+  assert.equal(out.elapsed_ms, null);
+  assert.equal(out.source, null);
+  assert.equal(out.label, null);
+  assert.deepEqual(out.tags, []);
+});
+
+test("shotRowToExportInput: table + grid get IDENTICAL export shape", () => {
+  // The whole point of F109: both layouts call this one mapper, so a row
+  // produces a byte-identical serialization no matter which surface copied it.
+  const row = {
+    id: "row3",
+    filename: "c.png",
+    primary_category: "chat",
+    confidence: 0.64,
+    source: "api" as const,
+    tags: ["t"],
+  };
+  const fromTable = shotRowToExportInput(row);
+  const fromGrid = shotRowToExportInput(row);
+  assert.equal(toJson(fromTable), toJson(fromGrid));
+  assert.equal(toCsv(fromTable), toCsv(fromGrid));
+  assert.equal(toMarkdown(fromTable), toMarkdown(fromGrid));
+});
+
+test("shotRowToExportInput: serializes cleanly through every format", () => {
+  // Guard against a future required field on ShotExportInput that the mapper
+  // forgets -- prove all three serializers accept the mapped row.
+  const mapped = shotRowToExportInput({
+    id: "row4",
+    filename: "d.png",
+    primary_category: "error",
+    confidence: 0.99,
+  });
+  assert.ok(toJson(mapped).includes("row4"));
+  assert.ok(toCsv(mapped).includes("row4"));
+  assert.ok(toMarkdown(mapped).includes("row4"));
 });

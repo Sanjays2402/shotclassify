@@ -29,7 +29,7 @@ import {
 import CopyViewLinkButton from "@/components/CopyViewLinkButton";
 import BulkExportButtons from "@/components/BulkExportButtons";
 import RowExportMenu from "@/components/RowExportMenu";
-import type { ShotExportInput } from "@/lib/shot-export";
+import { shotRowToExportInput, type ShotExportInput } from "@/lib/shot-export";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
 import { filterCountLabel, type FilterKey } from "@/lib/filter-summary";
@@ -1195,21 +1195,13 @@ function ShotsPageInner() {
                       {/* Per-row "Copy as ..." trio (F97/F94) -- grab one
                           shot's JSON / Markdown / CSV without opening it,
                           reusing the shared EXPORT_FORMATS + serializers so the
-                          list, detail, and bulk surfaces stay in lockstep. */}
+                          list, detail, and bulk surfaces stay in lockstep. The
+                          export shape comes from shotRowToExportInput so the
+                          table + grid feed RowExportMenu identical data (F109). */}
                       <RowExportMenu
                         shortId={shortId(r.id)}
                         disabled={isSample}
-                        shot={{
-                          id: r.id,
-                          filename: r.filename,
-                          created_at: r.created_at,
-                          primary_category: r.primary_category,
-                          confidence: r.confidence,
-                          elapsed_ms: r.elapsed_ms ?? null,
-                          source: r.source ?? null,
-                          label: r.label ?? null,
-                          tags: r.tags ?? [],
-                        }}
+                        shot={shotRowToExportInput(r)}
                       />
                     </td>
                   </tr>

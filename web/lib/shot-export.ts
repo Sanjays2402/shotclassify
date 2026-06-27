@@ -226,3 +226,44 @@ export function exportFormatByKey(
 ): ExportFormatMeta | undefined {
   return EXPORT_FORMATS.find((f) => f.key === key);
 }
+
+// --- List-row -> export shape (shared table + grid) -----------------------
+// The /shots list renders the same rows in three layouts (table, compact,
+// grid) and every one can offer the per-row "Copy as ..." menu (F97/F109).
+// Each layout previously hand-built the ShotExportInput from its row inline,
+// which risked the surfaces drifting (the grid forgetting `source`, say). This
+// is the single mapping from a list row to the export shape so all three
+// layouts feed RowExportMenu byte-identical data. The row carries fewer fields
+// than the detail record (no distribution / ocr_text / rationale), which is
+// fine -- the serializers omit empty slots.
+
+// The minimal list-row fields the export shape needs. A superset row (the
+// page's full Row type) satisfies this structurally.
+export type ShotRowLike = {
+  id: string;
+  filename: string;
+  primary_category: string;
+  confidence: number;
+  created_at?: string;
+  elapsed_ms?: number | null;
+  source?: string | null;
+  label?: string | null;
+  tags?: string[];
+};
+
+// Map a list row to the export-input shape. Optional fields are normalised to
+// null / [] so the result is stable regardless of which optionals the row
+// happened to carry -- the table and grid get the exact same object.
+export function shotRowToExportInput(r: ShotRowLike): ShotExportInput {
+  return {
+    id: r.id,
+    filename: r.filename,
+    created_at: r.created_at,
+    primary_category: r.primary_category,
+    confidence: r.confidence,
+    elapsed_ms: r.elapsed_ms ?? null,
+    source: r.source ?? null,
+    label: r.label ?? null,
+    tags: r.tags ?? [],
+  };
+}

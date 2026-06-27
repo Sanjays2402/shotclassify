@@ -11,7 +11,9 @@ import Link from "next/link";
 import { Star, CheckSquare, Square, Scales } from "@phosphor-icons/react/dist/ssr";
 import { Chip } from "@/components/Chip";
 import { ConfBadge } from "@/components/ConfBadge";
+import RowExportMenu from "@/components/RowExportMenu";
 import { ms, shortId, type Category } from "@/lib/categories";
+import { shotRowToExportInput } from "@/lib/shot-export";
 import {
   gridColumnsClass,
   GRID_DENSITY_DEFAULT,
@@ -162,22 +164,33 @@ export function ShotGrid({
               <span className="num text-[10px] opacity-55 whitespace-nowrap">
                 {fmtTime(r.created_at)}
               </span>
-              <button
-                type="button"
-                onClick={() => onTogglePick(r.id)}
-                className="inline-flex items-center gap-1 text-[10px] eyebrow opacity-70 hover:opacity-100"
-                aria-label={
-                  isPicked
-                    ? `Remove ${shortId(r.id)} from compare`
-                    : `Add ${shortId(r.id)} to compare`
-                }
-                aria-pressed={isPicked}
-                title={isPicked ? "Selected for compare" : "Select to compare"}
-                style={isPicked ? { color: "var(--color-felt)" } : undefined}
-              >
-                <Scales size={12} weight="duotone" />
-                {isPicked ? "Picked" : "Compare"}
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => onTogglePick(r.id)}
+                  className="inline-flex items-center gap-1 text-[10px] eyebrow opacity-70 hover:opacity-100"
+                  aria-label={
+                    isPicked
+                      ? `Remove ${shortId(r.id)} from compare`
+                      : `Add ${shortId(r.id)} to compare`
+                  }
+                  aria-pressed={isPicked}
+                  title={isPicked ? "Selected for compare" : "Select to compare"}
+                  style={isPicked ? { color: "var(--color-felt)" } : undefined}
+                >
+                  <Scales size={12} weight="duotone" />
+                  {isPicked ? "Picked" : "Compare"}
+                </button>
+                {/* Per-row "Copy as ..." trio (F109) -- the same one-shot
+                    JSON / Markdown / CSV grab the table row offers, now on the
+                    grid card too. shotRowToExportInput keeps the export shape
+                    byte-identical across all three list layouts. */}
+                <RowExportMenu
+                  shortId={shortId(r.id)}
+                  disabled={isSample}
+                  shot={shotRowToExportInput(r)}
+                />
+              </div>
             </div>
           </li>
         );
