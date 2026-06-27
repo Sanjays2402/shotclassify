@@ -17,6 +17,8 @@ import {
   Funnel,
 } from "@phosphor-icons/react/dist/ssr";
 import { NotificationPrefsCard } from "@/components/NotificationPrefsCard";
+import { NotifFilterBreadcrumb } from "@/components/NotifFilterBreadcrumb";
+import type { NotifFilterKey } from "@/lib/notif-filter-chips";
 
 type Notif = {
   id: string;
@@ -221,6 +223,14 @@ export default function NotificationsPage() {
     setUnreadOnly(false);
   };
 
+  // Clear a single active filter from the breadcrumb pills (F88). The search
+  // chip reads the debounced value but clearing resets the live input too.
+  const clearOneFilter = (key: NotifFilterKey) => {
+    if (key === "q") setQ("");
+    else if (key === "kind") setKind("all");
+    else if (key === "unread") setUnreadOnly(false);
+  };
+
   return (
     <div className="max-w-3xl mx-auto">
       <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
@@ -322,6 +332,12 @@ export default function NotificationsPage() {
       </div>
 
       <NotificationPrefsCard />
+
+      <NotifFilterBreadcrumb
+        filters={{ q: qDebounced, kind, unreadOnly }}
+        onClear={clearOneFilter}
+        onClearAll={clearFilters}
+      />
 
       <div className="flex items-center justify-between text-[11px] opacity-70 mb-2 mt-1 num">
         <span>
