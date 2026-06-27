@@ -14,6 +14,7 @@
 
 import { CaretDown } from "@phosphor-icons/react/dist/ssr";
 import type { ReactNode } from "react";
+import { sectionToggleHint } from "@/lib/detail-rail";
 
 export function CollapsibleSection({
   title,
@@ -40,6 +41,9 @@ export function CollapsibleSection({
       ? { color: "var(--color-chalk)" }
       : undefined;
   const bodyId = `rail-${title.replace(/\s+/g, "-").toLowerCase()}`;
+  // Consistent verb-led label/title so the toggle announces its action to
+  // screen-reader + hover users, matching the Expand/Collapse-all wording (F96).
+  const toggleHint = sectionToggleHint(title, collapsed);
   return (
     <div className={`${panelClass} p-5`}>
       <button
@@ -47,6 +51,8 @@ export function CollapsibleSection({
         onClick={onToggle}
         aria-expanded={!collapsed}
         aria-controls={bodyId}
+        aria-label={toggleHint}
+        title={toggleHint}
         className="w-full flex items-center justify-between gap-2 text-left group"
       >
         <span className="eyebrow" style={eyebrowStyle}>

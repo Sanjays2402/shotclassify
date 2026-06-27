@@ -106,6 +106,23 @@ export function expandAll(): DetailRailState {
   return new Set();
 }
 
+// --- Per-section header affordance (F96) ---------------------------------
+// Each foldable rail section's header is a toggle, but it only carried an
+// aria-expanded -- screen-reader + hover users got no verb. This pure helper
+// builds a consistent "Collapse <title> section" / "Expand <title> section"
+// label so every section header reads the action it performs, matching the
+// wording of the rail's Expand/Collapse-all control. Kept here (not inline in
+// the component) so the phrasing is unit-tested and stays in lockstep with the
+// all-control. A blank / non-string title degrades to a generic "section".
+export function sectionToggleHint(
+  title: string,
+  collapsed: boolean,
+): string {
+  const verb = collapsed ? "Expand" : "Collapse";
+  const name = typeof title === "string" && title.trim() ? title.trim() : "section";
+  return `${verb} ${name} section`;
+}
+
 // --- Expand/collapse-all keyboard chords (F93) ---------------------------
 // Shift+E expands every rail section, Shift+C collapses every section. A pure
 // matcher keeps the page handler thin and unit-testable. We check shift

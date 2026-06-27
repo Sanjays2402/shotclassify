@@ -11,6 +11,7 @@ import {
   allExpanded,
   collapseAll,
   expandAll,
+  sectionToggleHint,
   railChordAction,
   readDetailRail,
   writeDetailRail,
@@ -134,6 +135,36 @@ test("collapseAll / expandAll return fresh sets (new references)", () => {
   // singleton -- two calls must be distinct objects.
   assert.notEqual(collapseAll(), collapseAll());
   assert.notEqual(expandAll(), expandAll());
+});
+
+// --- F96: per-section toggle hint ----------------------------------------
+
+test("sectionToggleHint: verb flips on collapsed state, names the section", () => {
+  assert.equal(
+    sectionToggleHint("OCR transcript", false),
+    "Collapse OCR transcript section",
+  );
+  assert.equal(
+    sectionToggleHint("OCR transcript", true),
+    "Expand OCR transcript section",
+  );
+  assert.equal(sectionToggleHint("Rationale", false), "Collapse Rationale section");
+});
+
+test("sectionToggleHint: blank / non-string title degrades to 'section'", () => {
+  assert.equal(sectionToggleHint("", true), "Expand section section");
+  assert.equal(sectionToggleHint("   ", false), "Collapse section section");
+  assert.equal(
+    sectionToggleHint(undefined as never, true),
+    "Expand section section",
+  );
+});
+
+test("sectionToggleHint: trims surrounding whitespace in the title", () => {
+  assert.equal(
+    sectionToggleHint("  Label & tags  ", false),
+    "Collapse Label & tags section",
+  );
 });
 
 // --- F93: Shift+E / Shift+C rail chords ----------------------------------
