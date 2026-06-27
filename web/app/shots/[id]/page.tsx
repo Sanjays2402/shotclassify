@@ -29,9 +29,11 @@ import { recordRecentShot } from "@/lib/recent-shots";
 import {
   readDetailRail,
   writeDetailRail,
+  clearDetailRail,
   toggleSlot,
   isCollapsed,
   allCollapsed,
+  allExpanded,
   collapseAll,
   expandAll,
   railChordAction,
@@ -112,6 +114,16 @@ export default function ShotDetail({
     const next = collapsed ? collapseAll() : expandAll();
     writeDetailRail(next);
     setRail(next);
+  };
+
+  // Reset the rail to its friendly all-expanded default AND forget the
+  // persisted folds (F105). Distinct from "Expand all", which persists an
+  // explicit empty blob -- this removes the stored key entirely, so the rail
+  // behaves like a brand-new visitor's on the next visit. Only offered when
+  // something is actually folded (see the control's render guard).
+  const resetRail = () => {
+    clearDetailRail();
+    setRail(expandAll());
   };
 
   // Keyboard chords for the rail (F93): Shift+E expands every section, Shift+C
@@ -370,6 +382,21 @@ export default function ShotDetail({
               folded it invites "Expand all", otherwise "Collapse all". */}
           {mounted && (
             <div className="flex items-center justify-end gap-1.5 -mb-2">
+              {/* Reset to defaults (F105) -- clears the persisted folds so the
+                  rail behaves like a first visit. Only shown when something is
+                  actually folded, so it never adds inert chrome. Sits before
+                  the Expand/Collapse-all control. */}
+              {!allExpanded(rail) && (
+                <button
+                  type="button"
+                  onClick={resetRail}
+                  className="num text-[10px] uppercase tracking-wider opacity-45 hover:opacity-100 transition-opacity"
+                  aria-label="Reset rail sections to the default (all expanded) and forget saved folds"
+                  title="Forget saved folds and reopen every section"
+                >
+                  Reset
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setAllRail(!allCollapsed(rail))}

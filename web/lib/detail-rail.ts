@@ -166,3 +166,17 @@ export function writeDetailRail(state: DetailRailState): void {
     // Ignore -- the in-memory state still works for this session.
   }
 }
+
+// Remove the persisted collapse state entirely (F105), so the rail reopens at
+// the friendly all-expanded default on the next visit -- distinct from
+// writeDetailRail(expandAll()) which persists an explicit empty blob. Backs
+// the "Reset" affordance next to Expand/Collapse all. No-throw: a blocked /
+// throwing storage is swallowed so the reset still applies in memory.
+export function clearDetailRail(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(DETAIL_RAIL_STORAGE_KEY);
+  } catch {
+    // Ignore -- the caller still resets the in-memory state to expandAll().
+  }
+}

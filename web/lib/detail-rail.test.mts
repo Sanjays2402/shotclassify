@@ -14,6 +14,7 @@ import {
   railChordAction,
   readDetailRail,
   writeDetailRail,
+  clearDetailRail,
   DETAIL_RAIL_SLOTS,
   DETAIL_RAIL_STORAGE_KEY,
   type DetailRailSlot,
@@ -222,6 +223,52 @@ test("writeDetailRail: a throwing storage is swallowed", () => {
     assert.doesNotThrow(() =>
       writeDetailRail(new Set<DetailRailSlot>(["ocr"])),
     );
+  } finally {
+    delete g.window;
+  }
+});
+
+// --- F105: reset to defaults (clear persisted state) ---------------------
+
+test("clearDetailRail: removes the storage key so the next read is all-expanded", () => {
+  const store = new Map<string, string>();
+  const g = globalThis as { window?: unknown };
+  g.window = {
+    localStorage: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    },
+  };
+  try {
+    writeDetailRail(new Set<DetailRailSlot>(["ocr", "umpire"]));
+    assert.ok(store.has(DETAIL_RAIL_STORAGE_KEY));
+    clearDetailRail();
+    // The key is gone entirely -- not an explicit empty blob.
+    assert.equal(store.has(DETAIL_RAIL_STORAGE_KEY), false);
+    // A fresh read therefore yields the friendly all-expanded default.
+    assert.equal(readDetailRail().size, 0);
+  } finally {
+    delete g.window;
+  }
+});
+
+test("clearDetailRail: SSR (no window) is a no-op, doesn't throw", () => {
+  assert.equal(typeof (globalThis as { window?: unknown }).window, "undefined");
+  assert.doesNotThrow(() => clearDetailRail());
+});
+
+test("clearDetailRail: a throwing storage is swallowed", () => {
+  const g = globalThis as { window?: unknown };
+  g.window = {
+    localStorage: {
+      removeItem: () => {
+        throw new Error("blocked");
+      },
+    },
+  };
+  try {
+    assert.doesNotThrow(() => clearDetailRail());
   } finally {
     delete g.window;
   }
