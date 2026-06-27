@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, Suspense, Fragment } from "react"
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { Scales, CaretLeft, CaretRight, CaretDown, Trash, Tag, CheckSquare, Square, Star, Crosshair, Table, GridFour, Rows, Funnel } from "@phosphor-icons/react/dist/ssr";
+import { Scales, CaretLeft, CaretRight, CaretDown, Trash, Tag, CheckSquare, Square, Star, Crosshair, Table, GridFour, Rows, Funnel, DotsThreeOutline } from "@phosphor-icons/react/dist/ssr";
 import { useSWRConfig } from "swr";
 import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
@@ -1102,7 +1102,15 @@ function ShotsPageInner() {
                   <th>Source</th>
                   <th>File</th>
                   <th>When</th>
-                  <th className="w-[40px]" aria-label="Copy row export" />
+                  <th className="w-[40px]">
+                    <span
+                      className="inline-flex items-center justify-center opacity-45"
+                      title="Copy a row as JSON, Markdown, or CSV"
+                      aria-label="Row export"
+                    >
+                      <DotsThreeOutline size={13} weight="duotone" aria-hidden />
+                    </span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
