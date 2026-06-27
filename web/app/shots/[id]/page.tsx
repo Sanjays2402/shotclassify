@@ -36,6 +36,7 @@ import {
   allExpanded,
   collapseAll,
   expandAll,
+  foldedCountLabel,
   railChordAction,
   type DetailRailState,
   type DetailRailSlot,
@@ -382,6 +383,23 @@ export default function ShotDetail({
               folded it invites "Expand all", otherwise "Collapse all". */}
           {mounted && (
             <div className="flex items-center justify-end gap-1.5 -mb-2">
+              {/* Partial-fold count badge (F111) -- a faint "(N folded)" when
+                  some-but-not-all sections are collapsed, so the in-between
+                  state is legible at a glance. The helper returns null at zero
+                  and when everything is folded (the Expand-all label covers
+                  that), so it only shows for the genuinely partial state. */}
+              {(() => {
+                const folded = foldedCountLabel(rail);
+                return folded ? (
+                  <span
+                    className="num text-[10px] opacity-40 mr-auto"
+                    aria-hidden
+                    title="Sections currently collapsed"
+                  >
+                    ({folded})
+                  </span>
+                ) : null;
+              })()}
               {/* Reset to defaults (F105) -- clears the persisted folds so the
                   rail behaves like a first visit. Only shown when something is
                   actually folded, so it never adds inert chrome. Sits before

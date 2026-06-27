@@ -11,6 +11,8 @@ import {
   allExpanded,
   collapseAll,
   expandAll,
+  collapsedCount,
+  foldedCountLabel,
   sectionToggleHint,
   railChordAction,
   readDetailRail,
@@ -303,4 +305,44 @@ test("clearDetailRail: a throwing storage is swallowed", () => {
   } finally {
     delete g.window;
   }
+});
+
+test("collapsedCount: counts collapsed known slots", () => {
+  assert.equal(collapsedCount(new Set()), 0);
+  assert.equal(collapsedCount(new Set<DetailRailSlot>(["ocr"])), 1);
+  assert.equal(
+    collapsedCount(new Set<DetailRailSlot>(["ocr", "tags", "frame"])),
+    3,
+  );
+  assert.equal(collapsedCount(collapseAll()), DETAIL_RAIL_SLOTS.length);
+});
+
+test("collapsedCount: a stray non-slot entry never inflates the count", () => {
+  // Only known slots are tallied, so a corrupt blob can't push past the real
+  // section count.
+  const dirty = new Set<DetailRailSlot>(["ocr"]);
+  (dirty as Set<string>).add("bogus");
+  assert.equal(collapsedCount(dirty), 1);
+});
+
+test("foldedCountLabel: null at the extremes, label in between", () => {
+  // Nothing folded -> null (no inert noise).
+  assert.equal(foldedCountLabel(expandAll()), null);
+  // Everything folded -> null (the Expand-all button already says so).
+  assert.equal(foldedCountLabel(collapseAll()), null);
+  // Partial -> the count.
+  assert.equal(foldedCountLabel(new Set<DetailRailSlot>(["ocr"])), "1 folded");
+  assert.equal(
+    foldedCountLabel(new Set<DetailRailSlot>(["ocr", "tags"])),
+    "2 folded",
+  );
+});
+
+test("foldedCountLabel: reads the same adjective at any partial count", () => {
+  // "folded" is an adjective, not a noun, so no singular/plural inflection.
+  assert.match(foldedCountLabel(new Set<DetailRailSlot>(["ocr"]))!, /^1 folded$/);
+  assert.match(
+    foldedCountLabel(new Set<DetailRailSlot>(["ocr", "tags", "frame"]))!,
+    /^3 folded$/,
+  );
 });

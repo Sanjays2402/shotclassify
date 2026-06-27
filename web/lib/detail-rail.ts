@@ -106,6 +106,30 @@ export function expandAll(): DetailRailState {
   return new Set();
 }
 
+// How many known sections are currently collapsed (F111). Backs a faint
+// "(N folded)" count badge next to the Expand/Collapse-all control so the
+// partial state -- some sections folded, some not -- is legible at a glance
+// without scanning every section. Counts ONLY known slots so a stale / corrupt
+// entry can't inflate the badge past the real section count.
+export function collapsedCount(state: DetailRailState): number {
+  return DETAIL_RAIL_SLOTS.reduce(
+    (n, slot) => (state.has(slot) ? n + 1 : n),
+    0,
+  );
+}
+
+// The "(N folded)" badge label, or null when the count isn't worth showing.
+// Returns null at zero (nothing folded -> no inert noise) AND when everything
+// is folded (the Expand-all button already says so -- the badge is only useful
+// for the in-between, partially-folded state). "folded" is an adjective so it
+// reads the same at any count ("1 folded" / "3 folded").
+export function foldedCountLabel(state: DetailRailState): string | null {
+  const n = collapsedCount(state);
+  if (n <= 0) return null;
+  if (n >= DETAIL_RAIL_SLOTS.length) return null;
+  return `${n} folded`;
+}
+
 // --- Per-section header affordance (F96) ---------------------------------
 // Each foldable rail section's header is a toggle, but it only carried an
 // aria-expanded -- screen-reader + hover users got no verb. This pure helper
