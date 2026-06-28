@@ -27,6 +27,7 @@ import {
   keyStatusLabel,
   keyStatusHint,
 } from "@/lib/key-activity";
+import { validateKeyName } from "@/lib/key-name";
 
 type KeyRow = {
   id: string;
@@ -95,6 +96,14 @@ export default function KeysPage() {
     load();
   }, [load]);
 
+  // Inline name validation (F132). Existing names drive the duplicate check;
+  // `nameTouched` keeps a pristine empty field from showing a red error before
+  // the user has typed anything, while still gating the Generate button.
+  const [nameTouched, setNameTouched] = useState(false);
+  const existingNames = (keys ?? []).map((k) => k.name);
+  const nameValidation = validateKeyName(newName, existingNames);
+  const showNameError = nameTouched && !nameValidation.ok && newName.length > 0;
+
   const onCreate = useCallback(async () => {
     setCreating(true);
     setErr(null);
@@ -103,7 +112,7 @@ export default function KeysPage() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          name: newName,
+          name: nameValidation.normalized || newName,
           workspace_id: newWorkspace.trim() || undefined,
           scopes: scopesForSelection(newScope),
         }),
@@ -235,12 +244,27 @@ export default function KeysPage() {
               placeholder="e.g. local dev, ci, production"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
+              onBlur={() => setNameTouched(true)}
               maxLength={80}
+              aria-invalid={showNameError}
+              aria-describedby={showNameError ? "key-name-error" : undefined}
               className="w-full rounded-md border px-3 py-2 text-[13px] bg-white outline-none focus:ring-2"
               style={{
-                borderColor: "var(--color-rule)",
+                borderColor: showNameError
+                  ? "var(--color-conf-low)"
+                  : "var(--color-rule)",
               }}
             />
+            {showNameError && (
+              <p
+                id="key-name-error"
+                className="mt-1 text-[11px] flex items-center gap-1"
+                style={{ color: "var(--color-conf-low)" }}
+              >
+                <Warning size={11} weight="duotone" />
+                {nameValidation.message}
+              </p>
+            )}
           </div>
           <div className="min-w-[180px]">
             <label htmlFor="key-workspace" className="eyebrow block mb-1">
@@ -295,8 +319,15 @@ export default function KeysPage() {
           <button
             type="button"
             onClick={onCreate}
-            disabled={creating}
-            className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-[13px] font-medium bg-white hover:bg-[color:var(--color-chalk)] disabled:opacity-50"
+            disabled={creating || !nameValidation.ok}
+            title={
+              !nameValidation.ok && newName.length > 0
+                ? nameValidation.message
+                : !nameValidation.ok
+                  ? "Name the key first"
+                  : "Generate a new API key"
+            }
+            className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-[13px] font-medium bg-white hover:bg-[color:var(--color-chalk)] disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ borderColor: "var(--color-rule)" }}
           >
             <Plus size={14} weight="duotone" />
