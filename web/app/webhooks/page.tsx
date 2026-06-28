@@ -13,6 +13,11 @@ import {
   writeDeliveryFilterToUrl,
 } from "@/lib/webhook-delivery-url";
 import {
+  isRadioNavKey,
+  radioNavIndex,
+  radioTabbableIndex,
+} from "@/lib/radio-group";
+import {
   filterDeliveries,
   distinctDeliveryEvents,
   distinctEventCountLabel,
@@ -321,6 +326,24 @@ export default function WebhooksPage() {
   const toggleStatusFilter = useCallback((status: string) => {
     setStatusFilter((cur) => (cur === status ? "all" : status));
   }, []);
+
+  // Status legend as a true ARIA radio-group (F128): Arrow keys move the
+  // selection AND focus between swatches, only the active one is tabbable
+  // (roving tabindex). The math lives in lib/radio-group; here we map the
+  // active filter to an index, step it, then commit + move DOM focus.
+  const statusRadioRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const onStatusRadioKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!isRadioNavKey(e.key)) return;
+      e.preventDefault();
+      const idx = statusCounts.findIndex((s) => s.status === statusFilter);
+      const next = radioNavIndex(idx, statusCounts.length, e.key);
+      if (next == null) return;
+      setStatusFilter(statusCounts[next].status);
+      statusRadioRefs.current[next]?.focus();
+    },
+    [statusCounts, statusFilter],
+  );
 
   // The delivery log narrowed by the active status + event filter (F92).
   const filteredDeliveries = useMemo(
@@ -740,19 +763,31 @@ export default function WebhooksPage() {
         {deliveries.length > 0 && (
           <div
             className="flex flex-wrap items-center gap-2 mb-2"
-            role="group"
+            role="radiogroup"
             aria-label="Filter deliveries by status"
+            onKeyDown={onStatusRadioKeyDown}
           >
-            {statusCounts.map(({ status, label, count }) => {
+            {statusCounts.map(({ status, label, count }, i) => {
               const active = statusFilter === status;
               const color = STATUS_SWATCH[status] ?? "var(--color-ink)";
               const a11y = statusSwatchAria(label, count, active);
+              // Roving tabindex: the selected swatch is the single tab stop;
+              // with no status selected the first swatch is reachable (F128).
+              const selectedIdx = statusCounts.findIndex(
+                (s) => s.status === statusFilter,
+              );
+              const tabbable = radioTabbableIndex(selectedIdx, statusCounts.length);
               return (
                 <button
                   key={status}
+                  ref={(el) => {
+                    statusRadioRefs.current[i] = el;
+                  }}
                   type="button"
+                  role="radio"
                   onClick={() => toggleStatusFilter(status)}
-                  aria-pressed={active}
+                  aria-checked={active}
+                  tabIndex={i === tabbable ? 0 : -1}
                   aria-label={a11y.ariaLabel}
                   title={a11y.title}
                   className="inline-flex items-center gap-1.5 rounded-sm border px-2 py-[3px] text-[11px] transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-cue)] focus-visible:ring-offset-1"
