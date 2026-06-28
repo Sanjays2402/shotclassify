@@ -46,6 +46,13 @@ import {
   nextOnTrigger,
   type KeyConfirmPending,
 } from "@/lib/key-confirm";
+import {
+  distinctWorkspaces,
+  hasMultipleWorkspaces,
+  filterByWorkspace,
+  workspaceChipLabel,
+  DEFAULT_WORKSPACE,
+} from "@/lib/key-workspace";
 
 type KeyRow = {
   id: string;
@@ -129,6 +136,9 @@ export default function KeysPage() {
   // Inline two-step destructive confirmation (F136) replaces browser confirm().
   // One row at a time can be armed; the second click on the same Confirm fires.
   const [pendingConfirm, setPendingConfirm] = useState<KeyConfirmPending>(null);
+  // Workspace filter (F137): multi-tenant installs interleave keys from many
+  // workspaces; this narrows the list to one. null = all. Chip-driven.
+  const [wsFilter, setWsFilter] = useState<string | null>(null);
   // Which language the code snippets render in (F134). One toggle drives both
   // the revealed-key "Sample request" block and the always-on "Using your key"
   // section so they never disagree. Persisted across visits (F135) -- a Python
@@ -289,6 +299,14 @@ export default function KeysPage() {
   // language so curl / Python / JavaScript stay in lockstep.
   const sampleSnippet = buildSnippet(snippetLang, origin, revealed?.plaintext ?? null);
   const exampleSnippet = buildSnippet(snippetLang, origin, null);
+
+  // Workspace grouping (F137): on a multi-tenant install, show a chip row to
+  // narrow the table to one workspace; visible keys feed the table while the
+  // summary chips above keep counting the whole fleet.
+  const allKeys = keys ?? [];
+  const showWorkspaceFilter = hasMultipleWorkspaces(allKeys);
+  const workspaceCounts = distinctWorkspaces(allKeys);
+  const visibleKeys = filterByWorkspace(allKeys, wsFilter);
 
   return (
     <div className="space-y-8">
@@ -539,6 +557,48 @@ export default function KeysPage() {
           )}
         </div>
 
+        {showWorkspaceFilter && (
+          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by workspace">
+            <button
+              type="button"
+              onClick={() => setWsFilter(null)}
+              aria-pressed={wsFilter === null}
+              className="inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-mono"
+              style={{
+                borderColor: "var(--color-rule)",
+                background: wsFilter === null ? "var(--color-felt)" : "var(--color-chalk)",
+                color: wsFilter === null ? "var(--color-chalk)" : "var(--color-ink-mute)",
+              }}
+            >
+              All ({allKeys.length})
+            </button>
+            {workspaceCounts.map((w) => {
+              const active = wsFilter === w.workspace;
+              return (
+                <button
+                  key={w.workspace}
+                  type="button"
+                  onClick={() => setWsFilter(active ? null : w.workspace)}
+                  aria-pressed={active}
+                  className="inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-mono"
+                  style={{
+                    borderColor: "var(--color-rule)",
+                    background: active ? "var(--color-felt)" : "var(--color-chalk)",
+                    color: active ? "var(--color-chalk)" : "var(--color-ink-mute)",
+                  }}
+                  title={
+                    w.workspace === DEFAULT_WORKSPACE
+                      ? "Keys not bound to a named workspace"
+                      : `Show only ${workspaceChipLabel(w.workspace)}`
+                  }
+                >
+                  {workspaceChipLabel(w.workspace)} ({w.count})
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {keys === null ? (
           <div className="space-y-2" aria-busy="true">
             {[0, 1, 2].map((i) => (
@@ -584,7 +644,7 @@ export default function KeysPage() {
                 </tr>
               </thead>
               <tbody>
-                {keys.map((k) => (
+                {visibleKeys.map((k) => (
                   <tr
                     key={k.id}
                     className="border-t"
