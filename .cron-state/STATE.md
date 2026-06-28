@@ -460,17 +460,51 @@ F131. [x] Web: glanceable last-used time + stale-key status on the keys list -- 
 F132. [x] Web: inline name validation on the API-key create form -- shipped tick 44. The name field had no feedback (blank silently became "Untitled key", dupes accepted, 80-char cap unexplained). New pure lib/key-name validateKeyName returns ok/normalized/kind/message for empty, too-long, and case-insensitive duplicate, mirroring the server trim/slice(0,80). The form shows an inline error after touch, submits the trimmed value, and gates the Generate button. 9 tests. (7a37442)
 F133. [x] Web: fleet summary chips on the keys list header -- shipped tick 44. The header showed a bare "N keys". New pure lib/key-summary summarizeKeys reduces the list into total/active/idle/unused/totalCalls using the SAME keyUsageStatus buckets as the per-row pills (F131); keysSummaryChips shows total + calls always, and idle (warn) / never-used (mute) chips only when non-zero so a healthy fleet stays quiet. 10 tests. (45ca237)
 F134. [x] Web: multi-language code snippets on the keys page -- shipped tick 44. Both the revealed-key sample and the always-on "Using your key" section were curl-only. New pure lib/key-snippet buildSnippet emits the POST /v1/classify request in curl / Python (requests) / JavaScript (FormData fetch) with origin normalisation + a placeholder when no plaintext key is present; a shared LangToggle drives both blocks from one selection, and the revealed sample gains a Copy button. 9 tests. (8feaf4d)
-F135. [ ] Web: persist the /keys snippet-language choice (F134) to localStorage -- a Python shop reopening /keys should land on Python, not curl. Pure parse/serialize/read/write mirroring lib/stats-window; page reads on mount + writes on toggle. Small + non-duplicate.
-F136. [ ] Web: replace the /keys rotate + revoke confirm() dialogs with an in-app confirmation affordance -- the destructive actions use the browser confirm(), which is jarring and unstyled. Use a small inline "Are you sure? Confirm / Cancel" two-step on the row (reuse the chalk-surface + felt pattern) so the flow matches the app. Component-level + a pure two-step state helper.
-F137. [ ] Web: /keys workspace-grouping or a workspace filter chip -- keys from different workspaces are interleaved in one flat table. Group by workspace (or a removable workspace filter chip reusing the FilterBreadcrumb pattern) so a multi-tenant install reads clearly. Pure grouping helper + tests.
-F138. [ ] Web: keyboard-driven filter-chip Tab order on `/shots` (the long-open F20/F75/F87/F99/F121 -- still the ONE real item behind that stale-duplicate chain) -- Tab cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box. Pure tabIndex ordering helper + a roving-focus hook; test the order helper.
-F139. [ ] Web: /keys empty-state uses the canonical `<EmptyState>` -- the "No keys yet" panel is bespoke markup; consolidate onto EmptyState (Key icon-well, "Generate one above" cue) now that the component exists, matching the F98/F108 consolidation theme. Component-level, no new lib.
+F135. [x] Web: persist the /keys snippet-language choice -- shipped tick 45. New pure lib/key-snippet-pref mirrors lib/stats-window (storage key + default + no-throw read/write, delegating validation to parseSnippetLang). Page reads saved lang after mount (SSR default avoids hydration mismatch); write-through setter persists every toggle. 10 tests. (bd48c6f)
+F136. [x] Web: replace the /keys rotate + revoke confirm() with inline two-step -- shipped tick 45. New pure lib/key-confirm (action,id) state machine: armConfirm/isArmed/rowIsArmed/confirmLabel/confirmPrompt/nextOnTrigger; first click arms the row (named-consequence prompt + red Confirm + Cancel), second click on same Confirm fires; switching row/action re-arms not fires. Mutations unchanged. 10 tests. (a7e1598)
+F137. [x] Web: /keys workspace filter chips -- shipped tick 45. New pure lib/key-workspace buckets by workspace (blank/unset/"default" collapse to one), counts, validates a selection, narrows the list; chip row (All + per-ws counts) shows only when >=2 workspaces, summary chips keep counting whole fleet. 8 tests. (8d060d4)
+F138. [x] Web: keyboard filter-chip Tab order on /shots -- shipped tick 45, closes F20/F75/F87/F99/F121. New pure lib/filter-order names canonical order class->search->pageSize->sort->tag->from->to->minConf->pinned, maps each to roving positive tabIndex (10+); aria-labels + tabIndex wired onto all 9 controls. 9 tests. (acd349e)
+F139. [x] Web: /keys empty-state uses canonical EmptyState -- shipped tick 45. Bespoke "No keys yet" panel replaced by <EmptyState> (Key icon-well, API access eyebrow, "Generate one above" cue). Component-level, no new lib. (0b5b48f)
+
+### Frontend backlog refill (tick 45 -- F140-F154, frontend-override still active)
+The /keys arc (F130-F139) is fully closed. Next themes: /keys/[id] detail
+page polish, /stats data-viz, and cross-page keyboard/empty-state consistency.
+F140. [ ] Web: /keys/[id] detail page activity sparkline -- the per-key activity endpoint exists (/api/keys/[id]/activity); render a tiny inline usage-over-time sparkline on the detail page reusing the chart-theme tokens. Pure series-bucketing helper + tests.
+F141. [ ] Web: /keys/[id] snippet block reuses buildSnippet + LangToggle (F134/F135) -- the detail page likely has its own curl-only sample; share the lib + persisted lang so it stays in lockstep with /keys. Component-level.
+F142. [ ] Web: /stats per-hour mean-confidence backend slice (the one sanctioned backend touch, F125) -- add mean-conf to /api/aggregate hourly + TS type; THEN the long-tracked sparkline becomes honest. Minimal FastAPI + matching client type.
+F143. [ ] Web: /keys detail "rotate/revoke" reuse the F136 two-step confirm -- the [id] page still uses confirm(); reuse lib/key-confirm so destructive actions match across the keys surfaces. Component-level.
+F144. [ ] Web: /keys fleet-summary chips clickable -> filter by status (idle/never-used) -- F133 chips are static; make idle/unused chips narrow the table to those keys (reuse keyUsageStatus buckets). Pure predicate + tests.
+F145. [ ] Web: /shots filter toolbar "Esc clears focus / collapses" keyboard nicety -- pressing Esc in any filter control blurs to the list. Pure key predicate + thin wiring.
+F146. [ ] Web: /stats KPI cards skeleton-loading state -- the 4 cards pop in; add a chalk skeleton matching their footprint. Component-level.
+F147. [ ] Web: /webhooks deliveries row "retry" affordance polish (inline spinner + toast). Component-level.
+F148. [ ] Web: /keys empty-state primary CTA scrolls to + focuses the create form. Pure scroll/focus helper.
+F149. [ ] Web: /notifications bulk "mark all read" confirm reuse two-step pattern. Pure helper reuse.
+F150. [ ] Web: /shots grid card keyboard focus ring + Enter-opens parity with table rows. Pure key helper.
+F151. [ ] Web: /stats window selector persists like F135 (already F44 done?) verify + dedupe. Audit-only.
+F152. [ ] Web: /keys "calls" column mini bar vs fleet max. Pure ratio helper + tests.
+F153. [ ] Web: /digest empty -> "run demo" CTA parity. Component-level.
+F154. [ ] Web: cross-page consistent date-format helper extraction. Pure lib + tests.
 
 
 
 
 
 ## Tick log
+- 2026-06-28 15:32 PT (tick 45, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  THEME: complete the /keys polish arc (F135-F139) + close the long-open /shots
+  keyboard filter-chip Tab order. All pure-frontend, ZERO backend.
+  - bd48c6f feat(web): persist the /keys snippet-language choice (F135)
+  - a7e1598 feat(web): inline two-step confirm for /keys rotate + revoke (F136)
+  - 8d060d4 feat(web): workspace filter chips on the /keys list (F137)
+  - acd349e feat(web): keyboard-driven filter-chip Tab order on /shots (F138)
+  - 0b5b48f feat(web): /keys empty-state uses the canonical EmptyState (F139)
+  - Gate (ONCE): tsc --noEmit clean; tsx --test --test-force-exit lib/*.test.mts
+    752 pass / 0 fail (715 baseline tick 44 + 37 new: F135=10, F136=10, F137=8,
+    F138=9; F139 component-only no new lib); next build OK ~8s, /keys + /shots
+    still STATIC. ZERO Python touched (git diff --stat -- '*.py' empty) so pytest
+    baseline cannot regress. F138 closes the F20/F75/F87/F99/F121 stale chain.
+  - ~536 pre-existing repo-wide Python ruff errors (version drift) still flagged
+    for Sanjay; untouched, out of scope for the frontend override.
 - 2026-06-28 06:1x PT (tick 44, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   THEME: polish the /keys (API access) page -- the least-polished primary
   surface -- to Linear/Vercel quality. All pure-frontend, ZERO backend.
