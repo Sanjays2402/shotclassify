@@ -42,6 +42,7 @@ import { shotRowToExportInput, type ShotExportInput } from "@/lib/shot-export";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
 import { filterCountLabel, type FilterKey } from "@/lib/filter-summary";
+import { filterTabIndex } from "@/lib/filter-order";
 import {
   parseViewMode,
   nextViewMode,
@@ -726,6 +727,7 @@ function ShotsPageInner() {
           value={cat}
           onChange={(e) => setCat(e.target.value as any)}
           aria-label="Filter by class"
+          tabIndex={filterTabIndex("class")}
         >
           <option value="">All classes</option>
           {CATEGORIES.map((c) => (
@@ -741,6 +743,8 @@ function ShotsPageInner() {
           placeholder="Search OCR text or filename"
           value={q}
           onChange={(e) => setQ(e.target.value)}
+          aria-label="Search OCR text or filename"
+          tabIndex={filterTabIndex("search")}
         />
 
         <select
@@ -749,6 +753,7 @@ function ShotsPageInner() {
           value={limit}
           onChange={(e) => setLimitPersist(Number(e.target.value) as ShotsPageSize)}
           aria-label="Page size"
+          tabIndex={filterTabIndex("pageSize")}
         >
           {SHOTS_PAGE_SIZES.map((n) => (
             <option key={n} value={n}>
@@ -763,6 +768,7 @@ function ShotsPageInner() {
           value={sort}
           onChange={(e) => setSort(e.target.value as any)}
           aria-label="Sort"
+          tabIndex={filterTabIndex("sort")}
         >
           <option value="new">Newest first</option>
           <option value="old">Oldest first</option>
@@ -781,6 +787,7 @@ function ShotsPageInner() {
             maxLength={32}
             onChange={(e) => setTag(e.target.value)}
             aria-label="Filter by tag"
+            tabIndex={filterTabIndex("tag")}
           />
         </label>
 
@@ -793,6 +800,7 @@ function ShotsPageInner() {
             value={since}
             onChange={(e) => setSince(e.target.value)}
             aria-label="Filter from date"
+            tabIndex={filterTabIndex("from")}
           />
         </label>
 
@@ -805,6 +813,7 @@ function ShotsPageInner() {
             value={until}
             onChange={(e) => setUntil(e.target.value)}
             aria-label="Filter to date"
+            tabIndex={filterTabIndex("to")}
           />
         </label>
 
@@ -818,6 +827,7 @@ function ShotsPageInner() {
             value={minConfPct}
             onChange={(e) => setMinConfPct(Number(e.target.value))}
             aria-label="Minimum confidence"
+            tabIndex={filterTabIndex("minConf")}
           />
           <span className="num text-[11px] w-[34px] text-right">{minConfPct}%</span>
         </label>
@@ -828,6 +838,7 @@ function ShotsPageInner() {
           aria-pressed={pinnedOnly}
           onClick={() => setPinnedOnly((v) => !v)}
           title={pinnedOnly ? "Show every shot" : "Show only pinned shots"}
+          tabIndex={filterTabIndex("pinned")}
           style={pinnedOnly ? { color: "#b45309" } : undefined}
         >
           <Star size={14} weight={pinnedOnly ? "fill" : "duotone"} /> Pinned
