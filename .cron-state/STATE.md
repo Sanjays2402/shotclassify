@@ -24,7 +24,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (221 features tracked, 202 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (222 features tracked, 207 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -440,19 +440,62 @@ F118. [x] Web: keyboard `o` toggles the focused/first row's preview -- shipped t
 F119. [x] Web: "expand/collapse all previews" control on the `/shots` toolbar -- shipped tick 42. New pure lib/preview-expand set-math (expandedOnPageCount / allPreviewsExpanded / anyPreviewsExpanded predicates + expandAllPreviews / collapseAllPreviews immutable transforms + previewToggleAllLabel) -- every transform operates ONLY on visible ids and PRESERVES off-page expanded ids (the Set spans pagination), inputs cleaned of non-string/blank/dupes. Toolbar gains a real-rows-only "Expand all"/"Collapse all" caret button flipping to whichever action does something. 10 tests. (b110e2e)
 F120. [ ] Web: API-key creation modal polish (the open F23/F78) -- replace the inline create cards on `/keys` with a focused modal reusing the chalk-surface + felt-green icon-well pattern; the new key + scopes selection feels intentional. Component-level; reuse existing modal chrome.
 F121. [ ] Web: keyboard-driven filter-chip Tab order on `/shots` (the open F20/F75/F87/F99) -- `Tab` cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box. Pure tabIndex ordering helper + a roving-focus hook; test the order helper.
-F122. [ ] Web: shared `ofTotalLabel` reaches the `/shots` pagination + grid count (F112 follow-on) -- audit the remaining hand-rolled count strings (the "Showing N of M" pagination line, any grid footer) and route them through the new shared helper so every count phrase in the app agrees. Pure wiring + tests for any new call shape.
-F123. [ ] Web: `/webhooks` deliveries "copy as JSON" per-row affordance -- mirror the /shots RowExportMenu on the deliveries table so a single delivery's payload/headers/status can be grabbed for a bug report. New pure delivery->export serializer + tests; reuse the RowExportMenu dropdown shell.
+F122. [x] Web: shared `ofTotalLabel` reaches the `/shots` pagination + grid count -- shipped tick 43. Added rangeOfTotalLabel ("1-50 of 1240", en-dash bounds, clamps each into [1,total] with from<=to, null on empty/non-finite) + countLabel (bare singular/plural "N noun", floors non-finite/negative) to lib/count-label; the shots header now renders rangeOfTotalLabel(...) ?? countLabel(rows.length,"row") so every count phrase agrees. 9 tests (10->19). (ffcac0b)
+F123. [x] Web: `/webhooks` deliveries "copy as JSON" per-row affordance -- shipped tick 43. Mirrors the /shots RowExportMenu on the deliveries table so one delivery (event/status/HTTP/error/signed payload preview) lifts into a bug report. New pure lib/delivery-export (parsePayloadPreview JSON-or-raw, deliveryToExportObject/Json/Markdown, DELIVERY_EXPORT_FORMATS JSON+Markdown only -- no CSV for a multi-line payload) + DeliveryExportMenu reusing roving-index (F114) + clipboard fallback + toast; new trailing Copy column. 13 tests. (71be7b9)
 F124. [x] Web: shot-preview drawer "copy OCR" inline button -- shipped tick 42. New pure `previewOcrFull(rec)` in lib/shot-preview returns the COMPLETE OCR text (nested ocr.text preferred, then flat ocr_text, mirroring previewOcr's slot precedence), outer-trimmed but inner newlines PRESERVED (unlike the truncated, flattened display snippet), null when no real text. A small "Copy" button in the drawer's OCR-transcript header copies it via the shared non-secure-context clipboard fallback (matching RowExportMenu) with toast feedback. 6 tests (14->19). (b2d2297)
 F125. [ ] Web: `/stats` per-hour mean-confidence BACKEND slice (unblocks the 5x-tracked sparkline) -- add a per-hour mean-confidence field to `/api/aggregate` `hourly` (currently count-only) wired straight to a new client field. Minimal FastAPI change + the matching TS type; THEN the F16/F27/F41/F54/F65 sparkline becomes honest. (This is the one allowed backend touch -- a frontend feature truly needs the endpoint.)
-F126. [ ] Web: notifications row dismiss-affordance hint on touch -- a faint "swipe to dismiss" hint on touch viewports for the inbox rows (the dismiss action exists; the affordance is undiscoverable on mobile). Pure viewport/touch predicate + render; respects reduced-motion.
+F126. [x] Web: notifications row dismiss-affordance hint on touch -- shipped tick 43. A faint one-time "Tap the trash to dismiss" note above the inbox list on coarse-pointer (touch) viewports only (mouse users see the icon on hover), with an x to dismiss for good. New pure lib/touch-hint: shouldShowTouchHint (truth table -- coarse AND unseen AND has-rows), isCoarsePointer (SSR-safe no-throw matchMedia probe failing closed), fail-open seen-flag storage mirroring lib/onboarding. Resolved on mount so SSR renders nothing (no hydration mismatch). 10 tests. (067692e)
 F127. [x] Web: `/shots` empty-preview drawer suggests the demo -- shipped tick 42. When an expanded row's preview has no content (previewHasContent === false), the "Nothing captured" line now carries an inline "Run the demo" link (-> /demo) so the dead-end state -- usually a brand-new / sample-data install -- has a next step. Reuses previewHasContent; component-only, no new lib. (8ecba53)
-F128. [ ] Web: status-legend swatches become a true radio-group (F116 follow-on) -- promote the aria-pressed toggle buttons to `role="radiogroup"` + `role="radio"` with roving tabindex (reuse lib/roving-index from F114) so arrow keys move between statuses and only the active one is tabbable. Pure roving wiring + tests.
+F128. [x] Web: status-legend swatches become a true radio-group -- shipped tick 43. Promoted the success/failed/pending aria-pressed toggle buttons to the WAI-ARIA radio-group pattern: role=radiogroup + role=radio with aria-checked, Arrow keys (Left/Up prev, Right/Down next, both wrapping; Home/End to ends) move selection AND focus, roving tabindex makes only the active swatch a tab stop. New pure lib/radio-group (isRadioNavKey, radioNavIndex collapsing the four arrows onto the F114 roving-index directions, radioTabbableIndex with stale-index clamp + empty-group guard). Click-to-clear preserved. 11 tests. (78f84f5)
+F129. [x] Web: glanceable relative time on the `/webhooks` deliveries When column -- shipped tick 43. A faint "3m ago" second line under the absolute timestamp so a burst of recent attempts reads at a glance; absolute stays as the line title. New pure lib/delivery-when (deliveryRelativeLabel parses the ISO + delegates to the F59 relativeTime so the bucket vocabulary matches the palette recent-shots rows; "" on null/blank/unparseable/non-finite-now). A 30s clock tick ages the labels between the 10s data fetches. 7 tests. (13c7c09)
 
 
 
 
 
 ## Tick log
+- 2026-06-27 23:5x PT (tick 43, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  THEME: round out the /webhooks deliveries table (3 slices) + finish two
+  long-tracked consolidation items. All pure-frontend, ZERO backend.
+  - 71be7b9 feat(web): per-row copy-as-JSON/Markdown menu on the webhooks deliveries table (F123)
+  - 78f84f5 feat(web): webhooks status legend becomes a true ARIA radio-group (F128)
+  - 13c7c09 feat(web): glanceable relative time on the webhooks deliveries When column (F129)
+  - ffcac0b feat(web): route the shots header range/count through the shared count-label helper (F122)
+  - 067692e feat(web): one-time touch dismiss-affordance hint on the notifications inbox (F126)
+  - Gate (ONCE, end of batch): tsc --noEmit clean (whole web project) + `npx tsx
+    --test --test-force-exit lib/*.test.mts` 669 passed / 0 failed (619 baseline
+    at tick 42 + net new 50, split: F123=13 NEW lib/delivery-export.test.mts;
+    F128=11 NEW lib/radio-group.test.mts; F129=7 NEW lib/delivery-when.test.mts;
+    F122=9 APPENDED to lib/count-label.test (10->19); F126=10 NEW
+    lib/touch-hint.test.mts; 13+11+7+9+10=50) + `next build` compiled
+    successfully in 6.1s -- /shots STILL prerenders STATIC, /webhooks STILL
+    STATIC (the DeliveryExportMenu + radio-group + relative-time are all client
+    components / pure render -- no new fetch forced either route dynamic),
+    /shots/[id] dynamic as expected. ZERO Python touched (git diff --stat
+    ccf3a94 HEAD -- '*.py' is empty) so the pytest baseline cannot regress. Used
+    --test-force-exit for the clean glob exit (documented gotcha). The ONE test
+    addition to a pre-existing *.test.mts (count-label) was done by `patch`
+    (append), never write_file; the four brand-new test files used write_file.
+  - Design arc: F123/F128/F129 all land on the /webhooks deliveries table -- a
+    per-row export menu (mirroring the /shots RowExportMenu so the two list
+    surfaces feel identical), the status legend upgraded to a real keyboard-
+    navigable radio-group, and a glanceable relative-time column. F122 closed
+    the last hand-rolled count string in the app (shots header range/fallback ->
+    shared count-label). F126 added the touch dismiss hint on /notifications.
+    Reused existing infra heavily: roving-index (F114) backs both the new
+    delivery menu AND the radio-group math; relativeTime (F59) backs the new
+    When column; count-label (F112) grew two siblings.
+  - Frontend backlog: F122/F123/F126/F128 marked done; F129 added + marked done.
+    Remaining fresh-ish open items: F120/F121 (API-key modal, keyboard filter-
+    chip Tab order -- the latter still the one real item behind the
+    F20/F75/F87/F99 stale-duplicate chain), F125 (the one allowed backend touch:
+    per-hour mean-conf that unblocks the 5x-tracked /stats sparkline). Plus ~36
+    older stale-duplicate items. Well above the < 5 refill threshold, so NO
+    refill this tick.
+  - NOTE (carried from tick 35-42, still true): repo-wide `ruff check` reports
+    ~536 PRE-EXISTING Python lint errors from ruff-version drift. My batch
+    touched ZERO Python. Still flagged for Sanjay; needs a separate
+    `ruff check --fix` + pin bump, out of scope for the frontend override.
 - 2026-06-27 19:1x PT (tick 42, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   THEME: round out the F84 row-preview-drawer arc -- five follow-ons that all
   build on the drawer shipped tick 41, all pure-frontend, ZERO backend.
