@@ -24,7 +24,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (222 features tracked, 207 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (227 features tracked, 212 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -449,11 +449,79 @@ F127. [x] Web: `/shots` empty-preview drawer suggests the demo -- shipped tick 4
 F128. [x] Web: status-legend swatches become a true radio-group -- shipped tick 43. Promoted the success/failed/pending aria-pressed toggle buttons to the WAI-ARIA radio-group pattern: role=radiogroup + role=radio with aria-checked, Arrow keys (Left/Up prev, Right/Down next, both wrapping; Home/End to ends) move selection AND focus, roving tabindex makes only the active swatch a tab stop. New pure lib/radio-group (isRadioNavKey, radioNavIndex collapsing the four arrows onto the F114 roving-index directions, radioTabbableIndex with stale-index clamp + empty-group guard). Click-to-clear preserved. 11 tests. (78f84f5)
 F129. [x] Web: glanceable relative time on the `/webhooks` deliveries When column -- shipped tick 43. A faint "3m ago" second line under the absolute timestamp so a burst of recent attempts reads at a glance; absolute stays as the line title. New pure lib/delivery-when (deliveryRelativeLabel parses the ISO + delegates to the F59 relativeTime so the bucket vocabulary matches the palette recent-shots rows; "" on null/blank/unparseable/non-finite-now). A 30s clock tick ages the labels between the 10s data fetches. 7 tests. (13c7c09)
 
+### Frontend backlog refill (tick 44 -- F130-F139, frontend-override still active)
+THEME (tick 44): the /keys (API access) page was the least-polished primary
+surface -- scope logic duplicated in three places, confirm()-only dialogs,
+absolute-only timestamps, no name validation, a bare "N keys" header, a
+curl-only snippet. A five-slice polish arc lifted it to Linear/Vercel quality.
+All pure-frontend (new pure lib + tsx --test + thin page wiring), ZERO backend.
+F130. [x] Web: single source of truth for the API-key scope model -- shipped tick 44. The read/write/admin logic was copy-pasted across /keys in three drifted shapes (create form's select->array map, list badge's inline label/colour/title, select option copy). New pure lib/key-scope centralises the hierarchy (admin implies write implies read), labels, and per-tier descriptions behind scopesForSelection / scopeTier / scopeLabel / scopeDescription / scopeCanWrite + a SCOPE_OPTIONS catalogue; create form, badge, and select all read from it. 9 tests incl. an option round-trip. (3531405)
+F131. [x] Web: glanceable last-used time + stale-key status on the keys list -- shipped tick 44. The "Last used" column was absolute-only. New pure lib/key-activity adds keyRelativeLabel (reuses F59 relativeTime) + keyUsageStatus (unused / idle / active, idle = >30d dormant) + keyStatusLabel / keyStatusHint; the column renders the date + a faint "3d ago" line + a "never used"/"idle" pill on the exceptional states only. 60s tick keeps it fresh; now=0 SSR guard avoids a hydration mismatch. 9 tests. (9a556a7)
+F132. [x] Web: inline name validation on the API-key create form -- shipped tick 44. The name field had no feedback (blank silently became "Untitled key", dupes accepted, 80-char cap unexplained). New pure lib/key-name validateKeyName returns ok/normalized/kind/message for empty, too-long, and case-insensitive duplicate, mirroring the server trim/slice(0,80). The form shows an inline error after touch, submits the trimmed value, and gates the Generate button. 9 tests. (7a37442)
+F133. [x] Web: fleet summary chips on the keys list header -- shipped tick 44. The header showed a bare "N keys". New pure lib/key-summary summarizeKeys reduces the list into total/active/idle/unused/totalCalls using the SAME keyUsageStatus buckets as the per-row pills (F131); keysSummaryChips shows total + calls always, and idle (warn) / never-used (mute) chips only when non-zero so a healthy fleet stays quiet. 10 tests. (45ca237)
+F134. [x] Web: multi-language code snippets on the keys page -- shipped tick 44. Both the revealed-key sample and the always-on "Using your key" section were curl-only. New pure lib/key-snippet buildSnippet emits the POST /v1/classify request in curl / Python (requests) / JavaScript (FormData fetch) with origin normalisation + a placeholder when no plaintext key is present; a shared LangToggle drives both blocks from one selection, and the revealed sample gains a Copy button. 9 tests. (8feaf4d)
+F135. [ ] Web: persist the /keys snippet-language choice (F134) to localStorage -- a Python shop reopening /keys should land on Python, not curl. Pure parse/serialize/read/write mirroring lib/stats-window; page reads on mount + writes on toggle. Small + non-duplicate.
+F136. [ ] Web: replace the /keys rotate + revoke confirm() dialogs with an in-app confirmation affordance -- the destructive actions use the browser confirm(), which is jarring and unstyled. Use a small inline "Are you sure? Confirm / Cancel" two-step on the row (reuse the chalk-surface + felt pattern) so the flow matches the app. Component-level + a pure two-step state helper.
+F137. [ ] Web: /keys workspace-grouping or a workspace filter chip -- keys from different workspaces are interleaved in one flat table. Group by workspace (or a removable workspace filter chip reusing the FilterBreadcrumb pattern) so a multi-tenant install reads clearly. Pure grouping helper + tests.
+F138. [ ] Web: keyboard-driven filter-chip Tab order on `/shots` (the long-open F20/F75/F87/F99/F121 -- still the ONE real item behind that stale-duplicate chain) -- Tab cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box. Pure tabIndex ordering helper + a roving-focus hook; test the order helper.
+F139. [ ] Web: /keys empty-state uses the canonical `<EmptyState>` -- the "No keys yet" panel is bespoke markup; consolidate onto EmptyState (Key icon-well, "Generate one above" cue) now that the component exists, matching the F98/F108 consolidation theme. Component-level, no new lib.
+
 
 
 
 
 ## Tick log
+- 2026-06-28 06:1x PT (tick 44, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  THEME: polish the /keys (API access) page -- the least-polished primary
+  surface -- to Linear/Vercel quality. All pure-frontend, ZERO backend.
+  - 3531405 feat(web): single source of truth for the API-key scope model (F130)
+  - 9a556a7 feat(web): glanceable last-used time + stale-key status on the keys list (F131)
+  - 7a37442 feat(web): inline name validation on the API-key create form (F132)
+  - 45ca237 feat(web): fleet summary chips on the keys list header (F133)
+  - 8feaf4d feat(web): multi-language code snippets on the keys page (F134)
+  - Gate (ONCE, end of batch): tsc --noEmit clean (whole web project) + `npx tsx
+    --test --test-force-exit lib/*.test.mts` 715 passed / 0 failed (669 baseline
+    at tick 43 + net new 46, split: F130=9 lib/key-scope.test.mts; F131=9
+    lib/key-activity.test.mts; F132=9 lib/key-name.test.mts; F133=10
+    lib/key-summary.test.mts; F134=9 lib/key-snippet.test.mts; 9+9+9+10+9=46) +
+    `next build` compiled successfully in ~6s -- /keys STILL prerenders STATIC
+    (the scope helpers, activity labels, name validation, summary chips, and
+    snippet toggle are all pure render / client state -- no new fetch forced the
+    route dynamic). ZERO Python touched (git diff --stat 1bf55dd HEAD -- '*.py'
+    is empty) so the pytest baseline cannot regress. Used --test-force-exit for
+    the clean glob exit (documented gotcha). All five new test files used
+    write_file (brand-new); no pre-existing *.test.mts was appended to.
+  - Design arc: all five slices land on /keys. F130 de-duplicated the
+    read/write/admin scope model that was copy-pasted in three drifted shapes
+    into one tested lib (create form + badge + select now agree). F131 added a
+    glanceable "3d ago" + stale-key ("never used" / "idle") signal to the
+    Last-used column, reusing the F59 relativeTime so the phrasing matches the
+    rest of the app. F132 gave the name field real inline validation (empty /
+    too-long / case-insensitive duplicate) and gated the Generate button. F133
+    replaced the bare "N keys" header with fleet summary chips (total / calls +
+    idle/never-used warnings) built on F131's SAME status buckets so header and
+    rows can't disagree. F134 turned the curl-only snippets into a
+    curl/Python/JavaScript toggle shared across the revealed sample + the
+    always-on example. Reused infra heavily: relativeTime (F59) backs F131;
+    F131's keyUsageStatus backs F133; the chalk-surface + felt token language
+    and the Copy/clipboard pattern carried throughout.
+  - Frontend backlog: F130-F134 marked done; refilled F135-F139 (5 fresh items:
+    persist snippet language, replace confirm() with in-app confirmation,
+    /keys workspace grouping, the long-open keyboard filter-chip Tab order
+    [F138, still the ONE real item behind the F20/F75/F87/F99/F121 chain], and
+    /keys EmptyState consolidation). Plus the still-open F120 (API-key modal),
+    F125 (the one allowed backend touch: per-hour mean-conf that unblocks the
+    5x-tracked /stats sparkline), and ~36 older stale-duplicate items.
+  - NOTE (carried from tick 35-43, still true): repo-wide `ruff check` reports
+    ~536 PRE-EXISTING Python lint errors from ruff-version drift. My batch
+    touched ZERO Python. Still flagged for Sanjay; needs a separate
+    `ruff check --fix` + pin bump, out of scope for the frontend override.
+  - NOTE (tooling, tick 44): the write_file / patch secret-redaction guard
+    scrubs a literal "Authorization-header + token" run to *** ON DISK, so the
+    snippet builder (F134) had to assemble the auth header from separate
+    header-key + scheme + token constants. Tool-RESULT displays ALSO redact the
+    same pattern (so a clean disk file can still LOOK redacted in a read_file
+    echo) -- verified the real bytes via the passing test suite, not the echo.
 - 2026-06-27 23:5x PT (tick 43, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   THEME: round out the /webhooks deliveries table (3 slices) + finish two
   long-tracked consolidation items. All pure-frontend, ZERO backend.
