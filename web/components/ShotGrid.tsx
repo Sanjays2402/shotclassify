@@ -8,10 +8,11 @@
 // data + state; this component is a pure presenter over the same Row shape.
 
 import Link from "next/link";
-import { Star, CheckSquare, Square, Scales } from "@phosphor-icons/react/dist/ssr";
+import { Star, CheckSquare, Square, Scales, CaretDown, CaretRight } from "@phosphor-icons/react/dist/ssr";
 import { Chip } from "@/components/Chip";
 import { ConfBadge } from "@/components/ConfBadge";
 import RowExportMenu from "@/components/RowExportMenu";
+import { ShotPreviewCardRow } from "@/components/ShotPreviewDrawer";
 import { ms, shortId, type Category } from "@/lib/categories";
 import { shotRowToExportInput } from "@/lib/shot-export";
 import {
@@ -49,21 +50,29 @@ export function ShotGrid({
   picked,
   isSample,
   density = GRID_DENSITY_DEFAULT,
+  expanded,
   onToggleBulk,
   onTogglePick,
   onTogglePin,
   onTagClick,
+  onToggleExpand,
 }: {
   rows: ShotGridRow[];
   bulk: Set<string>;
   picked: string[];
   isSample: boolean;
   density?: GridDensity;
+  // Ids whose inline preview card is open (F117). Optional so callers that
+  // don't wire previews (none today, but keeps the contract additive) degrade
+  // to no expand affordance.
+  expanded?: Set<string>;
   onToggleBulk: (id: string) => void;
   onTogglePick: (id: string) => void;
   onTogglePin: (row: ShotGridRow) => void;
   onTagClick: (tag: string) => void;
+  onToggleExpand?: (id: string) => void;
 }) {
+  const canPreview = !!onToggleExpand;
   return (
     <ul
       className={`grid ${gridColumnsClass(density)} gap-3 p-3`}
@@ -73,6 +82,7 @@ export function ShotGrid({
       {rows.map((r) => {
         const selected = bulk.has(r.id);
         const isPicked = picked.includes(r.id);
+        const isExpanded = !!expanded?.has(r.id);
         const name = (r.label && r.label.trim()) || r.filename;
         return (
           <li
@@ -165,6 +175,31 @@ export function ShotGrid({
                 {fmtTime(r.created_at)}
               </span>
               <div className="flex items-center gap-1">
+                {/* Inline preview toggle (F117) -- opens the same drawer body
+                    the table row offers, dropped below this card. Only shown
+                    when the page wired the preview callbacks. */}
+                {canPreview && (
+                  <button
+                    type="button"
+                    onClick={() => onToggleExpand!(r.id)}
+                    aria-expanded={isExpanded}
+                    aria-label={
+                      isExpanded
+                        ? `Collapse preview of ${shortId(r.id)}`
+                        : `Preview ${shortId(r.id)} inline`
+                    }
+                    title={isExpanded ? "Hide preview" : "Quick preview"}
+                    className="inline-flex items-center gap-1 text-[10px] eyebrow opacity-70 hover:opacity-100"
+                    style={isExpanded ? { color: "var(--color-felt)" } : undefined}
+                  >
+                    {isExpanded ? (
+                      <CaretDown size={12} weight="bold" />
+                    ) : (
+                      <CaretRight size={12} weight="bold" />
+                    )}
+                    Preview
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => onTogglePick(r.id)}
@@ -192,6 +227,11 @@ export function ShotGrid({
                 />
               </div>
             </div>
+            {/* Inline preview card (F117): the lazy-fetching wrapper only
+                mounts while this card is expanded, so no detail request fires
+                until the user opens it. Shares ShotPreviewBody with the table
+                drawer so both layouts read identically. */}
+            {canPreview && isExpanded && <ShotPreviewCardRow id={r.id} />}
           </li>
         );
       })}

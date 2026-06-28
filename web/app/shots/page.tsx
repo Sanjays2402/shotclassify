@@ -1054,10 +1054,12 @@ function ShotsPageInner() {
             picked={picked}
             isSample={isSample}
             density={gridDensity}
+            expanded={expanded}
             onToggleBulk={toggleBulk}
             onTogglePick={togglePick}
             onTogglePin={(r) => void togglePin(r as Row)}
             onTagClick={(t) => setTag(t)}
+            onToggleExpand={toggleExpanded}
           />
         ) : (
           <div className="overflow-auto max-h-[70vh]">

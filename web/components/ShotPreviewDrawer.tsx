@@ -1,12 +1,17 @@
 "use client";
 
-// Presentational drawer that expands UNDER a /shots row to give a quick look at
-// a shot without leaving the list (F84). The connected ShotPreviewRow wrapper
-// below owns the lazy detail fetch (it only mounts -- and so only fetches --
-// while the row is expanded); the presentational ShotPreviewDrawer just renders
-// whatever stage the fetch is in. Display values come entirely from the pure
-// lib/shot-preview view-model so the trimming / sorting / fallback logic stays
-// testable and these stay thin renderers.
+// Inline preview for a /shots row -- a quick look at a shot (OCR snippet, the
+// top confidence classes as mini bars, the rationale) without leaving the list
+// (F84). Two layout shells share ONE presentational body + ONE lazy-fetch hook:
+//   - ShotPreviewDrawer: a <tr><td colSpan> that expands UNDER a table row.
+//   - ShotPreviewCard:   a <div> panel that drops below a grid card (F117).
+// Both render <ShotPreviewBody>, so the table + grid previews can never drift.
+// The connected wrappers (ShotPreviewRow / ShotPreviewCardRow) own the SWR
+// fetch; because they only mount while a row/card is expanded, the fetch is
+// naturally lazy -- no detail request fires until the user expands -- and SWR
+// caches it so a re-expand (or an already-visited shot) is served instantly.
+// Display values come entirely from the pure lib/shot-preview view-model so the
+// trimming / sorting / fallback logic stays testable and these stay thin.
 
 import useSWR from "swr";
 import { Copy } from "@phosphor-icons/react/dist/ssr";
@@ -69,17 +74,6 @@ function CopyOcrButton({ id, text }: { id: string; text: string }) {
   );
 }
 
-export type ShotPreviewDrawerProps = {
-  // The shot id (for the "open full" link + accessible labelling).
-  id: string;
-  // The fetched detail record, or null while loading / on error.
-  record: ShotPreviewRecord | null;
-  loading: boolean;
-  error: boolean;
-  // How many table columns the drawer cell must span so it fills the row width.
-  colSpan: number;
-};
-
 function PreviewBar({ category, pct }: { category: string; pct: number }) {
   const label = LONG[category as Category] ?? category;
   // Reconstruct a 0..1 score for the shared colour ramp from the clamped pct.
@@ -99,116 +93,136 @@ function PreviewBar({ category, pct }: { category: string; pct: number }) {
   );
 }
 
-export function ShotPreviewDrawer({
-  id,
-  record,
-  loading,
-  error,
-  colSpan,
-}: ShotPreviewDrawerProps) {
+export type ShotPreviewBodyProps = {
+  // The shot id (for the "open full" link + accessible labelling).
+  id: string;
+  // The fetched detail record, or null while loading / on error.
+  record: ShotPreviewRecord | null;
+  loading: boolean;
+  error: boolean;
+};
+
+// Layout-agnostic preview content. Knows nothing about <tr> vs <div> -- the
+// drawer / card shells supply the surrounding chrome. Renders the loading /
+// error / empty / populated stages identically wherever it's mounted.
+export function ShotPreviewBody({ id, record, loading, error }: ShotPreviewBodyProps) {
   const model = record ? buildShotPreview(record) : null;
-  // Full transcript for the drawer's copy button (F124) -- distinct from the
-  // truncated display snippet on the model.
+  // Full transcript for the copy button (F124) -- distinct from the truncated
+  // display snippet on the model.
   const fullOcr = record ? previewOcrFull(record) : null;
 
   return (
-    <tr data-preview-row>
-      <td colSpan={colSpan} className="p-0">
-        <div
-          className="px-4 py-3 border-t"
-          style={{
-            borderColor: "var(--color-rule)",
-            background: "color-mix(in srgb, var(--color-felt) 4%, transparent)",
-          }}
-          role="region"
-          aria-label={`Preview of shot ${id}`}
-        >
-          {loading && (
-            <div className="text-[12px] opacity-60 py-1" role="status">
-              Loading preview…
+    <div role="region" aria-label={`Preview of shot ${id}`}>
+      {loading && (
+        <div className="text-[12px] opacity-60 py-1" role="status">
+          Loading preview…
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="text-[12px] py-1" style={{ color: "#b00020" }}>
+          Couldn&apos;t load this shot&apos;s details.
+        </div>
+      )}
+
+      {!loading && !error && model && (
+        <>
+          {!previewHasContent(model) ? (
+            // Dead-end empty state -> give it a next step (F127). A shot
+            // with no OCR / distribution / rationale is usually a brand-new
+            // or sample-data install; point at the demo so the drawer isn't
+            // a pure dead-end.
+            <div className="text-[12px] opacity-60 py-1">
+              Nothing captured for this shot yet.{" "}
+              <a
+                href="/demo"
+                className="underline opacity-90 hover:opacity-100"
+              >
+                Run the demo
+              </a>{" "}
+              to see a fully-classified shot.
             </div>
-          )}
-
-          {!loading && error && (
-            <div className="text-[12px] py-1" style={{ color: "#b00020" }}>
-              Couldn&apos;t load this shot&apos;s details.
-            </div>
-          )}
-
-          {!loading && !error && model && (
-            <>
-              {!previewHasContent(model) ? (
-                // Dead-end empty state -> give it a next step (F127). A shot
-                // with no OCR / distribution / rationale is usually a brand-new
-                // or sample-data install; point at the demo so the drawer isn't
-                // a pure dead-end.
-                <div className="text-[12px] opacity-60 py-1">
-                  Nothing captured for this shot yet.{" "}
-                  <a
-                    href="/demo"
-                    className="underline opacity-90 hover:opacity-100"
-                  >
-                    Run the demo
-                  </a>{" "}
-                  to see a fully-classified shot.
-                </div>
-              ) : (
-                <div className="grid gap-3 md:grid-cols-2">
-                  {/* Left: OCR snippet + rationale. */}
-                  <div className="grid gap-3 content-start">
-                    {model.ocrSnippet && (
-                      <div>
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <div className="eyebrow">OCR transcript</div>
-                          {/* Copy the FULL transcript, not the snippet (F124). */}
-                          {fullOcr && <CopyOcrButton id={id} text={fullOcr} />}
-                        </div>
-                        <p className="num text-[12px] leading-relaxed opacity-85 whitespace-pre-wrap break-words">
-                          {model.ocrSnippet}
-                          {model.ocrTruncated && (
-                            <span className="opacity-50"> (truncated)</span>
-                          )}
-                        </p>
-                      </div>
-                    )}
-                    {model.rationale && (
-                      <div>
-                        <div className="eyebrow mb-1">Rationale</div>
-                        <p className="text-[12px] leading-relaxed opacity-85 break-words">
-                          {model.rationale}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Right: mini confidence distribution. */}
-                  {model.topConfidences.length > 0 && (
-                    <div>
-                      <div className="eyebrow mb-1.5">Confidence</div>
-                      <div className="grid gap-1.5">
-                        {model.topConfidences.map((c) => (
-                          <PreviewBar
-                            key={c.category}
-                            category={c.category}
-                            pct={c.pct}
-                          />
-                        ))}
-                      </div>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2">
+              {/* Left: OCR snippet + rationale. */}
+              <div className="grid gap-3 content-start">
+                {model.ocrSnippet && (
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <div className="eyebrow">OCR transcript</div>
+                      {/* Copy the FULL transcript, not the snippet (F124). */}
+                      {fullOcr && <CopyOcrButton id={id} text={fullOcr} />}
                     </div>
-                  )}
+                    <p className="num text-[12px] leading-relaxed opacity-85 whitespace-pre-wrap break-words">
+                      {model.ocrSnippet}
+                      {model.ocrTruncated && (
+                        <span className="opacity-50"> (truncated)</span>
+                      )}
+                    </p>
+                  </div>
+                )}
+                {model.rationale && (
+                  <div>
+                    <div className="eyebrow mb-1">Rationale</div>
+                    <p className="text-[12px] leading-relaxed opacity-85 break-words">
+                      {model.rationale}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Right: mini confidence distribution. */}
+              {model.topConfidences.length > 0 && (
+                <div>
+                  <div className="eyebrow mb-1.5">Confidence</div>
+                  <div className="grid gap-1.5">
+                    {model.topConfidences.map((c) => (
+                      <PreviewBar
+                        key={c.category}
+                        category={c.category}
+                        pct={c.pct}
+                      />
+                    ))}
+                  </div>
                 </div>
               )}
-
-              <div className="mt-2.5">
-                <a
-                  href={`/shots/${id}`}
-                  className="text-[11px] underline opacity-70 hover:opacity-100"
-                >
-                  Open full shot →
-                </a>
-              </div>
-            </>
+            </div>
           )}
+
+          <div className="mt-2.5">
+            <a
+              href={`/shots/${id}`}
+              className="text-[11px] underline opacity-70 hover:opacity-100"
+            >
+              Open full shot →
+            </a>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Shared felt-tinted surface styling for both shells, so the table drawer and
+// the grid card read as the same affordance.
+const PREVIEW_SURFACE = {
+  borderColor: "var(--color-rule)",
+  background: "color-mix(in srgb, var(--color-felt) 4%, transparent)",
+} as const;
+
+export type ShotPreviewDrawerProps = ShotPreviewBodyProps & {
+  // How many table columns the drawer cell must span so it fills the row width.
+  colSpan: number;
+};
+
+// Table shell: a full-width row whose single cell spans every column and holds
+// the shared preview body, expanded UNDER the row it previews.
+export function ShotPreviewDrawer({ colSpan, ...body }: ShotPreviewDrawerProps) {
+  return (
+    <tr data-preview-row>
+      <td colSpan={colSpan} className="p-0">
+        <div className="px-4 py-3 border-t" style={PREVIEW_SURFACE}>
+          <ShotPreviewBody {...body} />
         </div>
       </td>
     </tr>
@@ -217,13 +231,40 @@ export function ShotPreviewDrawer({
 
 export default ShotPreviewDrawer;
 
-// Connected wrapper rendered by the /shots table for an expanded row. Because
-// it only mounts while the row is open, the SWR fetch is naturally lazy -- no
-// detail request fires until the user expands a row, and SWR caches it so
-// re-expanding the same row is instant. Reuses the same /api/shots/[id]
+// Grid shell (F117): a bordered panel that drops below a grid card holding the
+// same shared preview body. A <div>, not a <tr>, so the grid's <ul>/<li>
+// layout stays valid.
+export function ShotPreviewCard(body: ShotPreviewBodyProps) {
+  return (
+    <div
+      className="px-3 py-2.5 rounded-sm border mt-1"
+      style={PREVIEW_SURFACE}
+      data-preview-card
+    >
+      <ShotPreviewBody {...body} />
+    </div>
+  );
+}
+
+// The lazy detail fetch shared by both shells. Reuses the same /api/shots/[id]
 // endpoint + fetcher the detail page uses, so an already-visited shot is served
-// from cache. Keeps the page a thin caller: it just renders <ShotPreviewRow>
-// for each id in its `expanded` set.
+// from cache. Only called from a mounted (expanded) wrapper, so no request
+// fires until the user opens the preview.
+function useShotPreview(id: string) {
+  const { data, error, isLoading } = useSWR<ShotPreviewRecord>(
+    ENDPOINTS.historyItem(id),
+    fetcher,
+  );
+  return {
+    record: data ?? null,
+    loading: isLoading && !data,
+    error: !!error && !data,
+  };
+}
+
+// Connected table wrapper rendered by the /shots table for an expanded row.
+// Mounting only while open keeps the SWR fetch lazy. Keeps the page a thin
+// caller: it just renders <ShotPreviewRow> for each id in its `expanded` set.
 export function ShotPreviewRow({
   id,
   colSpan,
@@ -231,17 +272,13 @@ export function ShotPreviewRow({
   id: string;
   colSpan: number;
 }) {
-  const { data, error, isLoading } = useSWR<ShotPreviewRecord>(
-    ENDPOINTS.historyItem(id),
-    fetcher,
-  );
-  return (
-    <ShotPreviewDrawer
-      id={id}
-      record={data ?? null}
-      loading={isLoading && !data}
-      error={!!error && !data}
-      colSpan={colSpan}
-    />
-  );
+  const state = useShotPreview(id);
+  return <ShotPreviewDrawer id={id} colSpan={colSpan} {...state} />;
+}
+
+// Connected grid wrapper (F117) -- the grid card's counterpart to
+// ShotPreviewRow. Same lazy fetch, card shell instead of a table row.
+export function ShotPreviewCardRow({ id }: { id: string }) {
+  const state = useShotPreview(id);
+  return <ShotPreviewCard id={id} {...state} />;
 }
