@@ -37,6 +37,7 @@ import {
   previewToggleAllLabel,
 } from "@/lib/preview-expand";
 import { pickPreviewTarget } from "@/lib/preview-key";
+import { rangeOfTotalLabel, countLabel } from "@/lib/count-label";
 import { shotRowToExportInput, type ShotExportInput } from "@/lib/shot-export";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
@@ -611,9 +612,10 @@ function ShotsPageInner() {
         <div className="flex items-center gap-3">
           {isSample && <SampleBadge />}
           <span className="num text-[12px] opacity-70">
-            {effectiveTotal > 0
-              ? `${showingFrom}–${showingTo} of ${effectiveTotal}`
-              : `${rows.length} rows`}
+            {/* Shared count-label helpers (F122) so the header range / bare
+                count agree with every other count phrase in the app. */}
+            {rangeOfTotalLabel(showingFrom, showingTo, effectiveTotal) ??
+              countLabel(rows.length, "row")}
           </span>
           <div
             className="inline-flex items-center rounded-sm border overflow-hidden"

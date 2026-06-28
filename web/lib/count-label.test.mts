@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { ofTotalLabel } from "./count-label.ts";
+import { ofTotalLabel, rangeOfTotalLabel, countLabel } from "./count-label.ts";
 
 test("ofTotalLabel: webhooks shape -- prefix + plural noun, narrowed", () => {
   const opts = { prefix: "Filtering ", singular: "delivery", plural: "deliveries" };
@@ -65,4 +65,54 @@ test("ofTotalLabel: non-finite inputs no-op to null", () => {
 test("ofTotalLabel: negative total floors at zero -> null under default", () => {
   const opts = { prefix: "Filtering ", singular: "delivery", plural: "deliveries" };
   assert.equal(ofTotalLabel(0, -4, opts), null);
+});
+
+test("rangeOfTotalLabel: normal page range uses an en dash + ' of '", () => {
+  assert.equal(rangeOfTotalLabel(1, 50, 1240), "1\u201350 of 1240");
+  assert.equal(rangeOfTotalLabel(51, 100, 1240), "51\u2013100 of 1240");
+});
+
+test("rangeOfTotalLabel: a final partial page clamps the upper bound to total", () => {
+  // page 25 of a 50/page list over 1240 rows: 1201..1250 but only 1240 exist.
+  assert.equal(rangeOfTotalLabel(1201, 1250, 1240), "1201\u20131240 of 1240");
+});
+
+test("rangeOfTotalLabel: bounds clamp into [1, total]; from never exceeds to", () => {
+  // Over-range from is pulled down to the (clamped) to.
+  assert.equal(rangeOfTotalLabel(99, 40, 50), "40\u201340 of 50");
+  // Zero / negative from floors at 1.
+  assert.equal(rangeOfTotalLabel(0, 10, 50), "1\u201310 of 50");
+  assert.equal(rangeOfTotalLabel(-5, 10, 50), "1\u201310 of 50");
+});
+
+test("rangeOfTotalLabel: empty list (total <= 0) -> null", () => {
+  assert.equal(rangeOfTotalLabel(0, 0, 0), null);
+  assert.equal(rangeOfTotalLabel(1, 50, -3), null);
+});
+
+test("rangeOfTotalLabel: non-finite inputs -> null", () => {
+  assert.equal(rangeOfTotalLabel(NaN, 50, 100), null);
+  assert.equal(rangeOfTotalLabel(1, Infinity, 100), null);
+  assert.equal(rangeOfTotalLabel(1, 50, NaN), null);
+});
+
+test("rangeOfTotalLabel: fractional bounds truncate toward zero", () => {
+  assert.equal(rangeOfTotalLabel(1.9, 50.9, 100.4), "1\u201350 of 100");
+});
+
+test("countLabel: singular at one, auto -s plural otherwise", () => {
+  assert.equal(countLabel(1, "row"), "1 row");
+  assert.equal(countLabel(0, "row"), "0 rows");
+  assert.equal(countLabel(12, "row"), "12 rows");
+});
+
+test("countLabel: explicit irregular plural is honoured", () => {
+  assert.equal(countLabel(1, "match", "matches"), "1 match");
+  assert.equal(countLabel(3, "match", "matches"), "3 matches");
+});
+
+test("countLabel: non-finite / negative floors at zero, fractional truncates", () => {
+  assert.equal(countLabel(NaN, "row"), "0 rows");
+  assert.equal(countLabel(-4, "row"), "0 rows");
+  assert.equal(countLabel(2.9, "row"), "2 rows");
 });
