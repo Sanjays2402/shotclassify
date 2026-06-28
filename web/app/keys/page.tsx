@@ -28,6 +28,7 @@ import {
   keyStatusHint,
 } from "@/lib/key-activity";
 import { validateKeyName } from "@/lib/key-name";
+import { summarizeKeys, keysSummaryChips } from "@/lib/key-summary";
 
 type KeyRow = {
   id: string;
@@ -405,12 +406,30 @@ export default function KeysPage() {
 
       {/* List */}
       <section className="space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <h2 className="h-display text-[15px]">Your keys</h2>
-          {keys && (
-            <span className="eyebrow">
-              {keys.length} {keys.length === 1 ? "key" : "keys"}
-            </span>
+          {keys && keys.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 justify-end">
+              {keysSummaryChips(summarizeKeys(keys, now)).map((c) => (
+                <span
+                  key={c.key}
+                  className="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-mono"
+                  title={c.hint}
+                  style={{
+                    borderColor: "var(--color-rule)",
+                    background: "var(--color-chalk)",
+                    color:
+                      c.tone === "warn"
+                        ? "var(--color-cue-deep, #9a7a0a)"
+                        : c.tone === "mute"
+                          ? "var(--color-conf-low)"
+                          : "var(--color-ink)",
+                  }}
+                >
+                  {c.label}
+                </span>
+              ))}
+            </div>
           )}
         </div>
 
