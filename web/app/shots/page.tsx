@@ -30,6 +30,12 @@ import CopyViewLinkButton from "@/components/CopyViewLinkButton";
 import BulkExportButtons from "@/components/BulkExportButtons";
 import RowExportMenu from "@/components/RowExportMenu";
 import { ShotPreviewRow } from "@/components/ShotPreviewDrawer";
+import {
+  expandAllPreviews,
+  collapseAllPreviews,
+  allPreviewsExpanded,
+  previewToggleAllLabel,
+} from "@/lib/preview-expand";
 import { shotRowToExportInput, type ShotExportInput } from "@/lib/shot-export";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
@@ -122,6 +128,19 @@ function ShotsPageInner() {
       else next.add(id);
       return next;
     });
+  }
+
+  // Expand or collapse EVERY visible row's preview at once (F119). Flips based
+  // on whether the visible rows are already all-open, and preserves the open
+  // state of any rows that aren't on this page (the expanded set spans
+  // pagination). The visible ids are passed in from render since `rows` is
+  // derived there.
+  function toggleAllPreviews(ids: string[]) {
+    setExpanded((cur) =>
+      allPreviewsExpanded(cur, ids)
+        ? collapseAllPreviews(cur, ids)
+        : expandAllPreviews(cur, ids),
+    );
   }
 
   // Load the persisted view mode once on mount (SSR can't know it).
@@ -789,6 +808,35 @@ function ShotsPageInner() {
         </button>
 
         <div className="ml-auto flex items-center gap-2">
+          {/* Expand / collapse every visible row's preview at once (F119).
+              Shown only with real rows (sample data has nothing to fetch).
+              The label flips to whichever action does something; off-page
+              expanded previews are preserved. */}
+          {!isSample &&
+            rows.length > 0 &&
+            (() => {
+              const ids = rows.map((r) => r.id);
+              const label = previewToggleAllLabel(expanded, ids);
+              if (!label) return null;
+              const allOpen = allPreviewsExpanded(expanded, ids);
+              return (
+                <button
+                  type="button"
+                  className="btn btn-ghost text-[12px]"
+                  onClick={() => toggleAllPreviews(ids)}
+                  aria-label={label}
+                  title={label}
+                  data-testid="shots-toggle-all-previews"
+                >
+                  {allOpen ? (
+                    <CaretDown size={13} weight="bold" />
+                  ) : (
+                    <CaretRight size={13} weight="bold" />
+                  )}
+                  {allOpen ? "Collapse all" : "Expand all"}
+                </button>
+              );
+            })()}
           <CopyViewLinkButton
             filters={{
               category: cat || undefined,
