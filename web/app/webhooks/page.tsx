@@ -7,6 +7,7 @@ import { EmptyState as FilterEmptyState } from "@/components/EmptyState";
 import { emptyCopyForList } from "@/lib/empty-state";
 import { WebhookDeliveryBreadcrumb } from "@/components/WebhookDeliveryBreadcrumb";
 import CopyDeliveryLinkButton from "@/components/CopyDeliveryLinkButton";
+import DeliveryExportMenu from "@/components/DeliveryExportMenu";
 import {
   readDeliveryFilterFromUrl,
   writeDeliveryFilterToUrl,
@@ -36,6 +37,7 @@ import {
   Play,
   ShieldCheck,
   X,
+  DotsThreeOutline,
 } from "@phosphor-icons/react/dist/ssr";
 
 type WebhookRow = {
@@ -824,6 +826,18 @@ export default function WebhooksPage() {
                   <th className="px-3 py-2">Try</th>
                   <th className="px-3 py-2">ms</th>
                   <th className="px-3 py-2">Detail</th>
+                  {/* Per-row "Copy as ..." menu column (F123). Header is a
+                      decorative glyph + a hover title; the real label lives on
+                      each row button's aria-label. */}
+                  <th className="px-3 py-2 w-9">
+                    <span
+                      className="inline-flex opacity-40"
+                      title="Copy a delivery as JSON or Markdown"
+                      aria-label="Copy"
+                    >
+                      <DotsThreeOutline size={13} weight="duotone" aria-hidden />
+                    </span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -864,6 +878,12 @@ export default function WebhooksPage() {
                     </td>
                     <td className="px-3 py-2 opacity-70">
                       {d.http_status ?? d.error ?? ""}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <DeliveryExportMenu
+                        delivery={d}
+                        shortId={d.id.slice(0, 8)}
+                      />
                     </td>
                   </tr>
                 ))}
