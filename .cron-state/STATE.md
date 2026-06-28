@@ -24,7 +24,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (221 features tracked, 197 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (221 features tracked, 202 complete; **frontend-override active since 2026-06-23**)
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -435,17 +435,17 @@ duplicates: keyboard filter-chip Tab order (F20/F75/F87/F99 -- still one real
 item), the /stats confidence sparkline (F16/F27/F41/F54/F65 -- BLOCKED on a
 backend per-hour mean-conf field; F125 below is that backend slice), and the
 API-key modal (F23/F78). These fresh items are unblocked + non-duplicate.
-F117. [ ] Web: shot-preview drawer reaches the GRID view (F84 follow-on) -- the grid cards get an "expand" affordance that opens the same `<ShotPreviewDrawer>` content inline below the card. Reuse lib/shot-preview + the lazy-fetch pattern (a non-table wrapper since the grid isn't `<tr>`-based). Component-level; the view-model + tests already exist.
-F118. [ ] Web: keyboard `o` on `/shots` toggles the focused/first row's preview drawer (F84 follow-on) -- so the new drawer is reachable without the mouse. Pure key handler in the shots scope + a SHORTCUTS catalogue entry so it shows in the `?` overlay; input-guarded + chord-guarded. Pairs with the existing `v`/`d` shots-scope keys.
-F119. [ ] Web: "expand/collapse all previews" control on the `/shots` toolbar (F84 follow-on) -- a small button that opens every visible row's drawer at once (and collapses them). Pure helper mapping the current page's row ids to the expanded Set + an allExpanded/allCollapsed predicate (mirrors the detail-rail F82 pattern); test the set math.
+F117. [x] Web: shot-preview drawer reaches the GRID view -- shipped tick 42. Refactored ShotPreviewDrawer.tsx around ONE shared presentational `<ShotPreviewBody>` + ONE lazy-fetch hook `useShotPreview(id)` so the table + grid previews can't drift: ShotPreviewDrawer is the `<tr><td colSpan>` table shell, new ShotPreviewCard is a `<div>` panel shell for the grid (a `<tr>` would be invalid in the grid `<ul>/<li>`), ShotPreviewRow / ShotPreviewCardRow are the connected wrappers (each lazy -- only mounts/fetches while expanded). ShotGrid gained an optional expanded Set + onToggleExpand + a "Preview" caret toggle per card; the page threads its existing F84 expanded state in, so a row's preview state is SHARED across table+grid. (588ba77)
+F118. [x] Web: keyboard `o` toggles the focused/first row's preview -- shipped tick 42. New pure lib/preview-key `pickPreviewTarget(focusedId, ids)` (focused-row-else-first-row rule; ignores a stale paged-away focus) + firstVisibleId. Page binds a bind-once `o` keydown effect (input-guarded + modifier-skipped so Cmd/Ctrl-O open-file is untouched), reads current ids off a render-mutated ref, finds the focused row by walking activeElement up to the nearest `[data-shot-id]` (anchors now on the table `<tr>` AND grid `<li>` so it works in every layout), reuses F84 toggleExpanded. SHORTCUTS shots-scope `o` entry self-documents in the `?` overlay. 6 lib tests + a shortcut guard (bare o fires, Cmd/Ctrl-O doesn't, no `g o` shadow). (fd3342a)
+F119. [x] Web: "expand/collapse all previews" control on the `/shots` toolbar -- shipped tick 42. New pure lib/preview-expand set-math (expandedOnPageCount / allPreviewsExpanded / anyPreviewsExpanded predicates + expandAllPreviews / collapseAllPreviews immutable transforms + previewToggleAllLabel) -- every transform operates ONLY on visible ids and PRESERVES off-page expanded ids (the Set spans pagination), inputs cleaned of non-string/blank/dupes. Toolbar gains a real-rows-only "Expand all"/"Collapse all" caret button flipping to whichever action does something. 10 tests. (b110e2e)
 F120. [ ] Web: API-key creation modal polish (the open F23/F78) -- replace the inline create cards on `/keys` with a focused modal reusing the chalk-surface + felt-green icon-well pattern; the new key + scopes selection feels intentional. Component-level; reuse existing modal chrome.
 F121. [ ] Web: keyboard-driven filter-chip Tab order on `/shots` (the open F20/F75/F87/F99) -- `Tab` cycles focus through the class/tag/pinned filter controls in a logical order instead of jumping to the OCR box. Pure tabIndex ordering helper + a roving-focus hook; test the order helper.
 F122. [ ] Web: shared `ofTotalLabel` reaches the `/shots` pagination + grid count (F112 follow-on) -- audit the remaining hand-rolled count strings (the "Showing N of M" pagination line, any grid footer) and route them through the new shared helper so every count phrase in the app agrees. Pure wiring + tests for any new call shape.
 F123. [ ] Web: `/webhooks` deliveries "copy as JSON" per-row affordance -- mirror the /shots RowExportMenu on the deliveries table so a single delivery's payload/headers/status can be grabbed for a bug report. New pure delivery->export serializer + tests; reuse the RowExportMenu dropdown shell.
-F124. [ ] Web: shot-preview drawer "copy OCR" inline button (F84 follow-on) -- a tiny copy button beside the drawer's OCR snippet that copies the FULL ocr_text (not the truncated snippet) via the toast store. Pure "what to copy" selector (full vs snippet) + a test; reuse the clipboard fallback from RowExportMenu.
+F124. [x] Web: shot-preview drawer "copy OCR" inline button -- shipped tick 42. New pure `previewOcrFull(rec)` in lib/shot-preview returns the COMPLETE OCR text (nested ocr.text preferred, then flat ocr_text, mirroring previewOcr's slot precedence), outer-trimmed but inner newlines PRESERVED (unlike the truncated, flattened display snippet), null when no real text. A small "Copy" button in the drawer's OCR-transcript header copies it via the shared non-secure-context clipboard fallback (matching RowExportMenu) with toast feedback. 6 tests (14->19). (b2d2297)
 F125. [ ] Web: `/stats` per-hour mean-confidence BACKEND slice (unblocks the 5x-tracked sparkline) -- add a per-hour mean-confidence field to `/api/aggregate` `hourly` (currently count-only) wired straight to a new client field. Minimal FastAPI change + the matching TS type; THEN the F16/F27/F41/F54/F65 sparkline becomes honest. (This is the one allowed backend touch -- a frontend feature truly needs the endpoint.)
 F126. [ ] Web: notifications row dismiss-affordance hint on touch -- a faint "swipe to dismiss" hint on touch viewports for the inbox rows (the dismiss action exists; the affordance is undiscoverable on mobile). Pure viewport/touch predicate + render; respects reduced-motion.
-F127. [ ] Web: `/shots` empty-preview drawer suggests the demo (F84 follow-on) -- when an expanded row's preview has no content (previewHasContent === false), the "Nothing captured" line gains a subtle "Run the demo" link so the dead-end state has a next step. Component-level; reuse the previewHasContent predicate.
+F127. [x] Web: `/shots` empty-preview drawer suggests the demo -- shipped tick 42. When an expanded row's preview has no content (previewHasContent === false), the "Nothing captured" line now carries an inline "Run the demo" link (-> /demo) so the dead-end state -- usually a brand-new / sample-data install -- has a next step. Reuses previewHasContent; component-only, no new lib. (8ecba53)
 F128. [ ] Web: status-legend swatches become a true radio-group (F116 follow-on) -- promote the aria-pressed toggle buttons to `role="radiogroup"` + `role="radio"` with roving tabindex (reuse lib/roving-index from F114) so arrow keys move between statuses and only the active one is tabbable. Pure roving wiring + tests.
 
 
@@ -453,6 +453,51 @@ F128. [ ] Web: status-legend swatches become a true radio-group (F116 follow-on)
 
 
 ## Tick log
+- 2026-06-27 19:1x PT (tick 42, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
+  THEME: round out the F84 row-preview-drawer arc -- five follow-ons that all
+  build on the drawer shipped tick 41, all pure-frontend, ZERO backend.
+  - b2d2297 feat(web): copy-full-OCR button in the shots row-preview drawer (F124)
+  - 8ecba53 feat(web): empty row-preview drawer suggests the demo (F127)
+  - 588ba77 feat(web): row-preview drawer reaches the grid view (F117)
+  - b110e2e feat(web): expand/collapse all row previews on the shots toolbar (F119)
+  - fd3342a feat(web): keyboard "o" toggles a shots row's inline preview (F118)
+  - Gate (ONCE, end of batch): tsc --noEmit clean (whole web project) + `npx tsx
+    --test --test-force-exit lib/*.test.mts` 619 passed / 0 failed (597 baseline
+    at tick 41 + net new 22, split: F124=5 previewOcrFull APPENDED to
+    shot-preview.test 14->19; F119=10 NEW lib/preview-expand.test.mts; F118=6 NEW
+    lib/preview-key.test.mts + 1 shortcut guard APPENDED to shortcuts.test.mts;
+    5+10+7=22) + `next build`
+    compiled successfully in ~5.2s -- /shots STILL prerenders STATIC (the new
+    grid drawer's lazy SWR fetch lives in ShotPreviewCardRow, a child that only
+    mounts on expand, so it didn't force /shots dynamic), /shots/[id] dynamic,
+    /webhooks static as expected. ZERO Python touched -- all web/ TS/TSX -- so the
+    pytest baseline cannot regress. Used --test-force-exit for the clean glob
+    exit (documented gotcha). Every test addition to a PRE-EXISTING *.test.mts
+    (shot-preview, shortcuts) was done by `patch` (append), never write_file;
+    only the two brand-new test files (preview-expand, preview-key) used
+    write_file. NOTE: the LSP flagged `[...set]` spreads in the new .mts test as
+    a downlevelIteration error, but .mts files are NOT in tsconfig's `**/*.ts`
+    include (tsx runs them) so it's a false positive; switched to Array.from()
+    to match the detail-rail.test convention anyway.
+  - Design arc: F117 refactored ShotPreviewDrawer around ONE shared
+    `<ShotPreviewBody>` + `useShotPreview` hook so the table drawer + new grid
+    card can't drift; F124/F127 enriched the body (copy-full-OCR + demo CTA);
+    F119 added the toolbar expand-all (set-math preserves off-page expanded
+    ids across pagination); F118 made the whole thing keyboard-reachable (`o`,
+    focused-row-else-first). The F84 expanded Set is now shared table<->grid.
+  - Frontend backlog: F117/F118/F119/F124/F127 marked done. Backlog still has
+    F120/F121/F122/F123/F125/F126/F128 fresh + ~38 older stale-duplicate items,
+    well above the < 5 refill threshold, so NO refill this tick. Next-tick
+    candidates: F123 (webhooks per-row copy-as-JSON, mirrors RowExportMenu),
+    F128 (status-legend radio-group, reuse lib/roving-index), F120 (API-key
+    modal). F125 is the one allowed backend touch (per-hour mean-conf) that
+    unblocks the 5x-tracked /stats sparkline.
+  - NOTE (carried from tick 35-41, still true): repo-wide `ruff check` reports
+    ~536 PRE-EXISTING Python lint errors from ruff-version drift. My batch
+    touched ZERO Python. Still flagged for Sanjay; needs a separate
+    `ruff check --fix` + pin bump, out of scope for the frontend override.
+
+## Tick log (older)
 - 2026-06-27 14:0x PT (tick 41, Cake): 5 frontend slices (FRONTEND OVERRIDE active).
   - 8d6d818 feat(web): shared N-of-M count-label helper (F112)
   - f0a97fb feat(web): canonical EmptyState on /digest and /admin/seats (F98)
