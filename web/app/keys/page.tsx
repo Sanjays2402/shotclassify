@@ -39,6 +39,13 @@ import {
   writeSnippetLang,
   KEY_SNIPPET_LANG_DEFAULT,
 } from "@/lib/key-snippet-pref";
+import {
+  isArmed,
+  confirmLabel,
+  confirmPrompt,
+  nextOnTrigger,
+  type KeyConfirmPending,
+} from "@/lib/key-confirm";
 
 type KeyRow = {
   id: string;
@@ -119,6 +126,9 @@ export default function KeysPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [rotating, setRotating] = useState<string | null>(null);
+  // Inline two-step destructive confirmation (F136) replaces browser confirm().
+  // One row at a time can be armed; the second click on the same Confirm fires.
+  const [pendingConfirm, setPendingConfirm] = useState<KeyConfirmPending>(null);
   // Which language the code snippets render in (F134). One toggle drives both
   // the revealed-key "Sample request" block and the always-on "Using your key"
   // section so they never disagree. Persisted across visits (F135) -- a Python
@@ -200,14 +210,7 @@ export default function KeysPage() {
   }, [newName, newWorkspace, newScope, load]);
 
   const onRotate = useCallback(
-    async (id: string, name: string) => {
-      if (
-        !confirm(
-          `Rotate "${name}"? The current secret stops working immediately and a new one is generated. You will see it once.`,
-        )
-      ) {
-        return;
-      }
+    async (id: string) => {
       setRotating(id);
       setErr(null);
       try {
@@ -237,7 +240,6 @@ export default function KeysPage() {
 
   const onRevoke = useCallback(
     async (id: string) => {
-      if (!confirm("Revoke this key? Calls using it will start failing immediately.")) return;
       setRevoking(id);
       try {
         const r = await fetch(`/api/keys/${encodeURIComponent(id)}`, {
@@ -252,6 +254,23 @@ export default function KeysPage() {
       }
     },
     [load],
+  );
+
+  // F136: drive the destructive buttons through the two-step state machine.
+  // First click on a key's Rotate/Revoke arms it (inline prompt appears);
+  // the Confirm click fires the real mutation. Cancel clears the armed state.
+  const triggerConfirm = useCallback(
+    (action: "rotate" | "revoke", id: string) => {
+      setPendingConfirm((prev) => {
+        const { fire, pending } = nextOnTrigger(prev, action, id);
+        if (fire) {
+          if (action === "rotate") onRotate(id);
+          else onRevoke(id);
+        }
+        return pending;
+      });
+    },
+    [onRotate, onRevoke],
   );
 
   const copy = useCallback(async (id: string, text: string) => {
@@ -653,35 +672,83 @@ export default function KeysPage() {
                       {k.usage_count}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <div className="inline-flex items-center gap-1.5 justify-end">
-                        <button
-                          type="button"
-                          onClick={() => onRotate(k.id, k.name)}
-                          disabled={rotating === k.id || revoking === k.id}
-                          className="inline-flex items-center gap-1 text-[12px] px-2 py-1 rounded-md border bg-white hover:bg-[color:var(--color-chalk)] disabled:opacity-50"
-                          style={{ borderColor: "var(--color-rule)" }}
-                          aria-label={`Rotate ${k.name}`}
-                          title={
-                            k.rotated_at
-                              ? `Last rotated ${fmtDate(k.rotated_at)}`
-                              : "Issue a new secret for this key"
-                          }
-                        >
-                          <ArrowsClockwise size={12} weight="duotone" />
-                          {rotating === k.id ? "Rotating" : "Rotate"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onRevoke(k.id)}
-                          disabled={revoking === k.id || rotating === k.id}
-                          className="inline-flex items-center gap-1 text-[12px] px-2 py-1 rounded-md border bg-white hover:bg-[color:var(--color-chalk)] disabled:opacity-50"
-                          style={{ borderColor: "var(--color-rule)" }}
-                          aria-label={`Revoke ${k.name}`}
-                        >
-                          <Trash size={12} weight="duotone" />
-                          {revoking === k.id ? "Revoking" : "Revoke"}
-                        </button>
-                      </div>
+                      {(() => {
+                        const rotateArmed = isArmed(pendingConfirm, "rotate", k.id);
+                        const revokeArmed = isArmed(pendingConfirm, "revoke", k.id);
+                        const armedAction = rotateArmed
+                          ? "rotate"
+                          : revokeArmed
+                            ? "revoke"
+                            : null;
+                        if (armedAction) {
+                          // Inline two-step confirm: prompt + Confirm/Cancel.
+                          return (
+                            <div className="inline-flex items-center gap-2 justify-end">
+                              <span
+                                className="text-[11px]"
+                                style={{ color: "var(--color-ink-mute)" }}
+                              >
+                                {confirmPrompt(armedAction)}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => triggerConfirm(armedAction, k.id)}
+                                disabled={rotating === k.id || revoking === k.id}
+                                className="inline-flex items-center gap-1 text-[12px] px-2 py-1 rounded-md text-white disabled:opacity-50"
+                                style={{ background: "var(--color-conf-low)" }}
+                                aria-label={`Confirm ${armedAction} ${k.name}`}
+                              >
+                                {armedAction === "rotate" ? (
+                                  <ArrowsClockwise size={12} weight="duotone" />
+                                ) : (
+                                  <Trash size={12} weight="duotone" />
+                                )}
+                                {confirmLabel(armedAction, true)}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setPendingConfirm(null)}
+                                className="text-[12px] px-2 py-1 rounded-md border bg-white hover:bg-[color:var(--color-chalk)]"
+                                style={{ borderColor: "var(--color-rule)" }}
+                                aria-label="Cancel"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          );
+                        }
+                        return (
+                          <div className="inline-flex items-center gap-1.5 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => triggerConfirm("rotate", k.id)}
+                              disabled={rotating === k.id || revoking === k.id}
+                              className="inline-flex items-center gap-1 text-[12px] px-2 py-1 rounded-md border bg-white hover:bg-[color:var(--color-chalk)] disabled:opacity-50"
+                              style={{ borderColor: "var(--color-rule)" }}
+                              aria-label={`Rotate ${k.name}`}
+                              title={
+                                k.rotated_at
+                                  ? `Last rotated ${fmtDate(k.rotated_at)}`
+                                  : "Issue a new secret for this key"
+                              }
+                            >
+                              <ArrowsClockwise size={12} weight="duotone" />
+                              {rotating === k.id ? "Rotating" : "Rotate"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => triggerConfirm("revoke", k.id)}
+                              disabled={revoking === k.id || rotating === k.id}
+                              className="inline-flex items-center gap-1 text-[12px] px-2 py-1 rounded-md border bg-white hover:bg-[color:var(--color-chalk)] disabled:opacity-50"
+                              style={{ borderColor: "var(--color-rule)" }}
+                              aria-label={`Revoke ${k.name}`}
+                            >
+                              <Trash size={12} weight="duotone" />
+                              {revoking === k.id ? "Revoking" : "Revoke"}
+                            </button>
+                          </div>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))}
