@@ -138,8 +138,19 @@ export function ShotPreviewDrawer({
           {!loading && !error && model && (
             <>
               {!previewHasContent(model) ? (
+                // Dead-end empty state -> give it a next step (F127). A shot
+                // with no OCR / distribution / rationale is usually a brand-new
+                // or sample-data install; point at the demo so the drawer isn't
+                // a pure dead-end.
                 <div className="text-[12px] opacity-60 py-1">
-                  Nothing captured for this shot yet.
+                  Nothing captured for this shot yet.{" "}
+                  <a
+                    href="/demo"
+                    className="underline opacity-90 hover:opacity-100"
+                  >
+                    Run the demo
+                  </a>{" "}
+                  to see a fully-classified shot.
                 </div>
               ) : (
                 <div className="grid gap-3 md:grid-cols-2">
