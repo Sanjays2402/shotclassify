@@ -34,6 +34,11 @@ import {
   SNIPPET_LANGS,
   type SnippetLang,
 } from "@/lib/key-snippet";
+import {
+  readSnippetLang,
+  writeSnippetLang,
+  KEY_SNIPPET_LANG_DEFAULT,
+} from "@/lib/key-snippet-pref";
 
 type KeyRow = {
   id: string;
@@ -116,8 +121,20 @@ export default function KeysPage() {
   const [rotating, setRotating] = useState<string | null>(null);
   // Which language the code snippets render in (F134). One toggle drives both
   // the revealed-key "Sample request" block and the always-on "Using your key"
-  // section so they never disagree.
-  const [snippetLang, setSnippetLang] = useState<SnippetLang>("curl");
+  // section so they never disagree. Persisted across visits (F135) -- a Python
+  // shop reopens on Python -- via a mount read + a setter that writes through.
+  const [snippetLang, setSnippetLang] = useState<SnippetLang>(
+    KEY_SNIPPET_LANG_DEFAULT,
+  );
+  const chooseSnippetLang = useCallback((lang: SnippetLang) => {
+    setSnippetLang(lang);
+    writeSnippetLang(lang);
+  }, []);
+  // Resolve the stored language after mount (SSR renders the default so the
+  // first client paint matches, then this fills the saved choice).
+  useEffect(() => {
+    setSnippetLang(readSnippetLang());
+  }, []);
   // Captured on mount so the relative "last used" labels (F131) render the
   // same value on first client paint as on every subsequent render -- SSR
   // emits 0 (no relative line), the mount effect fills the real clock, and a
@@ -435,7 +452,7 @@ export default function KeysPage() {
               <Terminal size={12} weight="duotone" /> Sample request
             </summary>
             <div className="mt-2 flex items-center justify-between gap-2">
-              <LangToggle value={snippetLang} onChange={setSnippetLang} />
+              <LangToggle value={snippetLang} onChange={chooseSnippetLang} />
               <button
                 type="button"
                 onClick={() => copy("sample", sampleSnippet)}
@@ -688,7 +705,7 @@ export default function KeysPage() {
             POST a multipart form with a single <code>file</code> field. The response is the
             classifier JSON, identical to the in-app result.
           </p>
-          <LangToggle value={snippetLang} onChange={setSnippetLang} />
+          <LangToggle value={snippetLang} onChange={chooseSnippetLang} />
         </div>
         <pre
           className="overflow-x-auto rounded-md border p-3 text-[12px] font-mono bg-white"
