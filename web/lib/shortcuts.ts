@@ -89,6 +89,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     hint: "Grid view only",
   },
   {
+    id: "toggle-row-preview",
+    scope: "shots",
+    combo: { keys: ["O"], match: "o" },
+    label: "Open inline preview for the focused (or first) row",
+    hint: "Press again to close",
+  },
+  {
     id: "cycle-stats-window",
     scope: "stats",
     combo: { keys: ["W"], match: "w" },

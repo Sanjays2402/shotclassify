@@ -89,6 +89,7 @@ export function ShotGrid({
             key={r.id}
             className="panel p-3 flex flex-col gap-2 relative transition-shadow hover:shadow-md"
             data-picked={isPicked}
+            data-shot-id={r.id}
             style={
               isPicked
                 ? { outline: "2px solid var(--color-felt)", outlineOffset: -1 }

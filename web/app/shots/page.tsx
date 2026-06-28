@@ -36,6 +36,7 @@ import {
   allPreviewsExpanded,
   previewToggleAllLabel,
 } from "@/lib/preview-expand";
+import { pickPreviewTarget } from "@/lib/preview-key";
 import { shotRowToExportInput, type ShotExportInput } from "@/lib/shot-export";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
@@ -119,6 +120,10 @@ function ShotsPageInner() {
   // Per-row inline preview drawer (F84): the set of row ids currently expanded
   // under the table. A row's detail is lazily fetched only while it's open.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Latest visible row ids, mutated during render (idempotent) so the bind-once
+  // `o` keyboard handler (F118) can read the current page's rows without
+  // re-binding the listener on every data change.
+  const visibleIdsRef = useRef<string[]>([]);
   const { mutate: globalMutate } = useSWRConfig();
 
   function toggleExpanded(id: string) {
@@ -326,6 +331,44 @@ function ShotsPageInner() {
         writeGridDensity(next);
         return next;
       });
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // "o" toggles the inline preview (F84) of the focused row -- or the first
+  // visible row when focus isn't on a row -- so the drawer is reachable from
+  // the keyboard. Mirrors the "v" / "d" handlers: input-guarded so typing "o"
+  // in the OCR search box never fires, and modifier-skipped so Cmd/Ctrl-O
+  // (open file) is untouched. Reads the current page's ids off a ref so the
+  // listener binds once. The focused row is found by walking up from
+  // document.activeElement to the nearest [data-shot-id]; pickPreviewTarget
+  // applies the focused-else-first rule and ignores a stale (paged-away) id.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key.toLowerCase() !== "o") return;
+      const ids = visibleIdsRef.current;
+      if (ids.length === 0) return;
+      const active =
+        typeof document !== "undefined"
+          ? (document.activeElement as HTMLElement | null)
+          : null;
+      const focusedId =
+        active?.closest<HTMLElement>("[data-shot-id]")?.dataset.shotId ?? null;
+      const target = pickPreviewTarget(focusedId, ids);
+      if (!target) return;
+      e.preventDefault();
+      toggleExpanded(target);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -547,6 +590,9 @@ function ShotsPageInner() {
     (r) => (cat ? r.primary_category === cat : true)
   );
   const rows: Row[] = isSample && page === 0 ? sampleRows : (Array.isArray(data) ? (data as Row[]) : []);
+  // Keep the bind-once `o` handler (F118) pointed at the current page's ids.
+  // Assigning a fresh array each render is idempotent and cheap.
+  visibleIdsRef.current = rows.map((r) => r.id);
   const effectiveTotal = isSample && page === 0 ? sampleRows.length : total;
   const pageCount = Math.max(1, Math.ceil(effectiveTotal / limit));
   const showingFrom = effectiveTotal === 0 ? 0 : page * limit + 1;
@@ -1166,7 +1212,7 @@ function ShotsPageInner() {
               <tbody>
                 {rows.map((r) => (
                   <Fragment key={r.id}>
-                  <tr data-picked={picked.includes(r.id)}>
+                  <tr data-picked={picked.includes(r.id)} data-shot-id={r.id}>
                     <td>
                       <input
                         type="checkbox"

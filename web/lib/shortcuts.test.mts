@@ -183,6 +183,21 @@ test("cycle-view shortcut: bound to bare 'v' in the shots scope", () => {
   assert.equal(matchesShortcut("v", ev({ key: "v", ctrlKey: true })), false);
 });
 
+test("toggle-row-preview shortcut: bound to bare 'o' in the shots scope", () => {
+  const s = SHORTCUTS.find((x) => x.id === "toggle-row-preview");
+  assert.ok(s, "toggle-row-preview shortcut must exist");
+  assert.equal(s!.scope, "shots");
+  assert.equal(s!.combo.match, "o");
+  // Bare "o" fires; modified O (Cmd/Ctrl-O open-file) must NOT, so opening a
+  // preview never collides with the browser's open-file chord.
+  assert.equal(matchesShortcut("o", ev({ key: "o" })), true);
+  assert.equal(matchesShortcut("o", ev({ key: "O" })), true);
+  assert.equal(matchesShortcut("o", ev({ key: "o", metaKey: true })), false);
+  assert.equal(matchesShortcut("o", ev({ key: "o", ctrlKey: true })), false);
+  // No goto chord ends in "o", so the bare key can't be shadowed by a `g o`.
+  assert.equal(SHORTCUTS.some((x) => x.combo.match === "g o"), false);
+});
+
 test("cycle-stats-window shortcut: bound to bare 'w' in the stats scope", () => {
   const s = SHORTCUTS.find((x) => x.id === "cycle-stats-window");
   assert.ok(s, "cycle-stats-window shortcut must exist");
