@@ -17,6 +17,7 @@ import {
   radioNavIndex,
   radioTabbableIndex,
 } from "@/lib/radio-group";
+import { deliveryRelativeLabel } from "@/lib/delivery-when";
 import {
   filterDeliveries,
   distinctDeliveryEvents,
@@ -114,6 +115,11 @@ export default function WebhooksPage() {
   // (success / failed / pending) and event name. "all" means no constraint.
   const [statusFilter, setStatusFilter] = useState("all");
   const [eventFilter, setEventFilter] = useState("all");
+  // Wall clock for the deliveries' relative-time labels (F129). Refreshed on a
+  // slow interval so "3m ago" stays honest without re-rendering constantly.
+  // The table only renders after the async fetch resolves, so this never
+  // mismatches between SSR and the client.
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   // Persist the deliveries filter to the URL query (F103) so a reload -- or a
   // shared link -- keeps the triage view. Read once on mount (the page has no
@@ -153,6 +159,13 @@ export default function WebhooksPage() {
     const t = setInterval(load, 10_000);
     return () => clearInterval(t);
   }, [load]);
+
+  // Tick the relative-time clock every 30s so the deliveries' "Nm ago" labels
+  // (F129) age without waiting on the next data fetch. Cheap -- one setState.
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   const loadAllowlist = useCallback(async () => {
     try {
@@ -883,7 +896,21 @@ export default function WebhooksPage() {
                     style={{ borderColor: "var(--color-rule)" }}
                   >
                     <td className="px-3 py-2 font-mono whitespace-nowrap">
-                      {fmtDate(d.created_at)}
+                      <div>{fmtDate(d.created_at)}</div>
+                      {/* Glanceable relative time (F129) so a burst of recent
+                          attempts reads at a glance; absolute time stays as the
+                          row's title. Empty for an unparseable timestamp. */}
+                      {(() => {
+                        const rel = deliveryRelativeLabel(d.created_at, nowMs);
+                        return rel ? (
+                          <div
+                            className="text-[10px] opacity-50"
+                            title={d.created_at ?? undefined}
+                          >
+                            {rel}
+                          </div>
+                        ) : null;
+                      })()}
                     </td>
                     <td className="px-3 py-2 font-mono">{d.event}</td>
                     <td className="px-3 py-2 font-mono truncate max-w-[220px]">
