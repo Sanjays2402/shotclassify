@@ -29,6 +29,11 @@ import {
 } from "@/lib/key-activity";
 import { validateKeyName } from "@/lib/key-name";
 import { summarizeKeys, keysSummaryChips } from "@/lib/key-summary";
+import {
+  buildSnippet,
+  SNIPPET_LANGS,
+  type SnippetLang,
+} from "@/lib/key-snippet";
 
 type KeyRow = {
   id: string;
@@ -55,6 +60,45 @@ function fmtDate(iso: string | null): string {
   });
 }
 
+// A compact segmented control choosing the snippet language (F134). Shared by
+// the revealed-key sample and the always-on example so a single selection
+// drives both blocks. Purely presentational -- state lives in the page.
+function LangToggle({
+  value,
+  onChange,
+}: {
+  value: SnippetLang;
+  onChange: (lang: SnippetLang) => void;
+}) {
+  return (
+    <div
+      className="inline-flex items-center rounded-md border overflow-hidden"
+      style={{ borderColor: "var(--color-rule)" }}
+      role="group"
+      aria-label="Snippet language"
+    >
+      {SNIPPET_LANGS.map((l) => {
+        const active = value === l.value;
+        return (
+          <button
+            key={l.value}
+            type="button"
+            onClick={() => onChange(l.value)}
+            aria-pressed={active}
+            className="text-[11px] px-2 py-1 font-mono"
+            style={{
+              background: active ? "var(--color-felt)" : "transparent",
+              color: active ? "var(--color-chalk)" : "var(--color-ink-mute)",
+            }}
+          >
+            {l.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function KeysPage() {
   const [keys, setKeys] = useState<KeyRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -70,6 +114,10 @@ export default function KeysPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [rotating, setRotating] = useState<string | null>(null);
+  // Which language the code snippets render in (F134). One toggle drives both
+  // the revealed-key "Sample request" block and the always-on "Using your key"
+  // section so they never disagree.
+  const [snippetLang, setSnippetLang] = useState<SnippetLang>("curl");
   // Captured on mount so the relative "last used" labels (F131) render the
   // same value on first client paint as on every subsequent render -- SSR
   // emits 0 (no relative line), the mount effect fills the real clock, and a
@@ -200,9 +248,11 @@ export default function KeysPage() {
   }, []);
 
   const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
-  const sampleCurl = `curl -X POST ${origin}/v1/classify \\
-  -H "Authorization: Bearer ${revealed?.plaintext ?? "sk_live_YOUR_KEY"}" \\
-  -F "file=@screenshot.png"`;
+  // The revealed-key sample uses the real plaintext; the always-on example
+  // uses the placeholder. Both go through buildSnippet (F134) for the selected
+  // language so curl / Python / JavaScript stay in lockstep.
+  const sampleSnippet = buildSnippet(snippetLang, origin, revealed?.plaintext ?? null);
+  const exampleSnippet = buildSnippet(snippetLang, origin, null);
 
   return (
     <div className="space-y-8">
@@ -384,11 +434,31 @@ export default function KeysPage() {
             <summary className="cursor-pointer eyebrow flex items-center gap-1.5">
               <Terminal size={12} weight="duotone" /> Sample request
             </summary>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <LangToggle value={snippetLang} onChange={setSnippetLang} />
+              <button
+                type="button"
+                onClick={() => copy("sample", sampleSnippet)}
+                className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border bg-white hover:bg-[color:var(--color-chalk)]"
+                style={{ borderColor: "var(--color-rule)" }}
+                aria-label="Copy sample request"
+              >
+                {copied === "sample" ? (
+                  <>
+                    <Check size={12} weight="duotone" /> Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy size={12} weight="duotone" /> Copy
+                  </>
+                )}
+              </button>
+            </div>
             <pre
               className="mt-2 overflow-x-auto rounded-md border p-3 text-[12px] font-mono bg-white"
               style={{ borderColor: "var(--color-rule)" }}
             >
-{sampleCurl}
+{sampleSnippet}
             </pre>
           </details>
           <div>
@@ -613,17 +683,18 @@ export default function KeysPage() {
           <Terminal size={16} weight="duotone" />
           <h2 className="h-display text-[15px]">Using your key</h2>
         </div>
-        <p className="text-[12px]" style={{ color: "var(--color-ink-mute)" }}>
-          POST a multipart form with a single <code>file</code> field. The response is the
-          classifier JSON, identical to the in-app result.
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[12px]" style={{ color: "var(--color-ink-mute)" }}>
+            POST a multipart form with a single <code>file</code> field. The response is the
+            classifier JSON, identical to the in-app result.
+          </p>
+          <LangToggle value={snippetLang} onChange={setSnippetLang} />
+        </div>
         <pre
           className="overflow-x-auto rounded-md border p-3 text-[12px] font-mono bg-white"
           style={{ borderColor: "var(--color-rule)" }}
         >
-{`curl -X POST ${origin}/v1/classify \\
-  -H "Authorization: Bearer sk_live_YOUR_KEY" \\
-  -F "file=@screenshot.png"`}
+{exampleSnippet}
         </pre>
       </section>
     </div>
