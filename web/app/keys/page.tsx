@@ -53,6 +53,7 @@ import {
   workspaceChipLabel,
   DEFAULT_WORKSPACE,
 } from "@/lib/key-workspace";
+import { EmptyState } from "@/components/EmptyState";
 
 type KeyRow = {
   id: string;
@@ -613,16 +614,12 @@ export default function KeysPage() {
             ))}
           </div>
         ) : keys.length === 0 ? (
-          <div
-            className="rounded-md border p-6 text-center"
-            style={{ borderColor: "var(--color-rule)", background: "var(--color-chalk)" }}
-          >
-            <Key size={28} weight="duotone" className="mx-auto opacity-60" />
-            <p className="mt-2 text-[13px]">No keys yet.</p>
-            <p className="text-[12px]" style={{ color: "var(--color-ink-mute)" }}>
-              Generate one above to start calling the API.
-            </p>
-          </div>
+          <EmptyState
+            eyebrow="API access"
+            title="No keys yet"
+            body="Generate one above to start calling the classifier from your code."
+            icon={<Key size={26} weight="duotone" />}
+          />
         ) : (
           <div
             className="rounded-md border overflow-hidden"
