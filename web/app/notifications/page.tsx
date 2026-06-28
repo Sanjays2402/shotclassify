@@ -20,6 +20,12 @@ import { NotificationPrefsCard } from "@/components/NotificationPrefsCard";
 import { NotifFilterBreadcrumb } from "@/components/NotifFilterBreadcrumb";
 import type { NotifFilterKey } from "@/lib/notif-filter-chips";
 import { ofTotalLabel } from "@/lib/count-label";
+import {
+  shouldShowTouchHint,
+  isCoarsePointer,
+  hasSeenTouchHint,
+  markTouchHintSeen,
+} from "@/lib/touch-hint";
 
 type Notif = {
   id: string;
@@ -120,6 +126,23 @@ export default function NotificationsPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Touch-affordance hint (F126): on a coarse-pointer (touch) device the per-row
+  // trash button is easy to miss, so we surface a one-time "tap to dismiss" tip
+  // above the list. Resolved on mount (matchMedia + the seen-flag are client-
+  // only) so SSR renders nothing and there's no hydration mismatch.
+  const [touchHintReady, setTouchHintReady] = useState(false);
+  const [coarsePointer, setCoarsePointer] = useState(false);
+  const [touchHintSeen, setTouchHintSeen] = useState(true);
+  useEffect(() => {
+    setCoarsePointer(isCoarsePointer());
+    setTouchHintSeen(hasSeenTouchHint());
+    setTouchHintReady(true);
+  }, []);
+  const dismissTouchHint = useCallback(() => {
+    markTouchHintSeen();
+    setTouchHintSeen(true);
+  }, []);
 
   const buildUrl = useCallback(
     (atCursor: number) => {
@@ -421,6 +444,39 @@ export default function NotificationsPage() {
           </div>
         ) : (
           <>
+            {/* One-time touch affordance (F126): on a touch device, point out
+                that the trash icon dismisses a row. Hidden for mouse users
+                (they see it on hover) and after a single dismissal. */}
+            {touchHintReady &&
+              shouldShowTouchHint(coarsePointer, touchHintSeen, items.length) && (
+                <div
+                  className="flex items-center gap-2 px-4 py-2 text-[11.5px] border-b"
+                  style={{
+                    borderColor: "var(--color-rule)",
+                    background: "var(--color-chalk-2)",
+                  }}
+                  role="note"
+                >
+                  <Trash
+                    size={13}
+                    weight="duotone"
+                    className="shrink-0 opacity-70"
+                    aria-hidden
+                  />
+                  <span className="opacity-75 flex-1">
+                    Tap the trash icon on a notification to dismiss it.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={dismissTouchHint}
+                    className="inline-flex items-center justify-center w-6 h-6 rounded hover:bg-black/[0.06] shrink-0"
+                    aria-label="Dismiss this tip"
+                    title="Got it"
+                  >
+                    <X size={12} weight="bold" />
+                  </button>
+                </div>
+              )}
             <ul>
               {items.map((n) => (
                 <li
