@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 
 import {
   previewOcr,
+  previewOcrFull,
   previewConfidences,
   previewRationale,
   buildShotPreview,
@@ -47,6 +48,36 @@ test("previewOcr: text exactly at the cap is not truncated", () => {
   const { snippet, truncated } = previewOcr({ ocr_text: "12345" }, 5);
   assert.equal(snippet, "12345");
   assert.equal(truncated, false);
+});
+
+test("previewOcrFull: returns the complete text, preserving newlines", () => {
+  // The snippet flattens + truncates; the full copy keeps the whole transcript
+  // and its line structure.
+  const text = "RECEIPT\nTOTAL 12.00\nTHANK YOU";
+  assert.equal(previewOcrFull({ ocr_text: text }), text);
+});
+
+test("previewOcrFull: prefers nested ocr.text over flat ocr_text", () => {
+  assert.equal(
+    previewOcrFull({ ocr: { text: "nested wins" }, ocr_text: "flat loses" }),
+    "nested wins",
+  );
+});
+
+test("previewOcrFull: falls back to flat when nested is whitespace-only", () => {
+  assert.equal(
+    previewOcrFull({ ocr: { text: "   \n  " }, ocr_text: "flat value" }),
+    "flat value",
+  );
+});
+
+test("previewOcrFull: trims outer whitespace but keeps inner newlines", () => {
+  assert.equal(previewOcrFull({ ocr_text: "  \n line A\nline B \n " }), "line A\nline B");
+});
+
+test("previewOcrFull: null when there's no real text anywhere", () => {
+  assert.equal(previewOcrFull({}), null);
+  assert.equal(previewOcrFull({ ocr: { text: "  " }, ocr_text: "\n\t" }), null);
 });
 
 test("previewConfidences: sorts distribution desc, caps, clamps pct", () => {

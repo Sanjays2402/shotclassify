@@ -124,6 +124,28 @@ export function previewConfidences(
   return [];
 }
 
+// The FULL OCR text for the drawer's "copy OCR" button (F124). The drawer
+// shows a truncated, whitespace-flattened SNIPPET (previewOcr) so the row
+// stays compact, but a copy should hand over everything the shot captured.
+// This returns the complete OCR text from whichever slot holds it (nested
+// `ocr.text` preferred, then flat `ocr_text`), with only the leading/trailing
+// whitespace trimmed -- internal newlines are PRESERVED so the copied text
+// keeps the transcript's line structure (unlike the snippet, which collapses
+// it to one line for display). null when neither slot carries real text, so
+// the button can hide itself rather than copy an empty string.
+export function previewOcrFull(rec: ShotPreviewRecord): string | null {
+  const nested = typeof rec.ocr?.text === "string" ? rec.ocr.text : "";
+  const flatField = typeof rec.ocr_text === "string" ? rec.ocr_text : "";
+  // Mirror previewOcr's slot preference: a nested value that's only
+  // whitespace must fall through to the flat field rather than win and trim
+  // away to nothing. flatten() collapses for the emptiness test only.
+  const nestedReal = flatten(nested) ? nested : "";
+  const flatReal = flatten(flatField) ? flatField : "";
+  const raw = nestedReal || flatReal;
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : null;
+}
+
 // Trim the classifier rationale; null when absent / blank.
 export function previewRationale(rec: ShotPreviewRecord): string | null {
   const r = rec.classification?.rationale;
