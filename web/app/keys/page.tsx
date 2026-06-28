@@ -21,6 +21,12 @@ import {
   type KeyScope,
   type ScopeTier,
 } from "@/lib/key-scope";
+import {
+  keyRelativeLabel,
+  keyUsageStatus,
+  keyStatusLabel,
+  keyStatusHint,
+} from "@/lib/key-activity";
 
 type KeyRow = {
   id: string;
@@ -62,6 +68,16 @@ export default function KeysPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [rotating, setRotating] = useState<string | null>(null);
+  // Captured on mount so the relative "last used" labels (F131) render the
+  // same value on first client paint as on every subsequent render -- SSR
+  // emits 0 (no relative line), the mount effect fills the real clock, and a
+  // 60s tick keeps the labels fresh while the page stays open.
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -464,7 +480,37 @@ export default function KeysPage() {
                       {fmtDate(k.created_at)}
                     </td>
                     <td className="px-3 py-2 hidden md:table-cell" style={{ color: "var(--color-ink-mute)" }}>
-                      {fmtDate(k.last_used_at)}
+                      {(() => {
+                        const status = keyUsageStatus(k, now);
+                        const rel = now > 0 ? keyRelativeLabel(k.last_used_at, now) : "";
+                        const pill = keyStatusLabel(status);
+                        return (
+                          <div className="flex flex-col gap-0.5">
+                            <span title={k.last_used_at ? fmtDate(k.last_used_at) : "Never used"}>
+                              {fmtDate(k.last_used_at)}
+                            </span>
+                            {rel && (
+                              <span className="text-[11px] opacity-70 tabular-nums">{rel}</span>
+                            )}
+                            {pill && (
+                              <span
+                                className="inline-flex w-fit items-center rounded-md border px-1.5 py-0.5 text-[10px] font-mono"
+                                style={{
+                                  borderColor: "var(--color-rule)",
+                                  background: "var(--color-chalk)",
+                                  color:
+                                    status === "unused"
+                                      ? "var(--color-conf-low)"
+                                      : "var(--color-cue-deep, #9a7a0a)",
+                                }}
+                                title={keyStatusHint(status)}
+                              >
+                                {pill}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">
                       {k.usage_count}
