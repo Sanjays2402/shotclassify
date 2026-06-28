@@ -12,8 +12,15 @@ import {
   Lock,
   ArrowsClockwise,
 } from "@phosphor-icons/react/dist/ssr";
-
-type KeyScope = "read" | "write" | "admin";
+import {
+  SCOPE_OPTIONS,
+  scopesForSelection,
+  scopeLabel,
+  scopeDescription,
+  scopeCanWrite,
+  type KeyScope,
+  type ScopeTier,
+} from "@/lib/key-scope";
 
 type KeyRow = {
   id: string;
@@ -46,7 +53,7 @@ export default function KeysPage() {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newWorkspace, setNewWorkspace] = useState("");
-  const [newScope, setNewScope] = useState<"read" | "write" | "admin">("write");
+  const [newScope, setNewScope] = useState<ScopeTier>("write");
   const [revealed, setRevealed] = useState<{
     name: string;
     plaintext: string;
@@ -82,12 +89,7 @@ export default function KeysPage() {
         body: JSON.stringify({
           name: newName,
           workspace_id: newWorkspace.trim() || undefined,
-          scopes:
-            newScope === "admin"
-              ? ["read", "write", "admin"]
-              : newScope === "write"
-                ? ["read", "write"]
-                : ["read"],
+          scopes: scopesForSelection(newScope),
         }),
       });
       if (!r.ok) {
@@ -255,21 +257,23 @@ export default function KeysPage() {
             <select
               id="key-scope"
               value={newScope}
-              onChange={(e) => setNewScope(e.target.value as "read" | "write" | "admin")}
+              onChange={(e) => setNewScope(e.target.value as ScopeTier)}
               className="w-full rounded-md border px-3 py-2 text-[13px] bg-white outline-none focus:ring-2"
               style={{ borderColor: "var(--color-rule)" }}
               aria-describedby="key-scope-help"
             >
-              <option value="write">Read and write (classify)</option>
-              <option value="read">Read only (list, fetch, usage)</option>
-              <option value="admin">Admin (manage webhooks, full access)</option>
+              {SCOPE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
             </select>
             <p
               id="key-scope-help"
               className="mt-1 text-[11px]"
               style={{ color: "var(--color-ink-mute)" }}
             >
-              Read-only keys are safe to embed in dashboards.
+              {scopeDescription(scopesForSelection(newScope))}
             </p>
           </div>
           <button
@@ -436,14 +440,7 @@ export default function KeysPage() {
                     </td>
                     <td className="px-3 py-2">
                       {(() => {
-                        const scopes = k.scopes ?? ["read", "write"];
-                        const isAdmin = scopes.includes("admin");
-                        const canWrite = scopes.includes("write");
-                        const label = isAdmin
-                          ? "admin"
-                          : canWrite
-                            ? "read+write"
-                            : "read";
+                        const canWrite = scopeCanWrite(k.scopes);
                         return (
                           <span
                             className="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-mono"
@@ -456,15 +453,9 @@ export default function KeysPage() {
                                 ? "var(--color-felt, #1a7a4a)"
                                 : "var(--color-ink-mute)",
                             }}
-                            title={
-                              isAdmin
-                                ? "Admin scope. Can manage webhooks plus all classify and read endpoints."
-                                : canWrite
-                                  ? "Can call POST /v1/classify and all read endpoints."
-                                  : "Read-only. POST /v1/classify will return 403 insufficient_scope."
-                            }
+                            title={scopeDescription(k.scopes)}
                           >
-                            {label}
+                            {scopeLabel(k.scopes)}
                           </span>
                         );
                       })()}
