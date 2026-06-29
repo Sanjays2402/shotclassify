@@ -27,6 +27,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 ## Roadmap (232 features tracked, 217 complete; **frontend-override active since 2026-06-23**)
 
 ### TICK LOG
+- tick 47 (2026-06-28 20:50 PDT): F154 cross-page date-format lib + audit wire (f91753d), F156 minConf threshold chip on /shots (7a50acd), F152 /keys calls mini-bar vs fleet peak (d79e079), F145 /shots search Esc clear-then-leave (57de5ff), F158 /keys/[id] busiest-day dot accent (9defe95). Gate: 789 web tests + tsc + next build green; only web/ touched (py untouched). Pushed to main.
 - tick 46 (2026-06-28 18:06 PDT): F140 sparkline lib (b2f1ff1), F141 shared snippet toggle (e01d07e), F142 per-hour mean-conf backend+overlay (d5975ea), F143 detail two-step confirm (e84c8b0), F144 clickable summary chips (bdcdec4). Gate: 764 web + tsc + 6 py aggregate green; +21 ruff on repository.py = baseline-identical. Pushed to main.
 
 ### Done in tick 1 (5 features)
@@ -477,20 +478,20 @@ F141. [x] Web: /keys/[id] sample reuses buildSnippet + shared SnippetLangToggle 
 F142. [x] Web: per-hour mean_confidence in Repository.aggregate hourly + dashed conf overlay on stats ingest-tempo (right 0-100% axis); TS type + demo synth + pytest. Tick 46. (d5975ea)
 F143. [x] Web: /keys/[id] rotate+revoke use the F136 two-step inline confirm (drop confirm()). Tick 46. (e84c8b0)
 F144. [x] Web: clickable /keys fleet-summary chips filter by idle/never-used (chipIsFilterable/toggleSummaryFilter/filterKeysByStatus + Show-all banner). Tick 46, 4 tests. (bdcdec4)
-F145. [ ] Web: /shots filter toolbar "Esc clears focus / collapses" keyboard nicety -- pressing Esc in any filter control blurs to the list. Pure key predicate + thin wiring.
+F145. [x] Web: /shots filter toolbar "Esc clears focus / collapses" keyboard nicety -- pressing Esc in any filter control blurs to the list. Pure key predicate + thin wiring. (tick 47, 57de5ff)
 F146. [ ] Web: /stats KPI cards skeleton-loading state -- the 4 cards pop in; add a chalk skeleton matching their footprint. Component-level.
 F147. [ ] Web: /webhooks deliveries row "retry" affordance polish (inline spinner + toast). Component-level.
 F148. [ ] Web: /keys empty-state primary CTA scrolls to + focuses the create form. Pure scroll/focus helper.
 F149. [ ] Web: /notifications bulk "mark all read" confirm reuse two-step pattern. Pure helper reuse.
 F150. [ ] Web: /shots grid card keyboard focus ring + Enter-opens parity with table rows. Pure key helper.
 F151. [ ] Web: /stats window selector persists like F135 (already F44 done?) verify + dedupe. Audit-only.
-F152. [ ] Web: /keys "calls" column mini bar vs fleet max. Pure ratio helper + tests.
+F152. [x] Web: /keys "calls" column mini bar vs fleet max. Pure ratio helper + tests. (tick 47, d79e079)
 F153. [ ] Web: /digest empty -> "run demo" CTA parity. Component-level.
-F154. [ ] Web: cross-page consistent date-format helper extraction. Pure lib + tests.
+F154. [x] Web: cross-page consistent date-format helper extraction. Pure lib + tests. (tick 47, f91753d)
 F155. [ ] Web: /keys/[id] "Try it" empty-key state -> "Generate one above" link back to /keys. Component-level.
-F156. [ ] Web: /shots minConf chip shows the active threshold inline ("conf >= 0.8"). Pure label helper + tests.
+F156. [x] Web: /shots minConf chip shows the active threshold inline ("conf >= 0.8"). Pure label helper + tests. (tick 47, 7a50acd)
 F157. [ ] Web: /stats class-mix bar tooltip shows mean-conf alongside count. Component-level.
-F158. [ ] Web: /keys/[id] sparkline busiest-day dot highlighted (reuse summarizeSeries.busiestDay). Component-level.
+F158. [x] Web: /keys/[id] sparkline busiest-day dot highlighted (reuse summarizeSeries.busiestDay). Component-level. (tick 47, 9defe95)
 F159. [ ] Web: /webhooks deliveries empty-after-filter -> "clear filter" CTA inside EmptyState. Component-level.
 
 
