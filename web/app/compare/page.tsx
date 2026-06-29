@@ -7,6 +7,7 @@ import useSWR from "swr";
 import { ArrowsLeftRight, X, Scales } from "@phosphor-icons/react/dist/ssr";
 import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
+import CopyCompareLinkButton from "@/components/CopyCompareLinkButton";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import {
   CATEGORIES,
@@ -274,6 +275,10 @@ function CompareInner() {
           >
             <ArrowsLeftRight size={14} weight="duotone" /> Swap
           </button>
+          {/* Real clipboard share (this tick) -- copies the FULL ?a=ID&b=ID
+              URL so the comparison actually reopens. The old "Share URL" Stat
+              printed shortId-truncated ids, i.e. a broken link. */}
+          <CopyCompareLinkButton a={a} b={b} />
           <button
             className="btn btn-ghost"
             onClick={() => {
@@ -328,12 +333,8 @@ function DeltaBar({ a, b }: { a: string; b: string }) {
         tone={latencyDelta == null ? undefined : latencyDelta <= 0 ? "good" : "bad"}
       />
       <Stat
-        label="Share URL"
-        value={
-          typeof window !== "undefined"
-            ? `/compare?a=${shortId(a)}&b=${shortId(b)}`
-            : "/compare"
-        }
+        label="Confidence gap"
+        value={`${Math.abs(confDelta).toFixed(1)} pts`}
       />
     </div>
   );
