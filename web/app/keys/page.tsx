@@ -36,7 +36,7 @@ import {
   filterKeysByStatus,
   type KeySummaryFilter,
 } from "@/lib/key-summary";
-import { callBar, callCount, fleetMaxCalls, callBarTitle } from "@/lib/key-callbar";
+import { callBar, callCount, fleetMaxCalls, fleetTotalCalls, callBarTitle, fleetShareLabel } from "@/lib/key-callbar";
 import {
   buildSnippet,
   type SnippetLang,
@@ -294,6 +294,7 @@ export default function KeysPage() {
   // Fleet peak across the visible keys -- backs the per-row "calls" mini bar
   // (F152) so each bar scales against the busiest key currently shown.
   const fleetPeak = fleetMaxCalls(visibleKeys);
+  const fleetTotal = fleetTotalCalls(visibleKeys);
 
   return (
     <div className="space-y-8">
@@ -771,7 +772,7 @@ export default function KeysPage() {
                         const c = callCount(k);
                         const bar = callBar(c, fleetPeak);
                         return (
-                          <div className="flex flex-col items-end gap-1" title={callBarTitle(c, fleetPeak)}>
+                          <div className="flex flex-col items-end gap-1" title={`${callBarTitle(c, fleetPeak)}${fleetShareLabel(c, fleetTotal) ? ` \u00b7 ${fleetShareLabel(c, fleetTotal)}` : ""}`}>
                             <span>{c.toLocaleString()}</span>
                             <span
                               className="h-1 w-16 overflow-hidden rounded-full"

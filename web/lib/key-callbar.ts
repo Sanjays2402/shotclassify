@@ -60,3 +60,30 @@ export function callBarTitle(count: number, max: number): string {
   const noun = bar.count === 1 ? "call" : "calls";
   return `${bar.count.toLocaleString()} ${noun} (${pct}% of fleet peak)`;
 }
+
+// Total calls across the whole visible fleet. The peak bar (callBar) answers
+// "how busy vs the leader"; this backs the complementary "what slice of all
+// traffic is this key" question (F40). Floored at 1 so the share divide is
+// always safe. Mirrors fleetMaxCalls' coercion so the two can't disagree.
+export function fleetTotalCalls(rows: readonly CallRow[] | null | undefined): number {
+  if (!Array.isArray(rows)) return 1;
+  let total = 0;
+  for (const r of rows) total += callCount(r);
+  return Math.max(1, total);
+}
+
+// "32% of fleet traffic" share label for a single key vs the whole fleet total
+// (F40). Distinct from callBarTitle's peak-relative percent: a key can be 100%
+// of peak yet a small slice of total in a busy fleet. Returns null when the key
+// has no traffic so the row renders nothing inert. Rounds to whole percent;
+// a key that rounds to 0% but has calls reports "<1%" so it never reads silent.
+export function fleetShareLabel(
+  count: number,
+  total: number,
+): string | null {
+  const c = Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
+  if (c <= 0) return null;
+  const t = Number.isFinite(total) && total > 0 ? Math.trunc(total) : 1;
+  const pct = Math.round((c / t) * 100);
+  return `${pct < 1 ? "<1" : pct}% of fleet traffic`;
+}

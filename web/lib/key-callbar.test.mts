@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { callCount, fleetMaxCalls, callBar, callBarTitle } from "./key-callbar.ts";
+import { callCount, fleetMaxCalls, callBar, callBarTitle, fleetTotalCalls, fleetShareLabel } from "./key-callbar.ts";
 
 test("callCount: clean integer, non-finite / negative / fractional guarded", () => {
   assert.equal(callCount({ usage_count: 12 }), 12);
@@ -49,4 +49,18 @@ test("callBarTitle: humanised hover, never-called branch", () => {
   assert.equal(callBarTitle(1204, 3200), "1,204 calls (38% of fleet peak)");
   assert.equal(callBarTitle(1, 4), "1 call (25% of fleet peak)");
   assert.equal(callBarTitle(0, 100), "Never called");
+});
+
+test("fleetTotalCalls: sums coerced counts, floors at 1", () => {
+  assert.equal(fleetTotalCalls([{ usage_count: 10 }, { usage_count: 30 }]), 40);
+  assert.equal(fleetTotalCalls([{ usage_count: -5 }, { usage_count: 0 }]), 1);
+  assert.equal(fleetTotalCalls([]), 1);
+  assert.equal(fleetTotalCalls(null), 1);
+});
+
+test("fleetShareLabel: share of total, <1% floor, null at zero", () => {
+  assert.equal(fleetShareLabel(320, 1000), "32% of fleet traffic");
+  assert.equal(fleetShareLabel(2, 1000), "<1% of fleet traffic");
+  assert.equal(fleetShareLabel(0, 1000), null);
+  assert.equal(fleetShareLabel(50, 100), "50% of fleet traffic");
 });
