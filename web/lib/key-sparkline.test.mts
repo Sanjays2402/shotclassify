@@ -6,6 +6,7 @@ import {
   cleanSeries,
   sparklineGeometry,
   summarizeSeries,
+  peakPointIndex,
 } from "./key-sparkline.ts";
 
 test("cleanSeries: drops junk, floors negatives/NaN, stringifies day", () => {
@@ -91,4 +92,19 @@ test("summarizeSeries: total/peak/busiest with left-most tie-break", () => {
 test("summarizeSeries: all-zero reports no traffic, blank busiest day", () => {
   const s = summarizeSeries([{ day: "a", count: 0 }]);
   assert.deepEqual(s, { total: 0, peak: 0, busiestDay: "", hasTraffic: false });
+});
+
+test("peakPointIndex: points at the first peak, matching busiestDay tie-break", () => {
+  const g = sparklineGeometry([
+    { day: "a", count: 4 },
+    { day: "b", count: 9 },
+    { day: "c", count: 9 },
+  ]);
+  assert.equal(peakPointIndex(g), 1); // first of the tied peaks
+});
+
+test("peakPointIndex: -1 for an all-zero / empty series and bad input", () => {
+  assert.equal(peakPointIndex(sparklineGeometry([{ day: "a", count: 0 }])), -1);
+  assert.equal(peakPointIndex(sparklineGeometry([])), -1);
+  assert.equal(peakPointIndex(null), -1);
 });

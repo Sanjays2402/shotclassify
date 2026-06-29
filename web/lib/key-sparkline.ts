@@ -108,3 +108,16 @@ export function summarizeSeries(
   }
   return { total, peak, busiestDay, hasTraffic: peak > 0 };
 }
+
+// Index of the busiest projected point in a SparkGeometry, or -1 when the
+// series has no traffic (all-zero / empty). Ties resolve to the FIRST peak,
+// matching summarizeSeries.busiestDay, so the caption's "Peak on <day>" and
+// the highlighted dot point at the same sample. The detail-page sparkline
+// uses this to accent one dot instead of rendering every point identically.
+export function peakPointIndex(geo: SparkGeometry | null | undefined): number {
+  if (!geo || !Array.isArray(geo.points) || geo.peak <= 0) return -1;
+  for (let i = 0; i < geo.points.length; i++) {
+    if (geo.points[i].count >= geo.peak) return i;
+  }
+  return -1;
+}

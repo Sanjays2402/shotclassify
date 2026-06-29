@@ -20,7 +20,7 @@ import {
   ListMagnifyingGlass,
   CircleNotch,
 } from "@phosphor-icons/react/dist/ssr";
-import { sparklineGeometry, summarizeSeries } from "@/lib/key-sparkline";
+import { sparklineGeometry, summarizeSeries, peakPointIndex } from "@/lib/key-sparkline";
 import {
   buildSnippet,
   SNIPPET_LANGS,
@@ -96,6 +96,9 @@ function Sparkline({
   // Geometry + peak now come from the tested lib/key-sparkline helper so the
   // empty / single-point / all-zero edges can't regress in the inline SVG.
   const g = sparklineGeometry(series, { height });
+  // Accent the busiest day's dot (F158) so the eye lands on the peak the
+  // caption names, reusing the same first-peak tie-break as summarizeSeries.
+  const peakIdx = peakPointIndex(g);
   return (
     <svg
       viewBox={`0 0 720 ${height}`}
@@ -115,7 +118,13 @@ function Sparkline({
       />
       {g.points.map((p, i) =>
         p.count > 0 ? (
-          <circle key={i} cx={p.x} cy={p.y} r="2" fill="currentColor" />
+          i === peakIdx ? (
+            <circle key={i} cx={p.x} cy={p.y} r="3.5" fill="var(--color-cue-deep, #9a7a0a)" stroke="currentColor" strokeWidth="1">
+              <title>{`Peak ${p.count} on ${p.day}`}</title>
+            </circle>
+          ) : (
+            <circle key={i} cx={p.x} cy={p.y} r="2" fill="currentColor" />
+          )
         ) : null,
       )}
     </svg>
