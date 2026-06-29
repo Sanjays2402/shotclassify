@@ -24,7 +24,10 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (227 features tracked, 212 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (232 features tracked, 217 complete; **frontend-override active since 2026-06-23**)
+
+### TICK LOG
+- tick 46 (2026-06-28 18:06 PDT): F140 sparkline lib (b2f1ff1), F141 shared snippet toggle (e01d07e), F142 per-hour mean-conf backend+overlay (d5975ea), F143 detail two-step confirm (e84c8b0), F144 clickable summary chips (bdcdec4). Gate: 764 web + tsc + 6 py aggregate green; +21 ruff on repository.py = baseline-identical. Pushed to main.
 
 ### Done in tick 1 (5 features)
 1. [x] Receipt: tip/gratuity extraction.
@@ -469,11 +472,11 @@ F139. [x] Web: /keys empty-state uses canonical EmptyState -- shipped tick 45. B
 ### Frontend backlog refill (tick 45 -- F140-F154, frontend-override still active)
 The /keys arc (F130-F139) is fully closed. Next themes: /keys/[id] detail
 page polish, /stats data-viz, and cross-page keyboard/empty-state consistency.
-F140. [ ] Web: /keys/[id] detail page activity sparkline -- the per-key activity endpoint exists (/api/keys/[id]/activity); render a tiny inline usage-over-time sparkline on the detail page reusing the chart-theme tokens. Pure series-bucketing helper + tests.
-F141. [ ] Web: /keys/[id] snippet block reuses buildSnippet + LangToggle (F134/F135) -- the detail page likely has its own curl-only sample; share the lib + persisted lang so it stays in lockstep with /keys. Component-level.
-F142. [ ] Web: /stats per-hour mean-confidence backend slice (the one sanctioned backend touch, F125) -- add mean-conf to /api/aggregate hourly + TS type; THEN the long-tracked sparkline becomes honest. Minimal FastAPI + matching client type.
-F143. [ ] Web: /keys detail "rotate/revoke" reuse the F136 two-step confirm -- the [id] page still uses confirm(); reuse lib/key-confirm so destructive actions match across the keys surfaces. Component-level.
-F144. [ ] Web: /keys fleet-summary chips clickable -> filter by status (idle/never-used) -- F133 chips are static; make idle/unused chips narrow the table to those keys (reuse keyUsageStatus buckets). Pure predicate + tests.
+F140. [x] Web: /keys/[id] usage sparkline math -> tested lib/key-sparkline (cleanSeries/sparklineGeometry/summarizeSeries; empty/single/all-zero/NaN edges; peak floors at 1; busiest-day caption). Tick 46, 9 tests. (b2f1ff1)
+F141. [x] Web: /keys/[id] sample reuses buildSnippet + shared SnippetLangToggle + persisted lang (F134/F135); fixed a broken unterminated-quote curl literal. Tick 46. (e01d07e)
+F142. [x] Web: per-hour mean_confidence in Repository.aggregate hourly + dashed conf overlay on stats ingest-tempo (right 0-100% axis); TS type + demo synth + pytest. Tick 46. (d5975ea)
+F143. [x] Web: /keys/[id] rotate+revoke use the F136 two-step inline confirm (drop confirm()). Tick 46. (e84c8b0)
+F144. [x] Web: clickable /keys fleet-summary chips filter by idle/never-used (chipIsFilterable/toggleSummaryFilter/filterKeysByStatus + Show-all banner). Tick 46, 4 tests. (bdcdec4)
 F145. [ ] Web: /shots filter toolbar "Esc clears focus / collapses" keyboard nicety -- pressing Esc in any filter control blurs to the list. Pure key predicate + thin wiring.
 F146. [ ] Web: /stats KPI cards skeleton-loading state -- the 4 cards pop in; add a chalk skeleton matching their footprint. Component-level.
 F147. [ ] Web: /webhooks deliveries row "retry" affordance polish (inline spinner + toast). Component-level.
@@ -484,6 +487,11 @@ F151. [ ] Web: /stats window selector persists like F135 (already F44 done?) ver
 F152. [ ] Web: /keys "calls" column mini bar vs fleet max. Pure ratio helper + tests.
 F153. [ ] Web: /digest empty -> "run demo" CTA parity. Component-level.
 F154. [ ] Web: cross-page consistent date-format helper extraction. Pure lib + tests.
+F155. [ ] Web: /keys/[id] "Try it" empty-key state -> "Generate one above" link back to /keys. Component-level.
+F156. [ ] Web: /shots minConf chip shows the active threshold inline ("conf >= 0.8"). Pure label helper + tests.
+F157. [ ] Web: /stats class-mix bar tooltip shows mean-conf alongside count. Component-level.
+F158. [ ] Web: /keys/[id] sparkline busiest-day dot highlighted (reuse summarizeSeries.busiestDay). Component-level.
+F159. [ ] Web: /webhooks deliveries empty-after-filter -> "clear filter" CTA inside EmptyState. Component-level.
 
 
 
