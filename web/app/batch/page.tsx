@@ -15,6 +15,11 @@ import {
 } from "@phosphor-icons/react/dist/ssr";
 import { ConfBar } from "@/components/ConfBar";
 import { confColor, LONG, pct, type Category } from "@/lib/categories";
+import {
+  progressPercent,
+  isBatchComplete,
+  progressLabel,
+} from "@/lib/batch-progress";
 
 function Pill({ children }: { children: React.ReactNode }) {
   return (
@@ -410,6 +415,43 @@ export default function BatchPage() {
               </button>
             </div>
           </div>
+
+          {/* Determinate progress bar (this tick) -- the pills tally counts but
+              gave no sense of how far along a long run is. Fills felt-green as
+              rows settle, flips to a complete treatment at 100%, and names any
+              errors in the label below. */}
+          {(() => {
+            const percent = progressPercent(counts);
+            const complete = isBatchComplete(counts);
+            const label = progressLabel(counts);
+            return (
+              <div className="flex flex-col gap-1.5">
+                <div
+                  className="h-2 w-full rounded-full overflow-hidden"
+                  style={{ background: "var(--color-rule)" }}
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={percent}
+                  aria-label="Batch classification progress"
+                >
+                  <div
+                    className="h-full rounded-full transition-[width] duration-300 ease-out"
+                    style={{
+                      width: `${percent}%`,
+                      background: complete
+                        ? "#067647"
+                        : "var(--color-felt)",
+                    }}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-[11px] tabular-nums" style={{ color: "var(--color-mute)" }}>
+                  <span>{label}</span>
+                  <span>{percent}%</span>
+                </div>
+              </div>
+            );
+          })()}
 
           <div
             className="overflow-x-auto rounded border"
