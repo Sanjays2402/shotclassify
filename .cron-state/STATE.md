@@ -24,9 +24,10 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (232 features tracked, 222 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (232 features tracked, 224 complete; **frontend-override active since 2026-06-23**)
 
 ### TICK LOG
+- tick 49 (2026-06-29 01:57 PDT): F65 stats mean-conf trend delta (a1c2249), F147 webhook delivery inline retry (fb2ef96), F153 digest recipient validation (d5b5141), F154 digest by-category share bars (d108d77), F158 digest peak-day caption+accent (f122f6c). Gate: 836 web tests + tsc + next build green; only web/ touched (py untouched). Pushed to main.
 - tick 48 (2026-06-28 23:18 PDT): F157 class-mix tooltip mean-conf row (e6f7b33), F146 KPI cards skeleton matching footprint (b270c44), F150 grid card kb focus-ring + Enter-open parity (cbca43b), F148 keys empty-state CTA scroll+focus create form (277ff8f), F149 notifications bulk two-step confirm (8672d18). Gate: 812 web tests + tsc + next build green; only web/ touched (py untouched). Pushed to main.
 - tick 47 (2026-06-28 20:50 PDT): F154 cross-page date-format lib + audit wire (f91753d), F156 minConf threshold chip on /shots (7a50acd), F152 /keys calls mini-bar vs fleet peak (d79e079), F145 /shots search Esc clear-then-leave (57de5ff), F158 /keys/[id] busiest-day dot accent (9defe95). Gate: 789 web tests + tsc + next build green; only web/ touched (py untouched). Pushed to main.
 - tick 46 (2026-06-28 18:06 PDT): F140 sparkline lib (b2f1ff1), F141 shared snippet toggle (e01d07e), F142 per-hour mean-conf backend+overlay (d5975ea), F143 detail two-step confirm (e84c8b0), F144 clickable summary chips (bdcdec4). Gate: 764 web + tsc + 6 py aggregate green; +21 ruff on repository.py = baseline-identical. Pushed to main.
@@ -481,13 +482,13 @@ F143. [x] Web: /keys/[id] rotate+revoke use the F136 two-step inline confirm (dr
 F144. [x] Web: clickable /keys fleet-summary chips filter by idle/never-used (chipIsFilterable/toggleSummaryFilter/filterKeysByStatus + Show-all banner). Tick 46, 4 tests. (bdcdec4)
 F145. [x] Web: /shots filter toolbar "Esc clears focus / collapses" keyboard nicety -- pressing Esc in any filter control blurs to the list. Pure key predicate + thin wiring. (tick 47, 57de5ff)
 F146. [x] Web: /stats KPI cards skeleton-loading state -- the 4 cards pop in; add a chalk skeleton matching their footprint. Component-level.
-F147. [ ] Web: /webhooks deliveries row "retry" affordance polish (inline spinner + toast). Component-level.
+F147. [x] Web: /webhooks deliveries row "retry" affordance polish (inline spinner + toast). DONE tick 49 (fb2ef96): failed rows fire action=redeliver, spin own id, refresh + toast; lib/delivery-retry.ts.
 F148. [x] Web: /keys empty-state primary CTA scrolls to + focuses the create form. Pure scroll/focus helper.
 F149. [x] Web: /notifications bulk "mark all read" confirm reuse two-step pattern. Pure helper reuse.
 F150. [x] Web: /shots grid card keyboard focus ring + Enter-opens parity with table rows. Pure key helper.
 F151. [ ] Web: /stats window selector persists like F135 (already F44 done?) verify + dedupe. Audit-only.
 F152. [x] Web: /keys "calls" column mini bar vs fleet max. Pure ratio helper + tests. (tick 47, d79e079)
-F153. [ ] Web: /digest empty -> "run demo" CTA parity. Component-level.
+F153. [x] Web: /digest recipient validated before send (canSendDigest/recipientHint) -- blank uses DIGEST_TO, malformed disables button + alert. DONE tick 49 (d5b5141).
 F154. [x] Web: cross-page consistent date-format helper extraction. Pure lib + tests. (tick 47, f91753d)
 F155. [ ] Web: /keys/[id] "Try it" empty-key state -> "Generate one above" link back to /keys. Component-level.
 F156. [x] Web: /shots minConf chip shows the active threshold inline ("conf >= 0.8"). Pure label helper + tests. (tick 47, 7a50acd)
