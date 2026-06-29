@@ -32,6 +32,13 @@ import {
   KEY_SNIPPET_LANG_DEFAULT,
 } from "@/lib/key-snippet-pref";
 import { SnippetLangToggle } from "@/components/SnippetLangToggle";
+import {
+  isArmed,
+  confirmLabel,
+  confirmPrompt,
+  nextOnTrigger,
+  type KeyConfirmPending,
+} from "@/lib/key-confirm";
 
 type KeyScope = "read" | "write" | "admin";
 
@@ -128,6 +135,9 @@ export default function KeyDetailPage() {
   const [editing, setEditing] = useState(false);
   const [rotating, setRotating] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  // Inline two-step destructive confirm (F143) replaces confirm() — same state
+  // machine as the /keys list (F136) so rotate/revoke match across surfaces.
+  const [pendingConfirm, setPendingConfirm] = useState<KeyConfirmPending>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   // Snippet language for the "Try it" block, persisted across visits + shared
@@ -371,12 +381,6 @@ export default function KeyDetailPage() {
   );
 
   const onRotate = useCallback(async () => {
-    if (
-      !confirm(
-        "Rotate this key? The current secret stops working immediately. You will see the new value once.",
-      )
-    )
-      return;
     setRotating(true);
     setErr(null);
     try {
@@ -396,8 +400,6 @@ export default function KeyDetailPage() {
   }, [id, load]);
 
   const onRevoke = useCallback(async () => {
-    if (!confirm("Revoke this key? Calls using it will fail immediately."))
-      return;
     setRevoking(true);
     try {
       const r = await fetch(`/api/keys/${encodeURIComponent(id)}`, {
@@ -410,6 +412,22 @@ export default function KeyDetailPage() {
       setRevoking(false);
     }
   }, [id, router]);
+
+  // Two-step: first click arms (inline prompt), Confirm fires (F143). Cancel
+  // clears. Only one of rotate/revoke can be armed at a time.
+  const triggerConfirm = useCallback(
+    (action: "rotate" | "revoke") => {
+      setPendingConfirm((prev) => {
+        const { fire, pending } = nextOnTrigger(prev, action, id);
+        if (fire) {
+          if (action === "rotate") onRotate();
+          else onRevoke();
+        }
+        return pending;
+      });
+    },
+    [id, onRotate, onRevoke],
+  );
 
   const copy = useCallback(async (slot: string, text: string) => {
     try {
@@ -538,31 +556,76 @@ export default function KeyDetailPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={onRotate}
-                disabled={rotating}
-                className="btn text-[12px] inline-flex items-center gap-1.5"
-                style={{
-                  background: "transparent",
-                  borderColor: "var(--color-rule)",
-                }}
-              >
-                <ArrowsClockwise size={14} weight="duotone" />
-                {rotating ? "Rotating…" : "Rotate"}
-              </button>
-              <button
-                onClick={onRevoke}
-                disabled={revoking}
-                className="btn text-[12px] inline-flex items-center gap-1.5"
-                style={{
-                  background: "transparent",
-                  borderColor: "var(--color-rule)",
-                  color: "var(--color-danger, #b91c1c)",
-                }}
-              >
-                <Trash size={14} weight="duotone" />
-                Revoke
-              </button>
+              {(() => {
+                const rotateArmed = isArmed(pendingConfirm, "rotate", id);
+                const revokeArmed = isArmed(pendingConfirm, "revoke", id);
+                const armed = rotateArmed ? "rotate" : revokeArmed ? "revoke" : null;
+                if (armed) {
+                  return (
+                    <div className="flex items-center gap-2 flex-wrap justify-end">
+                      <span
+                        className="text-[11px] max-w-[22rem]"
+                        style={{ color: "var(--color-ink-mute)" }}
+                      >
+                        {confirmPrompt(armed)}
+                      </span>
+                      <button
+                        onClick={() => triggerConfirm(armed)}
+                        disabled={rotating || revoking}
+                        className="btn text-[12px] inline-flex items-center gap-1.5 text-white disabled:opacity-50"
+                        style={{ background: "var(--color-danger, #b91c1c)" }}
+                        aria-label={`Confirm ${armed}`}
+                      >
+                        {armed === "rotate" ? (
+                          <ArrowsClockwise size={14} weight="duotone" />
+                        ) : (
+                          <Trash size={14} weight="duotone" />
+                        )}
+                        {confirmLabel(armed, true)}
+                      </button>
+                      <button
+                        onClick={() => setPendingConfirm(null)}
+                        className="btn text-[12px]"
+                        style={{
+                          background: "transparent",
+                          borderColor: "var(--color-rule)",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  );
+                }
+                return (
+                  <>
+                    <button
+                      onClick={() => triggerConfirm("rotate")}
+                      disabled={rotating}
+                      className="btn text-[12px] inline-flex items-center gap-1.5"
+                      style={{
+                        background: "transparent",
+                        borderColor: "var(--color-rule)",
+                      }}
+                    >
+                      <ArrowsClockwise size={14} weight="duotone" />
+                      {rotating ? "Rotating…" : "Rotate"}
+                    </button>
+                    <button
+                      onClick={() => triggerConfirm("revoke")}
+                      disabled={revoking}
+                      className="btn text-[12px] inline-flex items-center gap-1.5"
+                      style={{
+                        background: "transparent",
+                        borderColor: "var(--color-rule)",
+                        color: "var(--color-danger, #b91c1c)",
+                      }}
+                    >
+                      <Trash size={14} weight="duotone" />
+                      Revoke
+                    </button>
+                  </>
+                );
+              })()}
             </div>
           </header>
 
