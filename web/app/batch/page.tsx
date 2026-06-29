@@ -15,7 +15,7 @@ import {
 } from "@phosphor-icons/react/dist/ssr";
 import { ConfBar } from "@/components/ConfBar";
 import { Chip } from "@/components/Chip";
-import { confColor, LONG, pct, type Category } from "@/lib/categories";
+import { confColor, LONG, ms, pct, type Category } from "@/lib/categories";
 import {
   progressPercent,
   isBatchComplete,
@@ -26,6 +26,7 @@ import {
   distinctClassCount,
   classSliceTitle,
 } from "@/lib/batch-classes";
+import { batchStats, hasBatchStats } from "@/lib/batch-stats";
 
 function Pill({ children }: { children: React.ReactNode }) {
   return (
@@ -485,6 +486,40 @@ export default function BatchPage() {
                     </span>
                   </span>
                 ))}
+              </div>
+            );
+          })()}
+
+          {/* Aggregate timing + confidence (this tick) -- per-row elapsed was
+              only in the CSV; surface mean latency / mean confidence / total
+              wall time so a finished run reports its own quality without
+              opening the export. Wall time is real elapsed (earliest start to
+              latest finish), so concurrent work isn't double-counted. */}
+          {(() => {
+            const s = batchStats(rows);
+            if (!hasBatchStats(s)) return null;
+            return (
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px]" style={{ color: "var(--color-mute)" }}>
+                {s.meanConfidence !== null && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="eyebrow">Mean conf</span>
+                    <span className="num tabular-nums" style={{ color: confColor(s.meanConfidence) }}>
+                      {pct(s.meanConfidence)}
+                    </span>
+                  </span>
+                )}
+                {s.meanLatencyMs !== null && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="eyebrow">Mean latency</span>
+                    <span className="num tabular-nums">{ms(s.meanLatencyMs)}</span>
+                  </span>
+                )}
+                {s.wallMs !== null && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="eyebrow">Total time</span>
+                    <span className="num tabular-nums">{ms(s.wallMs)}</span>
+                  </span>
+                )}
               </div>
             );
           })()}
