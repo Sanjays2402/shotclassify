@@ -28,6 +28,7 @@ import {
   classSliceTitle,
 } from "@/lib/batch-classes";
 import { batchStats, hasBatchStats } from "@/lib/batch-stats";
+import { rowElapsedLabel } from "@/lib/batch-elapsed";
 import { batchSummaryText } from "@/lib/batch-summary-text";
 import { toast } from "@/lib/toast-store";
 
@@ -585,6 +586,7 @@ export default function BatchPage() {
                   <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 font-medium">Class</th>
                   <th className="px-3 py-2 font-medium w-[160px]">Confidence</th>
+                  <th className="px-3 py-2 font-medium">Elapsed</th>
                   <th className="px-3 py-2 font-medium">Open</th>
                 </tr>
               </thead>
@@ -643,6 +645,9 @@ export default function BatchPage() {
                       ) : (
                         <span style={{ color: "var(--color-mute)" }}>—</span>
                       )}
+                    </td>
+                    <td className="px-3 py-2 tabular-nums" style={{ color: "var(--color-mute)" }}>
+                      {rowElapsedLabel(r)}
                     </td>
                     <td className="px-3 py-2">
                       {r.shotId ? (
