@@ -20,6 +20,7 @@ import {
   ListMagnifyingGlass,
   CircleNotch,
 } from "@phosphor-icons/react/dist/ssr";
+import { sparklineGeometry, summarizeSeries } from "@/lib/key-sparkline";
 
 type KeyScope = "read" | "write" | "admin";
 
@@ -74,42 +75,27 @@ function Sparkline({
   series: { day: string; count: number }[];
   height?: number;
 }) {
-  const width = 720;
-  const padX = 8;
-  const padY = 12;
-  const max = Math.max(1, ...series.map((s) => s.count));
-  const stepX =
-    series.length > 1 ? (width - padX * 2) / (series.length - 1) : 0;
-  const points = series.map((s, i) => {
-    const x = padX + i * stepX;
-    const y =
-      padY + (height - padY * 2) * (1 - s.count / max);
-    return { x, y, ...s };
-  });
-  const path = points
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
-    .join(" ");
-  const area = `${path} L ${(padX + (series.length - 1) * stepX).toFixed(
-    1,
-  )} ${height - padY} L ${padX.toFixed(1)} ${height - padY} Z`;
+  // Geometry + peak now come from the tested lib/key-sparkline helper so the
+  // empty / single-point / all-zero edges can't regress in the inline SVG.
+  const g = sparklineGeometry(series, { height });
   return (
     <svg
-      viewBox={`0 0 ${width} ${height}`}
+      viewBox={`0 0 720 ${height}`}
       preserveAspectRatio="none"
       className="w-full h-24"
       role="img"
-      aria-label={`Daily request volume, peak ${max}`}
+      aria-label={`Daily request volume, peak ${g.peak}`}
     >
-      <path d={area} fill="currentColor" opacity="0.10" />
+      <path d={g.areaPath} fill="currentColor" opacity="0.10" />
       <path
-        d={path}
+        d={g.linePath}
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      {points.map((p, i) =>
+      {g.points.map((p, i) =>
         p.count > 0 ? (
           <circle key={i} cx={p.x} cy={p.y} r="2" fill="currentColor" />
         ) : null,
@@ -643,6 +629,14 @@ export default function KeyDetailPage() {
                   style={{ color: "var(--color-ink-mute)" }}
                 >
                   <span>{fmtShortDay(data.usage.series[0]?.day ?? "")}</span>
+                  {(() => {
+                    const s = summarizeSeries(data.usage.series);
+                    return s.busiestDay ? (
+                      <span>
+                        Peak {s.peak} on {fmtShortDay(s.busiestDay)}
+                      </span>
+                    ) : null;
+                  })()}
                   <span>
                     {fmtShortDay(
                       data.usage.series[data.usage.series.length - 1]?.day ??
