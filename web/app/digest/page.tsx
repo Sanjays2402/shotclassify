@@ -15,6 +15,7 @@ import {
 import { fetcher } from "@/lib/api";
 import { EmptyState } from "@/components/EmptyState";
 import { canSendDigest, recipientHint } from "@/lib/digest-recipient";
+import { categoryShares, categoryShareLabel } from "@/lib/category-share";
 
 type CategoryCount = {
   category: string;
@@ -241,13 +242,31 @@ export default function DigestPage() {
             <div className="panel p-5">
               <h3 className="h-display text-[16px] mb-3">By category</h3>
               <ul className="divide-y" style={{ borderColor: "var(--color-rule)" }}>
-                {summary.by_category.map((c) => (
-                  <li key={c.category} className="flex items-center gap-3 py-2 text-[13px]">
-                    <span className="flex-1 truncate">{c.label}</span>
-                    <span className="font-mono tabular-nums w-10 text-right">{c.count}</span>
-                    <span className="opacity-60 w-12 text-right tabular-nums">{pct(c.avg_confidence)}</span>
-                  </li>
-                ))}
+                {(() => {
+                  // Proportional share bars (F154) behind each row so the
+                  // volume leaders read at a glance, not just a count column.
+                  const shares = categoryShares(summary.by_category);
+                  const byCat = new Map(shares.map((s) => [s.category, s]));
+                  return summary.by_category.map((c) => {
+                    const s = byCat.get(c.category);
+                    return (
+                      <li
+                        key={c.category}
+                        className="relative flex items-center gap-3 py-2 text-[13px]"
+                        title={s ? categoryShareLabel(s) : undefined}
+                      >
+                        <span
+                          aria-hidden
+                          className="absolute inset-y-0 left-0 rounded-sm pointer-events-none"
+                          style={{ width: s?.widthPct ?? "0%", background: "var(--color-felt)", opacity: 0.08 }}
+                        />
+                        <span className="relative flex-1 truncate">{c.label}</span>
+                        <span className="relative font-mono tabular-nums w-10 text-right">{c.count}</span>
+                        <span className="relative opacity-60 w-12 text-right tabular-nums">{pct(c.avg_confidence)}</span>
+                      </li>
+                    );
+                  });
+                })()}
               </ul>
             </div>
             <div className="panel p-5">
