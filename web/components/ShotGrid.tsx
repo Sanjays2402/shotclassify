@@ -8,6 +8,7 @@
 // data + state; this component is a pure presenter over the same Row shape.
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Star, CheckSquare, Square, Scales, CaretDown, CaretRight } from "@phosphor-icons/react/dist/ssr";
 import { Chip } from "@/components/Chip";
 import { ConfBadge } from "@/components/ConfBadge";
@@ -15,6 +16,7 @@ import RowExportMenu from "@/components/RowExportMenu";
 import { ShotPreviewCardRow } from "@/components/ShotPreviewDrawer";
 import { ms, shortId, type Category } from "@/lib/categories";
 import { shotRowToExportInput } from "@/lib/shot-export";
+import { shouldOpenCard, shotDetailHref } from "@/lib/grid-card-key";
 import {
   gridColumnsClass,
   GRID_DENSITY_DEFAULT,
@@ -73,6 +75,7 @@ export function ShotGrid({
   onToggleExpand?: (id: string) => void;
 }) {
   const canPreview = !!onToggleExpand;
+  const router = useRouter();
   return (
     <ul
       className={`grid ${gridColumnsClass(density)} gap-3 p-3`}
@@ -87,7 +90,19 @@ export function ShotGrid({
         return (
           <li
             key={r.id}
-            className="panel p-3 flex flex-col gap-2 relative transition-shadow hover:shadow-md"
+            tabIndex={0}
+            role="link"
+            aria-label={`Open ${name}`}
+            onKeyDown={(e) => {
+              if (shouldOpenCard({ key: e.key, selfTarget: e.target === e.currentTarget })) {
+                const href = shotDetailHref(r.id);
+                if (href) {
+                  e.preventDefault();
+                  router.push(href);
+                }
+              }
+            }}
+            className="panel p-3 flex flex-col gap-2 relative transition-shadow hover:shadow-md outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-felt)] focus-visible:ring-offset-1 rounded-md"
             data-picked={isPicked}
             data-shot-id={r.id}
             style={
