@@ -27,6 +27,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 ## Roadmap (232 features tracked, 224 complete; **frontend-override active since 2026-06-23**)
 
 ### TICK LOG
+- tick 51 (2026-06-29 07:30 PDT): polish arc on the two least-polished power-user surfaces (/compare + /batch). compare real copy-link share fixing the broken shortId-truncated "Share URL" (dfd553e, lib/compare-link), /batch determinate progress bar (43fb963, lib/batch-progress), /batch class-distribution chips (acfc794, lib/batch-classes), /batch aggregate timing+confidence summary (07d3a0c, lib/batch-stats), /batch copy-summary one-liner (lib/batch-summary-text). 5 solid. Gate: 895 web tests (853+42) + tsc + next build green; /batch + /compare static; ZERO py touched. Pushed to main.
 - tick 50 (2026-06-29 04:21 PDT): compact KPI/quota counts + exact tooltip (678e7de), /shots preview OCR search highlight (68eda78), keys/[id] try-it generate-one CTA F155 (8c50812), keys table per-key share-of-total-fleet F40 (7bbc97a). 4 solid (dropped a 5th kbd-hint helper -- duplicated existing renderKeys/isMac). Gate: 853 web tests + tsc + next build green; only web/ touched. Pushed to main.
 - tick 49 (2026-06-29 01:57 PDT): F65 stats mean-conf trend delta (a1c2249), F147 webhook delivery inline retry (fb2ef96), F153 digest recipient validation (d5b5141), F154 digest by-category share bars (d108d77), F158 digest peak-day caption+accent (f122f6c). Gate: 836 web tests + tsc + next build green; only web/ touched (py untouched). Pushed to main.
 - tick 48 (2026-06-28 23:18 PDT): F157 class-mix tooltip mean-conf row (e6f7b33), F146 KPI cards skeleton matching footprint (b270c44), F150 grid card kb focus-ring + Enter-open parity (cbca43b), F148 keys empty-state CTA scroll+focus create form (277ff8f), F149 notifications bulk two-step confirm (8672d18). Gate: 812 web tests + tsc + next build green; only web/ touched (py untouched). Pushed to main.
@@ -496,6 +497,31 @@ F156. [x] Web: /shots minConf chip shows the active threshold inline ("conf >= 0
 F157. [x] Web: /stats class-mix bar tooltip shows mean-conf alongside count. Component-level.
 F158. [x] Web: /keys/[id] sparkline busiest-day dot highlighted (reuse summarizeSeries.busiestDay). Component-level. (tick 47, 9defe95)
 F159. [ ] Web: /webhooks deliveries empty-after-filter -> "clear filter" CTA inside EmptyState. Component-level.
+
+### Frontend backlog refill (tick 51 -- F160-F172, frontend-override still active)
+NOTE (tick 51): the older F-numbered backlog is now saturated with stale
+near-duplicates of already-shipped work. This tick went OFF the F-list to
+polish the two least-polished POWER-USER surfaces -- /compare and /batch --
+which the F-stream had never touched (it was /shots, /stats, /keys, /webhooks,
+/digest focused). Found + fixed a real bug: /compare advertised "Shareable"
+but its Share URL printed shortId-truncated ids = a broken link. Shipped:
+compare-link (copy share), batch-progress (progress bar), batch-classes
+(distribution chips), batch-stats (timing/conf summary), batch-summary-text
+(copy recap). These fresh items continue the /compare + /batch arc + start on
+the other thin surfaces (/usage, /upload, /demo).
+F160. [ ] Web: /compare keyboard nav -- `s` swaps sides, `Esc` clears the focused picker, arrow-jump between A/B. Pure key predicate + thin wiring.
+F161. [ ] Web: /compare delta-bar "confidence gap" gets a tiny diverging bar (A vs B) so the gap reads visually, not just as "4.2 pts". Pure geometry helper + tests.
+F162. [ ] Web: /batch "retry failed only" button -- re-queues just the errored rows (the run-all already re-includes errors, but an explicit failed-only action is clearer). Pure filter helper.
+F163. [ ] Web: /batch per-row elapsed column (the CSV has it; the table doesn't) -- show start->finish ms beside confidence. Pure formatter reuse (lib/batch-stats interval).
+F164. [ ] Web: /batch drag-over whole-page drop zone (today only the dashed box accepts a drop) -- a full-viewport overlay when files are dragged anywhere. Component-level + a pure drag-state helper.
+F165. [ ] Web: /usage recent-activity rows reuse the shared date-format (shortDateTime) instead of a bespoke toLocaleString. Component-level consolidation.
+F166. [ ] Web: /usage quota meter "projected month-end" caption -- linear-extrapolate spend from days-elapsed. Pure projection helper + tests.
+F167. [ ] Web: /compare empty-both-pickers state suggests "/batch a folder first" when history is empty. Component-level, reuse EmptyState.
+F168. [ ] Web: /batch summary copy gains a Markdown variant (table of class counts) beside the one-liner. Pure formatter + tests, reuse batch-classes.
+F169. [ ] Web: /upload drop-zone progress + class result inline (mirror the /batch single-row treatment for one file). Component-level.
+F170. [ ] Web: /demo "what you're seeing" annotations -- a dismissible caption strip explaining the seeded sample. Component-level + onboarding-flag reuse.
+F171. [ ] Web: /compare side panels show OCR word-count + mean-OCR-confidence chips (data already on the detail payload). Pure chip helper.
+F172. [ ] Web: /batch "open all in new tabs" affordance for done rows (or copy all shot links). Pure link-list helper + tests.
 
 
 
