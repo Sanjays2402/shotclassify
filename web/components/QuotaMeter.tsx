@@ -2,9 +2,10 @@
 
 import useSWR from "swr";
 import Link from "next/link";
-import { Gauge, Lightning, ArrowUpRight } from "@phosphor-icons/react/dist/ssr";
+import { Gauge, Lightning, ArrowUpRight, ChartLineUp } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
 import { compactNumber } from "@/lib/num-compact";
+import { projectUsage, projectionCaption } from "@/lib/usage-projection";
 
 export type Usage = {
   principal: string;
@@ -148,6 +149,40 @@ export function QuotaMeter({ compact = false }: { compact?: boolean }) {
           <span>{Math.round(pct * 100)}% used</span>
           <span>{data.limit.toLocaleString()}</span>
         </div>
+        {/* Month-end projection (this tick) -- the bar shows what's spent, not
+            where it's heading. Linear-extrapolate the run rate to a projected
+            period-end total so you can see whether the current pace clears the
+            cap. Hidden once over the limit (the alert below already covers it)
+            and before any time has elapsed (no rate to infer yet). */}
+        {!data.over_limit &&
+          (() => {
+            const projection = projectUsage({
+              periodStart: data.period_start,
+              periodEnd: data.period_end,
+              used: data.used,
+              limit: data.limit,
+              now: Date.now(),
+            });
+            const caption = projectionCaption(
+              projection,
+              data.limit,
+              fmtDate(data.period_end),
+            );
+            if (!caption) return null;
+            return (
+              <div
+                className="text-[11px] mt-2 inline-flex items-center gap-1.5"
+                style={{
+                  color: projection.willExceed
+                    ? "var(--color-cue, #f59e0b)"
+                    : "var(--color-mute, #6b7280)",
+                }}
+              >
+                <ChartLineUp size={13} weight="duotone" aria-hidden />
+                {caption}
+              </div>
+            );
+          })()}
       </div>
 
       {data.over_limit && (
