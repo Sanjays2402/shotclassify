@@ -6,6 +6,7 @@ import JSZip from "jszip";
 import {
   Archive,
   CheckCircle,
+  Copy,
   DownloadSimple,
   FileImage,
   Spinner,
@@ -27,6 +28,8 @@ import {
   classSliceTitle,
 } from "@/lib/batch-classes";
 import { batchStats, hasBatchStats } from "@/lib/batch-stats";
+import { batchSummaryText } from "@/lib/batch-summary-text";
+import { toast } from "@/lib/toast-store";
 
 function Pill({ children }: { children: React.ReactNode }) {
   return (
@@ -296,6 +299,42 @@ export default function BatchPage() {
   const onPickZip = () => zipInputRef.current?.click();
   const onPickImages = () => imgInputRef.current?.click();
 
+  // Copy a one-line, paste-able recap of the run (this tick) -- composes the
+  // class distribution + the timing/confidence aggregate into the same wording
+  // the chips + summary strip show, so a triager can drop it into Slack / notes
+  // without exporting the CSV. Secure-context-aware clipboard with a textarea
+  // fallback, matching the rest of the app's copy affordances.
+  const copySummary = useCallback(async () => {
+    const text = batchSummaryText(
+      counts.done,
+      classDistribution(rows),
+      batchStats(rows),
+    );
+    if (!text) return;
+    try {
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.clipboard &&
+        typeof window !== "undefined" &&
+        window.isSecureContext
+      ) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      toast.success("Copied the batch summary.");
+    } catch {
+      toast.error("Copy failed. Your browser blocked clipboard access.");
+    }
+  }, [counts.done, rows]);
+
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -403,6 +442,15 @@ export default function BatchPage() {
                 }}
               >
                 {running ? "Running…" : counts.pending === 0 ? "All done" : `Run ${counts.pending}`}
+              </button>
+              <button
+                onClick={copySummary}
+                disabled={counts.done === 0}
+                className="text-[12px] px-3 py-1.5 rounded border disabled:opacity-40 inline-flex items-center gap-1.5"
+                style={{ borderColor: "var(--color-rule)" }}
+                title="Copy a one-line recap to paste into Slack or notes"
+              >
+                <Copy size={14} weight="duotone" /> Copy summary
               </button>
               <button
                 onClick={downloadCsv}
