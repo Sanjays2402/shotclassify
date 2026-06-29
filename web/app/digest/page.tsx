@@ -16,6 +16,7 @@ import { fetcher } from "@/lib/api";
 import { EmptyState } from "@/components/EmptyState";
 import { canSendDigest, recipientHint } from "@/lib/digest-recipient";
 import { categoryShares, categoryShareLabel } from "@/lib/category-share";
+import { digestPeak, digestPeakCaption } from "@/lib/digest-peak";
 
 type CategoryCount = {
   category: string;
@@ -70,6 +71,8 @@ export default function DigestPage() {
   const maxPerDay = summary
     ? Math.max(1, ...summary.per_day.map((d) => d.count))
     : 1;
+  // Busiest-day + total + avg caption for the per-day strip (F158).
+  const peak = summary ? digestPeak(summary.per_day) : null;
 
   async function onSend() {
     setSending(true);
@@ -218,8 +221,11 @@ export default function DigestPage() {
               role="img"
               aria-label={`Daily counts, ${summary.per_day.length} days`}
             >
-              {summary.per_day.map((d) => {
+              {summary.per_day.map((d, i) => {
                 const h = Math.max(3, Math.round((d.count / maxPerDay) * 72));
+                // Accent the busiest day so the eye lands where the caption
+                // points (F158); ties take the first day, matching the lib.
+                const isPeak = i === peak?.peakIndex && d.count > 0;
                 return (
                   <div
                     key={d.date}
@@ -228,7 +234,9 @@ export default function DigestPage() {
                     style={{
                       height: `${h}px`,
                       background: d.count
-                        ? "var(--color-felt)"
+                        ? isPeak
+                          ? "var(--color-cue-deep, #9a7a0a)"
+                          : "var(--color-felt)"
                         : "var(--color-rule)",
                       borderRadius: 2,
                     }}
@@ -236,6 +244,11 @@ export default function DigestPage() {
                 );
               })}
             </div>
+            {/* Name the busiest day + window total so the strip is glanceable
+                (F158), accenting the same peak bar above. */}
+            <p className="text-[11px] opacity-60 mt-2 px-1 tabular-nums">
+              {digestPeakCaption(peak)}
+            </p>
           </section>
 
           <section className="grid md:grid-cols-2 gap-4">
