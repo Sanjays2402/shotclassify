@@ -1373,7 +1373,7 @@ function ShotsPageInner() {
                     </td>
                   </tr>
                   {expanded.has(r.id) && (
-                    <ShotPreviewRow id={r.id} colSpan={11} />
+                    <ShotPreviewRow id={r.id} colSpan={11} highlight={qDebounced} />
                   )}
                   </Fragment>
                 ))}

@@ -24,6 +24,7 @@ import {
   type ShotPreviewRecord,
 } from "@/lib/shot-preview";
 import { toast } from "@/lib/toast-store";
+import { markMatches } from "@/lib/search-mark";
 
 // Clipboard write with a non-secure-context fallback, mirroring
 // RowExportMenu / CopyExportButtons so http dev / older Safari still copy.
@@ -100,12 +101,15 @@ export type ShotPreviewBodyProps = {
   record: ShotPreviewRecord | null;
   loading: boolean;
   error: boolean;
+  // The active OCR search query, so matches inside the transcript get marked
+  // (F11) -- a user who searched can see WHERE the term hit in the snippet.
+  highlight?: string;
 };
 
 // Layout-agnostic preview content. Knows nothing about <tr> vs <div> -- the
 // drawer / card shells supply the surrounding chrome. Renders the loading /
 // error / empty / populated stages identically wherever it's mounted.
-export function ShotPreviewBody({ id, record, loading, error }: ShotPreviewBodyProps) {
+export function ShotPreviewBody({ id, record, loading, error, highlight }: ShotPreviewBodyProps) {
   const model = record ? buildShotPreview(record) : null;
   // Full transcript for the copy button (F124) -- distinct from the truncated
   // display snippet on the model.
@@ -154,7 +158,22 @@ export function ShotPreviewBody({ id, record, loading, error }: ShotPreviewBodyP
                       {fullOcr && <CopyOcrButton id={id} text={fullOcr} />}
                     </div>
                     <p className="num text-[12px] leading-relaxed opacity-85 whitespace-pre-wrap break-words">
-                      {model.ocrSnippet}
+                      {markMatches(model.ocrSnippet, highlight).map((seg, i) =>
+                        seg.match ? (
+                          <mark
+                            key={i}
+                            style={{
+                              background: "var(--color-cue, #F2C14E)",
+                              color: "inherit",
+                              borderRadius: 2,
+                            }}
+                          >
+                            {seg.text}
+                          </mark>
+                        ) : (
+                          <span key={i}>{seg.text}</span>
+                        ),
+                      )}
                       {model.ocrTruncated && (
                         <span className="opacity-50"> (truncated)</span>
                       )}
@@ -268,12 +287,14 @@ function useShotPreview(id: string) {
 export function ShotPreviewRow({
   id,
   colSpan,
+  highlight,
 }: {
   id: string;
   colSpan: number;
+  highlight?: string;
 }) {
   const state = useShotPreview(id);
-  return <ShotPreviewDrawer id={id} colSpan={colSpan} {...state} />;
+  return <ShotPreviewDrawer id={id} colSpan={colSpan} highlight={highlight} {...state} />;
 }
 
 // Connected grid wrapper (F117) -- the grid card's counterpart to
