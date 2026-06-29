@@ -24,9 +24,10 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 - When you add a `ReceiptFields` / `ChatFields` / `CodeFields` field that an LLM might produce, also pass it through the wire-format mapping in `packages/classify/src/shotclassify_classify/client.py` so an LLM-supplied value survives the round trip.
 - Ruff S108 fires on hardcoded `/tmp/...` literals even in pure string-parsing tests; use `/var/log/...` synthetic paths instead. N802 wants lowercase test names. I001 wants no blank line between `from __future__` and the first regular import (test file docstring counts toward import-block placement).
 
-## Roadmap (232 features tracked, 224 complete; **frontend-override active since 2026-06-23**)
+## Roadmap (232 features tracked, 229 complete; **frontend-override active since 2026-06-23**)
 
 ### TICK LOG
+- tick 52 (2026-06-29 11:21 PDT): continued the /compare + /batch + /usage arc with 5 fresh, non-F-stale slices. /compare diverging confidence-gap bar (3d98dcc, lib/compare-gap, F161), /compare OCR word-count + legibility chips (2ee8aab, lib/compare-ocr-chips, F171), /batch per-row elapsed column matching the CSV (2baa22d, lib/batch-elapsed, F163), /usage month-end spend projection caption (ba65be7, lib/usage-projection, F166), /batch Markdown-table summary copy beside the one-liner (64a393a, lib/batch-summary-markdown, F168). 5 solid. Gate: 951 web tests (895+56) + tsc + next build green; /batch + /compare + /usage stay Static; ZERO py touched. Pushed to main. NOTE: F160 (compare `s`-swap) deferred -- bare-`s` collides with global HotKeys nav.
 - tick 51 (2026-06-29 07:30 PDT): polish arc on the two least-polished power-user surfaces (/compare + /batch). compare real copy-link share fixing the broken shortId-truncated "Share URL" (dfd553e, lib/compare-link), /batch determinate progress bar (43fb963, lib/batch-progress), /batch class-distribution chips (acfc794, lib/batch-classes), /batch aggregate timing+confidence summary (07d3a0c, lib/batch-stats), /batch copy-summary one-liner (lib/batch-summary-text). 5 solid. Gate: 895 web tests (853+42) + tsc + next build green; /batch + /compare static; ZERO py touched. Pushed to main.
 - tick 50 (2026-06-29 04:21 PDT): compact KPI/quota counts + exact tooltip (678e7de), /shots preview OCR search highlight (68eda78), keys/[id] try-it generate-one CTA F155 (8c50812), keys table per-key share-of-total-fleet F40 (7bbc97a). 4 solid (dropped a 5th kbd-hint helper -- duplicated existing renderKeys/isMac). Gate: 853 web tests + tsc + next build green; only web/ touched. Pushed to main.
 - tick 49 (2026-06-29 01:57 PDT): F65 stats mean-conf trend delta (a1c2249), F147 webhook delivery inline retry (fb2ef96), F153 digest recipient validation (d5b5141), F154 digest by-category share bars (d108d77), F158 digest peak-day caption+accent (f122f6c). Gate: 836 web tests + tsc + next build green; only web/ touched (py untouched). Pushed to main.
@@ -509,18 +510,18 @@ compare-link (copy share), batch-progress (progress bar), batch-classes
 (distribution chips), batch-stats (timing/conf summary), batch-summary-text
 (copy recap). These fresh items continue the /compare + /batch arc + start on
 the other thin surfaces (/usage, /upload, /demo).
-F160. [ ] Web: /compare keyboard nav -- `s` swaps sides, `Esc` clears the focused picker, arrow-jump between A/B. Pure key predicate + thin wiring.
-F161. [ ] Web: /compare delta-bar "confidence gap" gets a tiny diverging bar (A vs B) so the gap reads visually, not just as "4.2 pts". Pure geometry helper + tests.
+F160. [ ] Web: /compare keyboard nav -- `s` swaps sides, `Esc` clears the focused picker, arrow-jump between A/B. Pure key predicate + thin wiring. NOTE (tick 52): bare-`s` collides with the global HotKeys `s`->/shots nav (both window listeners); needs a different swap key or a page-scoped guard. Deferred.
+F161. [x] Web: /compare delta-bar "confidence gap" gets a tiny diverging bar (A vs B) so the gap reads visually, not just as "4.2 pts". DONE tick 52 (3d98dcc, lib/compare-gap, 10 tests).
 F162. [ ] Web: /batch "retry failed only" button -- re-queues just the errored rows (the run-all already re-includes errors, but an explicit failed-only action is clearer). Pure filter helper.
-F163. [ ] Web: /batch per-row elapsed column (the CSV has it; the table doesn't) -- show start->finish ms beside confidence. Pure formatter reuse (lib/batch-stats interval).
+F163. [x] Web: /batch per-row elapsed column (the CSV has it; the table doesn't) -- show start->finish ms beside confidence. DONE tick 52 (2baa22d, lib/batch-elapsed, 11 tests).
 F164. [ ] Web: /batch drag-over whole-page drop zone (today only the dashed box accepts a drop) -- a full-viewport overlay when files are dragged anywhere. Component-level + a pure drag-state helper.
 F165. [ ] Web: /usage recent-activity rows reuse the shared date-format (shortDateTime) instead of a bespoke toLocaleString. Component-level consolidation.
-F166. [ ] Web: /usage quota meter "projected month-end" caption -- linear-extrapolate spend from days-elapsed. Pure projection helper + tests.
+F166. [x] Web: /usage quota meter "projected month-end" caption -- linear-extrapolate spend from days-elapsed. DONE tick 52 (ba65be7, lib/usage-projection, 13 tests).
 F167. [ ] Web: /compare empty-both-pickers state suggests "/batch a folder first" when history is empty. Component-level, reuse EmptyState.
-F168. [ ] Web: /batch summary copy gains a Markdown variant (table of class counts) beside the one-liner. Pure formatter + tests, reuse batch-classes.
+F168. [x] Web: /batch summary copy gains a Markdown variant (table of class counts) beside the one-liner. DONE tick 52 (64a393a, lib/batch-summary-markdown, 9 tests).
 F169. [ ] Web: /upload drop-zone progress + class result inline (mirror the /batch single-row treatment for one file). Component-level.
 F170. [ ] Web: /demo "what you're seeing" annotations -- a dismissible caption strip explaining the seeded sample. Component-level + onboarding-flag reuse.
-F171. [ ] Web: /compare side panels show OCR word-count + mean-OCR-confidence chips (data already on the detail payload). Pure chip helper.
+F171. [x] Web: /compare side panels show OCR word-count + mean-OCR-confidence chips (data already on the detail payload). DONE tick 52 (2ee8aab, lib/compare-ocr-chips, 13 tests).
 F172. [ ] Web: /batch "open all in new tabs" affordance for done rows (or copy all shot links). Pure link-list helper + tests.
 
 
