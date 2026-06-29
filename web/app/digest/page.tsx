@@ -14,6 +14,7 @@ import {
 
 import { fetcher } from "@/lib/api";
 import { EmptyState } from "@/components/EmptyState";
+import { canSendDigest, recipientHint } from "@/lib/digest-recipient";
 
 type CategoryCount = {
   category: string;
@@ -293,13 +294,15 @@ export default function DigestPage() {
             placeholder="you@example.com"
             value={to}
             onChange={(e) => setTo(e.target.value)}
+            aria-invalid={recipientHint(to) ? true : undefined}
+            aria-describedby={recipientHint(to) ? "digest-to-hint" : undefined}
             className="flex-1 min-w-[200px] px-3 py-2 rounded-md text-[13px] border bg-transparent"
             style={{ borderColor: "var(--color-rule)" }}
           />
           <button
             type="button"
             onClick={onSend}
-            disabled={sending || isLoading}
+            disabled={!canSendDigest(to, sending || isLoading)}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-[13px] disabled:opacity-50"
             style={{ background: "var(--color-felt)", color: "var(--color-chalk)" }}
           >
@@ -307,6 +310,13 @@ export default function DigestPage() {
             {sending ? "Sending..." : `Send last ${days}d`}
           </button>
         </div>
+        {/* Catch a malformed recipient before the POST (F153) -- blank is fine
+            (server uses DIGEST_TO), only a non-empty typo gets nudged. */}
+        {recipientHint(to) && (
+          <p id="digest-to-hint" className="text-[11px]" style={{ color: "#b00020" }} role="alert">
+            {recipientHint(to)}
+          </p>
+        )}
         {sendResult && sendResult.ok && (
           <div
             role="status"
