@@ -62,6 +62,7 @@ import {
 } from "@/lib/key-workspace";
 import { EmptyState } from "@/components/EmptyState";
 import { SnippetLangToggle } from "@/components/SnippetLangToggle";
+import { scrollToCreateForm } from "@/lib/keys-cta";
 
 type KeyRow = {
   id: string;
@@ -649,6 +650,16 @@ export default function KeysPage() {
             title="No keys yet"
             body="Generate one above to start calling the classifier from your code."
             icon={<Key size={26} weight="duotone" />}
+            primary={{
+              label: "Create a key",
+              kind: "cue",
+              onClick: () => {
+                const rm =
+                  typeof window !== "undefined" &&
+                  window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+                scrollToCreateForm((id) => document.getElementById(id), !!rm);
+              },
+            }}
           />
         ) : (
           <div
