@@ -44,6 +44,7 @@ import {
 } from "@/lib/stats-window";
 import { chartsBusy } from "@/lib/stats-loading";
 import { statsClassLink } from "@/lib/stats-class-link";
+import { classMixTooltipFormatter } from "@/lib/class-mix-tooltip";
 
 type Aggregate = {
   total: number;
@@ -454,6 +455,9 @@ export default function StatsPage() {
                   <Tooltip
                     cursor={{ fill: ct.cursorFill }}
                     contentStyle={ct.tooltip}
+                    formatter={(val, _name, p) =>
+                      classMixTooltipFormatter(Number(val), p?.payload)
+                    }
                   />
                   <Bar dataKey="count" radius={[2, 2, 0, 0]}>
                     {perClassChart.map((d) => (
