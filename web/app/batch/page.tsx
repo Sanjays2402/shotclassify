@@ -14,12 +14,18 @@ import {
   XCircle,
 } from "@phosphor-icons/react/dist/ssr";
 import { ConfBar } from "@/components/ConfBar";
+import { Chip } from "@/components/Chip";
 import { confColor, LONG, pct, type Category } from "@/lib/categories";
 import {
   progressPercent,
   isBatchComplete,
   progressLabel,
 } from "@/lib/batch-progress";
+import {
+  classDistribution,
+  distinctClassCount,
+  classSliceTitle,
+} from "@/lib/batch-classes";
 
 function Pill({ children }: { children: React.ReactNode }) {
   return (
@@ -449,6 +455,36 @@ export default function BatchPage() {
                   <span>{label}</span>
                   <span>{percent}%</span>
                 </div>
+              </div>
+            );
+          })()}
+
+          {/* Class-distribution chips (this tick) -- the table shows each row's
+              class but nothing told you the SHAPE of the batch. Roll the
+              settled rows into a count-desc breakdown so "22 receipts, 9 chats"
+              reads at a glance above the table. Only appears once something has
+              classified. */}
+          {(() => {
+            const dist = classDistribution(rows);
+            if (dist.length === 0) return null;
+            return (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="eyebrow" style={{ color: "var(--color-mute)" }}>
+                  {distinctClassCount(dist)} classes
+                </span>
+                {dist.map((s) => (
+                  <span
+                    key={s.category}
+                    className="inline-flex items-center gap-1.5"
+                    title={classSliceTitle(s)}
+                  >
+                    <Chip cat={s.category} />
+                    <span className="num text-[12px] tabular-nums">{s.count}</span>
+                    <span className="num text-[10px] opacity-50 tabular-nums">
+                      {s.sharePct}%
+                    </span>
+                  </span>
+                ))}
               </div>
             );
           })()}
