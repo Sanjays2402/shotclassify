@@ -27,6 +27,7 @@ Owner: Cake (cron) — 20-min batch loop, target 5 features per tick.
 ## Roadmap (232 features tracked, 224 complete; **frontend-override active since 2026-06-23**)
 
 ### TICK LOG
+- tick 50 (2026-06-29 04:21 PDT): compact KPI/quota counts + exact tooltip (678e7de), /shots preview OCR search highlight (68eda78), keys/[id] try-it generate-one CTA F155 (8c50812), keys table per-key share-of-total-fleet F40 (7bbc97a). 4 solid (dropped a 5th kbd-hint helper -- duplicated existing renderKeys/isMac). Gate: 853 web tests + tsc + next build green; only web/ touched. Pushed to main.
 - tick 49 (2026-06-29 01:57 PDT): F65 stats mean-conf trend delta (a1c2249), F147 webhook delivery inline retry (fb2ef96), F153 digest recipient validation (d5b5141), F154 digest by-category share bars (d108d77), F158 digest peak-day caption+accent (f122f6c). Gate: 836 web tests + tsc + next build green; only web/ touched (py untouched). Pushed to main.
 - tick 48 (2026-06-28 23:18 PDT): F157 class-mix tooltip mean-conf row (e6f7b33), F146 KPI cards skeleton matching footprint (b270c44), F150 grid card kb focus-ring + Enter-open parity (cbca43b), F148 keys empty-state CTA scroll+focus create form (277ff8f), F149 notifications bulk two-step confirm (8672d18). Gate: 812 web tests + tsc + next build green; only web/ touched (py untouched). Pushed to main.
 - tick 47 (2026-06-28 20:50 PDT): F154 cross-page date-format lib + audit wire (f91753d), F156 minConf threshold chip on /shots (7a50acd), F152 /keys calls mini-bar vs fleet peak (d79e079), F145 /shots search Esc clear-then-leave (57de5ff), F158 /keys/[id] busiest-day dot accent (9defe95). Gate: 789 web tests + tsc + next build green; only web/ touched (py untouched). Pushed to main.
@@ -490,7 +491,7 @@ F151. [ ] Web: /stats window selector persists like F135 (already F44 done?) ver
 F152. [x] Web: /keys "calls" column mini bar vs fleet max. Pure ratio helper + tests. (tick 47, d79e079)
 F153. [x] Web: /digest recipient validated before send (canSendDigest/recipientHint) -- blank uses DIGEST_TO, malformed disables button + alert. DONE tick 49 (d5b5141).
 F154. [x] Web: cross-page consistent date-format helper extraction. Pure lib + tests. (tick 47, f91753d)
-F155. [ ] Web: /keys/[id] "Try it" empty-key state -> "Generate one above" link back to /keys. Component-level.
+F155. [x] DONE tick 50 (8c50812) Web: /keys/[id] "Try it" empty-key state -> "Generate one above" link back to /keys. Component-level.
 F156. [x] Web: /shots minConf chip shows the active threshold inline ("conf >= 0.8"). Pure label helper + tests. (tick 47, 7a50acd)
 F157. [x] Web: /stats class-mix bar tooltip shows mean-conf alongside count. Component-level.
 F158. [x] Web: /keys/[id] sparkline busiest-day dot highlighted (reuse summarizeSeries.busiestDay). Component-level. (tick 47, 9defe95)
