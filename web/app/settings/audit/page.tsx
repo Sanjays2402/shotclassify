@@ -14,6 +14,7 @@ import {
   ShieldWarning,
 } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
+import { shortDateTime } from "@/lib/date-format";
 
 type AuditEvent = {
   id: string;
@@ -61,7 +62,7 @@ function relTime(iso: string | null): string {
   if (m < 60) return `${m}m ago`;
   const h = Math.round(m / 60);
   if (h < 48) return `${h}h ago`;
-  return new Date(iso).toLocaleString();
+  return shortDateTime(iso);
 }
 
 export default function AuditLogPage() {
