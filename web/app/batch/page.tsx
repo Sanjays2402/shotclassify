@@ -10,6 +10,7 @@ import {
   DownloadSimple,
   FileImage,
   Spinner,
+  Table,
   Trash,
   Warning,
   XCircle,
@@ -30,6 +31,7 @@ import {
 import { batchStats, hasBatchStats } from "@/lib/batch-stats";
 import { rowElapsedLabel } from "@/lib/batch-elapsed";
 import { batchSummaryText } from "@/lib/batch-summary-text";
+import { batchSummaryMarkdown } from "@/lib/batch-summary-markdown";
 import { toast } from "@/lib/toast-store";
 
 function Pill({ children }: { children: React.ReactNode }) {
@@ -92,6 +94,29 @@ function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
+// Secure-context-aware clipboard write with a textarea fallback for non-secure
+// contexts (older Safari, http dev), matching the rest of the app's copy
+// affordances. Shared by the prose summary + Markdown table copies.
+async function writeClipboard(text: string): Promise<void> {
+  if (
+    typeof navigator !== "undefined" &&
+    navigator.clipboard &&
+    typeof window !== "undefined" &&
+    window.isSecureContext
+  ) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
 }
 
 export default function BatchPage() {
@@ -313,24 +338,27 @@ export default function BatchPage() {
     );
     if (!text) return;
     try {
-      if (
-        typeof navigator !== "undefined" &&
-        navigator.clipboard &&
-        typeof window !== "undefined" &&
-        window.isSecureContext
-      ) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-      }
+      await writeClipboard(text);
       toast.success("Copied the batch summary.");
+    } catch {
+      toast.error("Copy failed. Your browser blocked clipboard access.");
+    }
+  }, [counts.done, rows]);
+
+  // Copy the same run as a GitHub-flavoured Markdown table (this tick) -- the
+  // one-liner is great for Slack, but a structured breakdown reads better in a
+  // doc / PR / notebook. Composes the same distribution + stats so the two
+  // copies can't drift; lists every class (a table needs no "+N more" cap).
+  const copyMarkdown = useCallback(async () => {
+    const md = batchSummaryMarkdown(
+      counts.done,
+      classDistribution(rows),
+      batchStats(rows),
+    );
+    if (!md) return;
+    try {
+      await writeClipboard(md);
+      toast.success("Copied a Markdown table.");
     } catch {
       toast.error("Copy failed. Your browser blocked clipboard access.");
     }
@@ -452,6 +480,15 @@ export default function BatchPage() {
                 title="Copy a one-line recap to paste into Slack or notes"
               >
                 <Copy size={14} weight="duotone" /> Copy summary
+              </button>
+              <button
+                onClick={copyMarkdown}
+                disabled={counts.done === 0}
+                className="text-[12px] px-3 py-1.5 rounded border disabled:opacity-40 inline-flex items-center gap-1.5"
+                style={{ borderColor: "var(--color-rule)" }}
+                title="Copy a Markdown table of the class breakdown for a doc or PR"
+              >
+                <Table size={14} weight="duotone" /> Copy table
               </button>
               <button
                 onClick={downloadCsv}
