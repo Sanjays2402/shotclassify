@@ -4,6 +4,7 @@ import useSWR from "swr";
 import Link from "next/link";
 import { Gauge, Lightning, ArrowUpRight } from "@phosphor-icons/react/dist/ssr";
 import { fetcher } from "@/lib/api";
+import { compactNumber } from "@/lib/num-compact";
 
 export type Usage = {
   principal: string;
@@ -72,11 +73,11 @@ export function QuotaMeter({ compact = false }: { compact?: boolean }) {
       <Link
         href="/usage"
         className="flex items-center gap-2 text-[12px] hover:opacity-80 transition-opacity"
-        title={`${data.used} of ${data.limit} this month`}
+        title={`${data.used.toLocaleString()} of ${data.limit.toLocaleString()} this month`}
       >
         <Gauge size={16} weight="duotone" style={{ color }} />
         <span className="font-mono tabular-nums">
-          {data.used}/{data.limit}
+          {compactNumber(data.used)}/{compactNumber(data.limit)}
         </span>
         <span
           className="h-1.5 w-16 rounded-full overflow-hidden"

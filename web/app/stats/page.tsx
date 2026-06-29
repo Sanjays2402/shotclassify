@@ -47,6 +47,7 @@ import { statsClassLink } from "@/lib/stats-class-link";
 import { classMixTooltipFormatter } from "@/lib/class-mix-tooltip";
 import { kpiSkeletonKeys, showKpiSkeleton } from "@/lib/kpi-skeleton";
 import { confTrend, confTrendDeltaLabel } from "@/lib/conf-trend";
+import { compactNumber, fullNumber, isCompacted } from "@/lib/num-compact";
 
 type Aggregate = {
   total: number;
@@ -107,12 +108,16 @@ function Stat({
   hint,
   icon,
   info,
+  titleAttr,
 }: {
   label: string;
   value: string;
   hint?: string;
   icon: React.ReactNode;
   info?: React.ReactNode;
+  // Exact figure tooltip when `value` is an abbreviated count, so the compact
+  // KPI never hides the real number from a hover (or assistive tech reading it).
+  titleAttr?: string;
 }) {
   return (
     <div className="panel p-4 flex flex-col gap-1">
@@ -123,7 +128,7 @@ function Stat({
         </span>
         <span className="opacity-60">{icon}</span>
       </div>
-      <div className="num text-[24px]">{value}</div>
+      <div className="num text-[24px]" title={titleAttr}>{value}</div>
       {hint && <div className="num text-[10px] opacity-60">{hint}</div>}
     </div>
   );
@@ -322,7 +327,8 @@ export default function StatsPage() {
         <>
         <Stat
           label="Lifetime shots"
-          value={agg.total.toLocaleString()}
+          value={compactNumber(agg.total)}
+          titleAttr={isCompacted(agg.total) ? `${fullNumber(agg.total)} shots` : undefined}
           hint={`${agg.window_count.toLocaleString()} in last ${winLabel}`}
           icon={<Stack weight="duotone" size={18} />}
           info={<StatInfoPopover stat="lifetime" hours={hours} />}
@@ -350,7 +356,8 @@ export default function StatsPage() {
         />
         <Stat
           label="Corrections"
-          value={agg.corrections.toLocaleString()}
+          value={compactNumber(agg.corrections)}
+          titleAttr={isCompacted(agg.corrections) ? `${fullNumber(agg.corrections)} corrections` : undefined}
           hint={`${pct(agg.correction_rate, 1)} rate · last ${winLabel}`}
           icon={<PencilSimple weight="duotone" size={18} />}
           info={<StatInfoPopover stat="corrections" hours={hours} />}
