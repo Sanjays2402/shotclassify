@@ -32,6 +32,7 @@ import {
   KEY_SNIPPET_LANG_DEFAULT,
 } from "@/lib/key-snippet-pref";
 import { SnippetLangToggle } from "@/components/SnippetLangToggle";
+import { KEYS_CREATE_HREF } from "@/lib/key-trial";
 import {
   isArmed,
   confirmLabel,
@@ -1087,7 +1088,15 @@ export default function KeyDetailPage() {
                 style={{ color: "var(--color-ink-mute)" }}
               >
                 The secret is hashed at rest, so the snippet shows the prefix.
-                Rotate to mint a fresh one you can paste in.
+                Rotate to mint a fresh one you can paste in.{" "}
+                <Link
+                  href={KEYS_CREATE_HREF}
+                  className="underline underline-offset-2"
+                  style={{ color: "var(--color-felt)" }}
+                >
+                  Generate one above
+                </Link>
+                .
               </p>
             ) : null}
           </section>
