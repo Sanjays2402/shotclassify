@@ -1153,6 +1153,7 @@ class Repository:
         confidences: list[float] = []
         corrections = 0
         hourly: dict[str, int] = {}
+        hourly_conf_sum: dict[str, float] = {}
         recent_rows = []
         for r in rows:
             cat_counts[r.primary_category] = cat_counts.get(r.primary_category, 0) + 1
@@ -1176,6 +1177,9 @@ class Repository:
                     bucket = created.replace(minute=0, second=0, microsecond=0)
                     key = bucket.isoformat()
                     hourly[key] = hourly.get(key, 0) + 1
+                    hourly_conf_sum[key] = (
+                        hourly_conf_sum.get(key, 0.0) + float(r.confidence or 0.0)
+                    )
                     if r.elapsed_ms:
                         latencies.append(int(r.elapsed_ms))
 
@@ -1202,7 +1206,14 @@ class Repository:
         ]
 
         hourly_series = [
-            {"hour": k, "count": v}
+            {
+                "hour": k,
+                "count": v,
+                # Per-hour mean confidence (F142) so the dashboard can plot a
+                # calibration trend alongside the volume tempo. Rounded to 4dp
+                # to match per_class; 0.0 for an (impossible) empty bucket.
+                "mean_confidence": round(hourly_conf_sum.get(k, 0.0) / v, 4) if v else 0.0,
+            }
             for k, v in sorted(hourly.items())
         ]
 

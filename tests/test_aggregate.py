@@ -257,3 +257,51 @@ def test_aggregate_untagged_filter_narrows_rollups(tmp_path, monkeypatch):
     assert untagged_cats == {"code_snippet"}
     tagged_cats = {p["category"] for p in tagged_agg["per_class"]}
     assert tagged_cats == {"receipt"}
+
+
+def test_aggregate_hourly_has_per_hour_mean_confidence(tmp_path, monkeypatch):
+    """Each hourly bucket carries mean_confidence (F142) so the stats page can
+    plot a calibration trend over the volume tempo. The per-hour mean is the
+    confidence average of the rows in that hour, not the window mean."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'aggconf.db'}")
+    monkeypatch.setenv("STORAGE_LOCAL_DIR", str(tmp_path / "storage"))
+
+    from shotclassify_common.settings import get_settings
+    from shotclassify_store import db
+    from shotclassify_store.db import ClassificationRow, get_session
+    from shotclassify_store.repository import Repository
+
+    get_settings.cache_clear()
+    db.get_engine.cache_clear()
+    db._session_factory.cache_clear()
+
+    now = datetime.now(timezone.utc)
+    repo = Repository()
+    # Two rows in hour 0 (conf 0.4 + 0.8 -> mean 0.6), one row in hour 1 (0.9).
+    rows = [
+        ClassificationRow(id="a", filename="a.png", created_at=now,
+                          primary_category="receipt", confidence=0.4, ocr_text="",
+                          ocr_lang="en", extracted={}, route={"action": "none"},
+                          elapsed_ms=100),
+        ClassificationRow(id="b", filename="b.png", created_at=now,
+                          primary_category="receipt", confidence=0.8, ocr_text="",
+                          ocr_lang="en", extracted={}, route={"action": "none"},
+                          elapsed_ms=100),
+        ClassificationRow(id="c", filename="c.png", created_at=now - timedelta(hours=2),
+                          primary_category="code_snippet", confidence=0.9, ocr_text="",
+                          ocr_lang="en", extracted={}, route={"action": "none"},
+                          elapsed_ms=100),
+    ]
+    with get_session() as s:
+        for r in rows:
+            s.add(r)
+        s.commit()
+
+    agg = repo.aggregate(tenant_id=None, hours=24)
+    hourly = agg["hourly"]
+    assert all("mean_confidence" in b for b in hourly)
+    by_count = {b["count"]: b["mean_confidence"] for b in hourly}
+    assert by_count[2] == 0.6  # the two-row hour averages 0.4 + 0.8
+    assert by_count[1] == 0.9  # the single 0.9 row hour
+    # Every per-hour mean is a valid confidence in [0, 1].
+    assert all(0.0 <= b["mean_confidence"] <= 1.0 for b in hourly)

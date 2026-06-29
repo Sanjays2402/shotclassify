@@ -10,6 +10,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -54,7 +55,7 @@ type Aggregate = {
   latency_ms: { p50: number; p95: number; p99: number; count: number };
   per_class: { category: Category; count: number; mean_confidence: number }[];
   confidence_histogram: { bin: number; lo: number; hi: number; count: number }[];
-  hourly: { hour: string; count: number }[];
+  hourly: { hour: string; count: number; mean_confidence: number }[];
 };
 
 function sampleAggregate(hours: number): Aggregate {
@@ -70,7 +71,7 @@ function sampleAggregate(hours: number): Aggregate {
   const hourly = Array.from({ length: buckets }, (_, i) => {
     const d = new Date(Date.now() - (buckets - 1 - i) * 3600 * 1000);
     d.setMinutes(0, 0, 0);
-    return { hour: d.toISOString(), count: Math.floor(seed(i + 17) * 9) + 1 };
+    return { hour: d.toISOString(), count: Math.floor(seed(i + 17) * 9) + 1, mean_confidence: 0.6 + seed(i + 23) * 0.35 };
   });
   const conf_hist = Array.from({ length: 10 }, (_, i) => ({
     bin: i,
@@ -233,6 +234,7 @@ export default function StatsPage() {
   const hourlyChart = agg.hourly.map((d) => ({
     name: fmtHour(d.hour),
     count: d.count,
+    conf: +(d.mean_confidence * 100).toFixed(1),
   }));
 
   return (
@@ -330,7 +332,23 @@ export default function StatsPage() {
           <span className="eyebrow flex items-center gap-1.5">
             <ChartLineUp weight="duotone" size={14} /> Ingest tempo
           </span>
-          <span className="num text-[11px] opacity-60">last {agg.window_hours}h</span>
+          <span className="flex items-center gap-3">
+            <span
+              className="hidden sm:inline-flex items-center gap-1 text-[10px] uppercase tracking-wider opacity-60"
+              title="Mean classifier confidence per hour, plotted against the right axis"
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: 14,
+                  borderTop: "1.5px dashed var(--color-conf-high, #0E5C3A)",
+                  display: "inline-block",
+                }}
+              />
+              conf
+            </span>
+            <span className="num text-[11px] opacity-60">last {agg.window_hours}h</span>
+          </span>
         </div>
         <div style={{ width: "100%", height: 220 }}>
           {busy ? (
@@ -353,20 +371,46 @@ export default function StatsPage() {
                   interval="preserveStartEnd"
                 />
                 <YAxis
+                  yAxisId="vol"
                   tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: ct.tickFill }}
                   stroke={ct.axisStroke}
                   allowDecimals={false}
                 />
+                <YAxis
+                  yAxisId="conf"
+                  orientation="right"
+                  domain={[0, 100]}
+                  tick={{ fontSize: 10, fontFamily: "var(--font-mono)", fill: ct.tickFill }}
+                  stroke={ct.axisStrokeFaint}
+                  width={28}
+                  tickFormatter={(v: number) => `${v}%`}
+                />
                 <Tooltip
                   cursor={{ fill: ct.cursorFill }}
                   contentStyle={ct.tooltip}
+                  formatter={(val, name) =>
+                    String(name) === "conf"
+                      ? [`${val}%`, "Mean conf"]
+                      : [String(val), "Shots"]
+                  }
                 />
                 <Area
+                  yAxisId="vol"
                   type="monotone"
                   dataKey="count"
                   stroke="var(--color-felt)"
                   strokeWidth={2}
                   fill="url(#tempo)"
+                />
+                <Line
+                  yAxisId="conf"
+                  type="monotone"
+                  dataKey="conf"
+                  stroke={ct.positiveStroke}
+                  strokeWidth={1.5}
+                  strokeDasharray="3 3"
+                  dot={false}
+                  isAnimationActive={false}
                 />
               </AreaChart>
             </ResponsiveContainer>
