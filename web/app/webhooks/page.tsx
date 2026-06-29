@@ -18,6 +18,13 @@ import {
   radioTabbableIndex,
 } from "@/lib/radio-group";
 import { deliveryRelativeLabel } from "@/lib/delivery-when";
+import { toast } from "@/lib/toast-store";
+import {
+  canRetryDelivery,
+  retryButtonLabel,
+  retryAriaLabel,
+  retryToast,
+} from "@/lib/delivery-retry";
 import {
   filterDeliveries,
   distinctDeliveryEvents,
@@ -159,6 +166,35 @@ export default function WebhooksPage() {
     const t = setInterval(load, 10_000);
     return () => clearInterval(t);
   }, [load]);
+
+  // Inline retry for a failed delivery (F147): which delivery id is mid-POST,
+  // so only that row spins. Fires action=redeliver, then refreshes the table
+  // and toasts the outcome -- the new attempt appears on the next load.
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const onRetryDelivery = useCallback(
+    async (d: Delivery) => {
+      if (!canRetryDelivery(d) || retrying) return;
+      setRetrying(d.id);
+      try {
+        const r = await fetch(`/api/webhooks/${encodeURIComponent(d.webhook_id)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "redeliver", delivery_id: d.id }),
+        });
+        const j = await r.json().catch(() => null);
+        const t = retryToast(r.ok, d.event, j?.error?.message);
+        if (t.kind === "success") toast.success(t.text);
+        else toast.error(t.text);
+        await load();
+      } catch (e: any) {
+        const t = retryToast(false, d.event, e?.message);
+        toast.error(t.text);
+      } finally {
+        setRetrying(null);
+      }
+    },
+    [retrying, load],
+  );
 
   // Tick the relative-time clock every 30s so the deliveries' "Nm ago" labels
   // (F129) age without waiting on the next data fetch. Cheap -- one setState.
@@ -940,6 +976,23 @@ export default function WebhooksPage() {
                     </td>
                     <td className="px-3 py-2 opacity-70">
                       {d.http_status ?? d.error ?? ""}
+                      {/* Inline retry (F147): only failed rows offer it; the
+                          button spins on its own id and toasts the outcome. */}
+                      {canRetryDelivery(d) && (
+                        <button
+                          type="button"
+                          onClick={() => onRetryDelivery(d)}
+                          disabled={retrying !== null}
+                          aria-label={retryAriaLabel(d.event)}
+                          className="ml-2 inline-flex items-center gap-1 text-[11px] underline-offset-2 hover:underline disabled:opacity-50"
+                          style={{ color: "var(--color-felt)" }}
+                        >
+                          {retrying === d.id && (
+                            <CircleNotch size={11} weight="bold" className="animate-spin" />
+                          )}
+                          {retryButtonLabel(retrying === d.id)}
+                        </button>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <DeliveryExportMenu
