@@ -21,6 +21,17 @@ import {
   CircleNotch,
 } from "@phosphor-icons/react/dist/ssr";
 import { sparklineGeometry, summarizeSeries } from "@/lib/key-sparkline";
+import {
+  buildSnippet,
+  SNIPPET_LANGS,
+  type SnippetLang,
+} from "@/lib/key-snippet";
+import {
+  readSnippetLang,
+  writeSnippetLang,
+  KEY_SNIPPET_LANG_DEFAULT,
+} from "@/lib/key-snippet-pref";
+import { SnippetLangToggle } from "@/components/SnippetLangToggle";
 
 type KeyScope = "read" | "write" | "admin";
 
@@ -119,6 +130,17 @@ export default function KeyDetailPage() {
   const [revoking, setRevoking] = useState(false);
   const [revealed, setRevealed] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  // Snippet language for the "Try it" block, persisted across visits + shared
+  // with /keys (F141) so a Python shop sees Python on both surfaces. SSR opens
+  // on the default, then the mount effect fills the saved choice.
+  const [snippetLang, setSnippetLang] = useState<SnippetLang>(
+    KEY_SNIPPET_LANG_DEFAULT,
+  );
+  useEffect(() => setSnippetLang(readSnippetLang()), []);
+  const chooseSnippetLang = useCallback((lang: SnippetLang) => {
+    setSnippetLang(lang);
+    writeSnippetLang(lang);
+  }, []);
 
   // IP allowlist editor state. `cidrDraft` holds the in-progress text, the
   // committed list comes from `data.key.allowed_cidrs`. Empty list = no
@@ -400,12 +422,13 @@ export default function KeyDetailPage() {
   }, []);
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const sampleCurl = useMemo(() => {
-    const token = revealed ?? `${data?.key.prefix ?? "sk_live_"}…`;
-    return `curl -X POST ${origin}/v1/classify \\
-  -H "Authorization: Bearer ${token}" \\
-  -F "file=@screenshot.png"`;
-  }, [revealed, data, origin]);
+  // Shared snippet builder (F141) — the revealed-once rotation secret feeds the
+  // real token; otherwise the placeholder. curl / Python / JavaScript stay in
+  // lockstep with the /keys list because both call buildSnippet.
+  const sampleSnippet = useMemo(
+    () => buildSnippet(snippetLang, origin, revealed),
+    [snippetLang, origin, revealed],
+  );
 
   return (
     <div className="space-y-8">
@@ -951,37 +974,40 @@ export default function KeyDetailPage() {
             ) : null}
           </section>
 
-          {/* Curl */}
+          {/* Try it */}
           <section
             className="rounded border p-5"
             style={{ borderColor: "var(--color-rule)" }}
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="eyebrow flex items-center gap-1.5">
                 <Terminal size={12} weight="duotone" />
-                <span>Try it from your shell</span>
+                <span>Try it from your code</span>
               </div>
-              <button
-                onClick={() => copy("curl", sampleCurl)}
-                className="text-[12px] inline-flex items-center gap-1.5"
-                style={{ color: "var(--color-ink-mute)" }}
-              >
-                {copied === "curl" ? (
-                  <>
-                    <Check size={14} weight="duotone" /> Copied
-                  </>
-                ) : (
-                  <>
-                    <Copy size={14} weight="duotone" /> Copy
-                  </>
-                )}
-              </button>
+              <div className="flex items-center gap-2">
+                <SnippetLangToggle value={snippetLang} onChange={chooseSnippetLang} />
+                <button
+                  onClick={() => copy("curl", sampleSnippet)}
+                  className="text-[12px] inline-flex items-center gap-1.5"
+                  style={{ color: "var(--color-ink-mute)" }}
+                >
+                  {copied === "curl" ? (
+                    <>
+                      <Check size={14} weight="duotone" /> Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={14} weight="duotone" /> Copy
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
             <pre
               className="mt-2 text-[12px] p-3 rounded overflow-x-auto"
               style={{ background: "rgba(0,0,0,0.04)" }}
             >
-              <code>{sampleCurl}</code>
+              <code>{sampleSnippet}</code>
             </pre>
             {!revealed ? (
               <p

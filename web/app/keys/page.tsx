@@ -31,7 +31,6 @@ import { validateKeyName } from "@/lib/key-name";
 import { summarizeKeys, keysSummaryChips } from "@/lib/key-summary";
 import {
   buildSnippet,
-  SNIPPET_LANGS,
   type SnippetLang,
 } from "@/lib/key-snippet";
 import {
@@ -54,6 +53,7 @@ import {
   DEFAULT_WORKSPACE,
 } from "@/lib/key-workspace";
 import { EmptyState } from "@/components/EmptyState";
+import { SnippetLangToggle } from "@/components/SnippetLangToggle";
 
 type KeyRow = {
   id: string;
@@ -82,42 +82,9 @@ function fmtDate(iso: string | null): string {
 
 // A compact segmented control choosing the snippet language (F134). Shared by
 // the revealed-key sample and the always-on example so a single selection
-// drives both blocks. Purely presentational -- state lives in the page.
-function LangToggle({
-  value,
-  onChange,
-}: {
-  value: SnippetLang;
-  onChange: (lang: SnippetLang) => void;
-}) {
-  return (
-    <div
-      className="inline-flex items-center rounded-md border overflow-hidden"
-      style={{ borderColor: "var(--color-rule)" }}
-      role="group"
-      aria-label="Snippet language"
-    >
-      {SNIPPET_LANGS.map((l) => {
-        const active = value === l.value;
-        return (
-          <button
-            key={l.value}
-            type="button"
-            onClick={() => onChange(l.value)}
-            aria-pressed={active}
-            className="text-[11px] px-2 py-1 font-mono"
-            style={{
-              background: active ? "var(--color-felt)" : "transparent",
-              color: active ? "var(--color-chalk)" : "var(--color-ink-mute)",
-            }}
-          >
-            {l.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
+// drives both blocks. Now reuses the shared <SnippetLangToggle> (F141) so the
+// /keys and /keys/[id] toggles render identically.
+const LangToggle = SnippetLangToggle;
 
 export default function KeysPage() {
   const [keys, setKeys] = useState<KeyRow[] | null>(null);
