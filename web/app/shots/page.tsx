@@ -43,6 +43,7 @@ import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
 import { filterCountLabel, type FilterKey } from "@/lib/filter-summary";
 import { confFloorReadout } from "@/lib/conf-floor";
+import { filterEscapeAction } from "@/lib/filter-esc";
 import { filterTabIndex } from "@/lib/filter-order";
 import {
   parseViewMode,
@@ -744,6 +745,15 @@ function ShotsPageInner() {
           placeholder="Search OCR text or filename"
           value={q}
           onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            const action = filterEscapeAction(e, q.length > 0);
+            if (action === "clear") {
+              setQ("");
+              e.preventDefault();
+            } else if (action === "leave") {
+              e.currentTarget.blur();
+            }
+          }}
           aria-label="Search OCR text or filename"
           tabIndex={filterTabIndex("search")}
         />
