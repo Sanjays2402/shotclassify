@@ -19,6 +19,14 @@ import {
 import { NotificationPrefsCard } from "@/components/NotificationPrefsCard";
 import { NotifFilterBreadcrumb } from "@/components/NotifFilterBreadcrumb";
 import type { NotifFilterKey } from "@/lib/notif-filter-chips";
+import {
+  type BulkConfirmPending,
+  type BulkAction,
+  bulkIsArmed,
+  bulkConfirmLabel,
+  bulkConfirmPrompt,
+  bulkNextOnTrigger,
+} from "@/lib/bulk-confirm";
 import { ofTotalLabel } from "@/lib/count-label";
 import {
   shouldShowTouchHint,
@@ -125,6 +133,7 @@ export default function NotificationsPage() {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [bulkPending, setBulkPending] = useState<BulkConfirmPending>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Touch-affordance hint (F126): on a coarse-pointer (touch) device the per-row
@@ -210,7 +219,7 @@ export default function NotificationsPage() {
     await reload();
     setBusy(false);
   };
-  const markAllRead = async () => {
+  const markAllReadNow = async () => {
     setBusy(true);
     await fetch("/api/notifications", {
       method: "POST",
@@ -220,8 +229,7 @@ export default function NotificationsPage() {
     await reload();
     setBusy(false);
   };
-  const clearAll = async () => {
-    if (!confirm("Clear every notification? This cannot be undone.")) return;
+  const clearAllNow = async () => {
     setBusy(true);
     await fetch("/api/notifications", {
       method: "POST",
@@ -230,6 +238,17 @@ export default function NotificationsPage() {
     });
     await reload();
     setBusy(false);
+  };
+  // Two-step bulk confirm (F149): first click arms an inline "Confirm",
+  // second fires -- replacing the unstyled browser confirm() on clear-all and
+  // adding the same guard to mark-all-read.
+  const triggerBulk = (action: BulkAction) => {
+    const next = bulkNextOnTrigger(bulkPending, action);
+    setBulkPending(next.pending);
+    if (next.fire) {
+      if (action === "mark_all_read") void markAllReadNow();
+      else void clearAllNow();
+    }
   };
 
   const unread = page?.unread ?? 0;
@@ -270,20 +289,34 @@ export default function NotificationsPage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button
-            onClick={markAllRead}
+            onClick={() => triggerBulk("mark_all_read")}
             disabled={busy || unread === 0}
+            title={bulkConfirmPrompt("mark_all_read")}
+            aria-label={bulkConfirmLabel("mark_all_read", bulkIsArmed(bulkPending, "mark_all_read"))}
             className="inline-flex items-center gap-1 text-[12px] px-2.5 py-1.5 rounded-md border disabled:opacity-40"
-            style={{ borderColor: "var(--color-rule)" }}
+            style={
+              bulkIsArmed(bulkPending, "mark_all_read")
+                ? { borderColor: "var(--color-felt)", color: "var(--color-felt)", boxShadow: "0 0 0 1px var(--color-felt)" }
+                : { borderColor: "var(--color-rule)" }
+            }
           >
-            <Check size={14} weight="duotone" /> Mark all read
+            <Check size={14} weight="duotone" />{" "}
+            {bulkConfirmLabel("mark_all_read", bulkIsArmed(bulkPending, "mark_all_read"))}
           </button>
           <button
-            onClick={clearAll}
+            onClick={() => triggerBulk("clear_all")}
             disabled={busy || total === 0}
+            title={bulkConfirmPrompt("clear_all")}
+            aria-label={bulkConfirmLabel("clear_all", bulkIsArmed(bulkPending, "clear_all"))}
             className="inline-flex items-center gap-1 text-[12px] px-2.5 py-1.5 rounded-md border disabled:opacity-40"
-            style={{ borderColor: "var(--color-rule)" }}
+            style={
+              bulkIsArmed(bulkPending, "clear_all")
+                ? { borderColor: "var(--color-conf-low)", color: "var(--color-conf-low)", boxShadow: "0 0 0 1px var(--color-conf-low)" }
+                : { borderColor: "var(--color-rule)" }
+            }
           >
-            <Trash size={14} weight="duotone" /> Clear all
+            <Trash size={14} weight="duotone" />{" "}
+            {bulkConfirmLabel("clear_all", bulkIsArmed(bulkPending, "clear_all"))}
           </button>
         </div>
       </div>
