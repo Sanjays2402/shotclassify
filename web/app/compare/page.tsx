@@ -9,6 +9,7 @@ import { Chip } from "@/components/Chip";
 import { ConfBar } from "@/components/ConfBar";
 import CopyCompareLinkButton from "@/components/CopyCompareLinkButton";
 import { fetcher, ENDPOINTS } from "@/lib/api";
+import { confidenceGap, gapAriaLabel } from "@/lib/compare-gap";
 import {
   CATEGORIES,
   LONG,
@@ -319,23 +320,85 @@ function DeltaBar({ a, b }: { a: string; b: string }) {
     da.elapsed_ms != null && db.elapsed_ms != null
       ? db.elapsed_ms - da.elapsed_ms
       : null;
+  const gap = confidenceGap(da.confidence, db.confidence);
   return (
-    <div className="panel p-4 grid grid-cols-2 md:grid-cols-4 gap-4">
-      <Stat label="Same class" value={sameClass ? "Yes" : "No"} />
-      <Stat
-        label="Confidence delta"
-        value={`${confDelta >= 0 ? "+" : ""}${confDelta.toFixed(1)} pts`}
-        tone={confDelta >= 0 ? "good" : "bad"}
-      />
-      <Stat
-        label="Latency delta"
-        value={latencyDelta == null ? "—" : `${latencyDelta >= 0 ? "+" : ""}${latencyDelta} ms`}
-        tone={latencyDelta == null ? undefined : latencyDelta <= 0 ? "good" : "bad"}
-      />
-      <Stat
-        label="Confidence gap"
-        value={`${Math.abs(confDelta).toFixed(1)} pts`}
-      />
+    <div className="panel p-4 flex flex-col gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Stat label="Same class" value={sameClass ? "Yes" : "No"} />
+        <Stat
+          label="Confidence delta"
+          value={`${confDelta >= 0 ? "+" : ""}${confDelta.toFixed(1)} pts`}
+          tone={confDelta >= 0 ? "good" : "bad"}
+        />
+        <Stat
+          label="Latency delta"
+          value={latencyDelta == null ? "—" : `${latencyDelta >= 0 ? "+" : ""}${latencyDelta} ms`}
+          tone={latencyDelta == null ? undefined : latencyDelta <= 0 ? "good" : "bad"}
+        />
+        <Stat
+          label="Confidence gap"
+          value={`${gap.absPts.toFixed(1)} pts`}
+        />
+      </div>
+      {/* Diverging confidence-gap bar (this tick) -- the "Confidence gap" Stat
+          prints a number, but a number doesn't say at a glance whether B edges
+          A or trounces it. Each side's confidence grows out from a centre axis
+          (A left, B right); the longer bar is the more confident shot, so the
+          gap reads visually. Each fill is the side's OWN clamped score, so the
+          difference in the two lengths IS the real gap -- nothing exaggerated. */}
+      <ConfidenceGapBar gap={gap} />
+    </div>
+  );
+}
+
+function ConfidenceGapBar({ gap }: { gap: ReturnType<typeof confidenceGap> }) {
+  const aColor = confColor(gap.aFill);
+  const bColor = confColor(gap.bFill);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="eyebrow">Shot A</span>
+        <span
+          className="num tabular-nums"
+          style={{ color: gap.winner === "tie" ? undefined : "#0a8a4f" }}
+        >
+          {gap.winner === "tie"
+            ? "Even"
+            : `${gap.winner === "a" ? "A" : "B"} leads by ${gap.absPts.toFixed(1)} pts`}
+        </span>
+        <span className="eyebrow">Shot B</span>
+      </div>
+      <div
+        className="flex items-stretch h-3 rounded-sm overflow-hidden"
+        style={{ background: "var(--color-chalk)" }}
+        role="img"
+        aria-label={gapAriaLabel(gap)}
+        title={gapAriaLabel(gap)}
+      >
+        {/* Left half: A grows leftward (anchored to the centre axis). */}
+        <div className="flex-1 flex justify-end">
+          <div
+            className="rounded-l-sm transition-[width] duration-300 ease-out"
+            style={{ width: `${gap.aFill * 100}%`, background: aColor }}
+          />
+        </div>
+        <div
+          className="w-px shrink-0"
+          style={{ background: "var(--color-rule)" }}
+          aria-hidden
+        />
+        {/* Right half: B grows rightward from the centre axis. */}
+        <div className="flex-1 flex justify-start">
+          <div
+            className="rounded-r-sm transition-[width] duration-300 ease-out"
+            style={{ width: `${gap.bFill * 100}%`, background: bColor }}
+          />
+        </div>
+      </div>
+      <div className="flex items-center justify-between text-[10px] num tabular-nums opacity-60">
+        <span>{pct(gap.aFill, 1)}</span>
+        <span>{pct(gap.bFill, 1)}</span>
+      </div>
     </div>
   );
 }
