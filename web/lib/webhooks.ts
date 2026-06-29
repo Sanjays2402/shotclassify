@@ -81,9 +81,24 @@ async function readDeliveries(): Promise<Delivery[]> {
 
 async function writeJson(p: string, data: unknown): Promise<void> {
   await fs.mkdir(path.dirname(p), { recursive: true });
-  const tmp = `${p}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
-  await fs.rename(tmp, p);
+  // Unique tmp name per write: a shared `${p}.tmp` lets two concurrent writers
+  // (e.g. dispatchEvent fanning recordDelivery/bumpCounters across several
+  // hooks via Promise.all) interleave bytes into the SAME tmp file before the
+  // rename, promoting corrupt JSON that the next reader chokes on
+  // ("Unexpected non-whitespace character after JSON"). A per-write suffix
+  // keeps each writer's tmp private; the rename stays atomic, so the store
+  // lands as clean last-writer-wins instead of a spliced mess.
+  const tmp = `${p}.${process.pid}.${Date.now().toString(36)}.${Math.random()
+    .toString(36)
+    .slice(2, 8)}.tmp`;
+  try {
+    await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
+    await fs.rename(tmp, p);
+  } catch (err) {
+    // Best-effort cleanup so a failed write doesn't litter orphan tmp files.
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 export async function listWebhooks(workspaceId: string): Promise<Webhook[]> {
