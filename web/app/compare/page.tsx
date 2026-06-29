@@ -10,6 +10,7 @@ import { ConfBar } from "@/components/ConfBar";
 import CopyCompareLinkButton from "@/components/CopyCompareLinkButton";
 import { fetcher, ENDPOINTS } from "@/lib/api";
 import { confidenceGap, gapAriaLabel } from "@/lib/compare-gap";
+import { ocrChips } from "@/lib/compare-ocr-chips";
 import {
   CATEGORIES,
   LONG,
@@ -152,6 +153,41 @@ function ShotPanel({
           {(data.ocr?.text || data.ocr_text) && (
             <div>
               <div className="eyebrow mb-1">OCR</div>
+              {/* OCR-stat chips (this tick) -- the detail carries word_count +
+                  mean_confidence; surface them as "212 words / 91% legible"
+                  so the panel says how much text and how legible at a glance,
+                  not just the raw dump. Hidden for image-only shots. */}
+              {(() => {
+                const chips = ocrChips(data.ocr);
+                if (chips.length === 0) return null;
+                return (
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                    {chips.map((c) => (
+                      <span
+                        key={c.key}
+                        className="inline-flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-sm border"
+                        style={{ borderColor: "var(--color-rule)" }}
+                        title={
+                          c.key === "words"
+                            ? "Words detected by OCR"
+                            : "Mean OCR confidence (legibility)"
+                        }
+                      >
+                        <span className="eyebrow">{c.label}</span>
+                        <span
+                          className="num tabular-nums"
+                          style={{
+                            color:
+                              c.score != null ? confColor(c.score) : undefined,
+                          }}
+                        >
+                          {c.value}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                );
+              })()}
               <pre
                 className="text-[12px] whitespace-pre-wrap break-words rounded-sm border p-2 max-h-[180px] overflow-auto"
                 style={{
