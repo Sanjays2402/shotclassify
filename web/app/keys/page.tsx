@@ -28,7 +28,14 @@ import {
   keyStatusHint,
 } from "@/lib/key-activity";
 import { validateKeyName } from "@/lib/key-name";
-import { summarizeKeys, keysSummaryChips } from "@/lib/key-summary";
+import {
+  summarizeKeys,
+  keysSummaryChips,
+  chipIsFilterable,
+  toggleSummaryFilter,
+  filterKeysByStatus,
+  type KeySummaryFilter,
+} from "@/lib/key-summary";
 import {
   buildSnippet,
   type SnippetLang,
@@ -107,6 +114,9 @@ export default function KeysPage() {
   // Workspace filter (F137): multi-tenant installs interleave keys from many
   // workspaces; this narrows the list to one. null = all. Chip-driven.
   const [wsFilter, setWsFilter] = useState<string | null>(null);
+  // F144: clicking the idle / never-used summary chips narrows the table to
+  // those keys (reusing keyUsageStatus buckets). null = no status filter.
+  const [statusFilter, setStatusFilter] = useState<KeySummaryFilter>(null);
   // Which language the code snippets render in (F134). One toggle drives both
   // the revealed-key "Sample request" block and the always-on "Using your key"
   // section so they never disagree. Persisted across visits (F135) -- a Python
@@ -274,7 +284,11 @@ export default function KeysPage() {
   const allKeys = keys ?? [];
   const showWorkspaceFilter = hasMultipleWorkspaces(allKeys);
   const workspaceCounts = distinctWorkspaces(allKeys);
-  const visibleKeys = filterByWorkspace(allKeys, wsFilter);
+  const visibleKeys = filterKeysByStatus(
+    filterByWorkspace(allKeys, wsFilter),
+    statusFilter,
+    now,
+  );
 
   return (
     <div className="space-y-8">
@@ -502,25 +516,49 @@ export default function KeysPage() {
           <h2 className="h-display text-[15px]">Your keys</h2>
           {keys && keys.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 justify-end">
-              {keysSummaryChips(summarizeKeys(keys, now)).map((c) => (
-                <span
-                  key={c.key}
-                  className="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-mono"
-                  title={c.hint}
-                  style={{
-                    borderColor: "var(--color-rule)",
-                    background: "var(--color-chalk)",
-                    color:
-                      c.tone === "warn"
-                        ? "var(--color-cue-deep, #9a7a0a)"
-                        : c.tone === "mute"
-                          ? "var(--color-conf-low)"
-                          : "var(--color-ink)",
-                  }}
-                >
-                  {c.label}
-                </span>
-              ))}
+              {keysSummaryChips(summarizeKeys(keys, now)).map((c) => {
+                const filterable = chipIsFilterable(c.key);
+                const armed = statusFilter === c.key;
+                const color =
+                  c.tone === "warn"
+                    ? "var(--color-cue-deep, #9a7a0a)"
+                    : c.tone === "mute"
+                      ? "var(--color-conf-low)"
+                      : "var(--color-ink)";
+                if (filterable) {
+                  return (
+                    <button
+                      key={c.key}
+                      type="button"
+                      onClick={() => setStatusFilter((p) => toggleSummaryFilter(p, c.key))}
+                      aria-pressed={armed}
+                      className="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-mono"
+                      title={`${c.hint} Click to ${armed ? "clear" : "show only these"}.`}
+                      style={{
+                        borderColor: "var(--color-rule)",
+                        background: armed ? "var(--color-felt)" : "var(--color-chalk)",
+                        color: armed ? "var(--color-chalk)" : color,
+                      }}
+                    >
+                      {c.label}
+                    </button>
+                  );
+                }
+                return (
+                  <span
+                    key={c.key}
+                    className="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-mono"
+                    title={c.hint}
+                    style={{
+                      borderColor: "var(--color-rule)",
+                      background: "var(--color-chalk)",
+                      color,
+                    }}
+                  >
+                    {c.label}
+                  </span>
+                );
+              })}
             </div>
           )}
         </div>
@@ -564,6 +602,27 @@ export default function KeysPage() {
                 </button>
               );
             })}
+          </div>
+        )}
+
+        {statusFilter && keys && keys.length > 0 && (
+          <div
+            className="flex items-center justify-between gap-3 rounded-md border px-3 py-1.5 text-[12px]"
+            style={{ borderColor: "var(--color-rule)", background: "var(--color-chalk)" }}
+          >
+            <span style={{ color: "var(--color-ink-mute)" }}>
+              Showing {visibleKeys.length}{" "}
+              {statusFilter === "idle" ? "idle" : "never-used"}{" "}
+              {visibleKeys.length === 1 ? "key" : "keys"}.
+            </span>
+            <button
+              type="button"
+              onClick={() => setStatusFilter(null)}
+              className="underline"
+              style={{ color: "var(--color-ink-mute)" }}
+            >
+              Show all
+            </button>
           </div>
         )}
 

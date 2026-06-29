@@ -93,3 +93,35 @@ export function keysSummaryChips(summary: KeysSummary): KeysSummaryChip[] {
   }
   return chips;
 }
+
+// The two chips that can drive a table filter (F144): idle + never-used map
+// to keyUsageStatus buckets. total + calls are facts, not filters. A chip
+// click toggles its bucket; nothing else narrows the list.
+export type KeySummaryFilter = "idle" | "unused" | null;
+
+export function chipIsFilterable(key: KeysSummaryChip["key"]): boolean {
+  return key === "idle" || key === "unused";
+}
+
+// Toggle the active filter from a chip click: clicking the armed chip clears
+// it, any other filterable chip switches to it, non-filter chips are no-ops.
+export function toggleSummaryFilter(
+  current: KeySummaryFilter,
+  key: KeysSummaryChip["key"],
+): KeySummaryFilter {
+  if (!chipIsFilterable(key)) return current;
+  const next = key as "idle" | "unused";
+  return current === next ? null : next;
+}
+
+// Narrow a key list to the active status filter, reusing the exact
+// keyUsageStatus buckets the chips counted. null returns the list unchanged.
+export function filterKeysByStatus<T extends SummaryInput>(
+  keys: readonly T[] | null | undefined,
+  filter: KeySummaryFilter,
+  now: number,
+): T[] {
+  if (!Array.isArray(keys)) return [];
+  if (filter === null) return keys.slice();
+  return keys.filter((k) => k && typeof k === "object" && keyUsageStatus(k, now) === filter);
+}

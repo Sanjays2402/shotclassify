@@ -2,8 +2,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { summarizeKeys, keysSummaryChips } from "./key-summary.ts";
-
+import {
+  summarizeKeys,
+  keysSummaryChips,
+  chipIsFilterable,
+  toggleSummaryFilter,
+  filterKeysByStatus,
+} from "./key-summary.ts";
 const NOW = 1_700_000_000_000;
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -97,4 +102,33 @@ test("keysSummaryChips: a fleet with zero calls omits the calls chip", () => {
 
 test("keysSummaryChips: an empty fleet yields no chips", () => {
   assert.deepEqual(keysSummaryChips(summarizeKeys([], NOW)), []);
+});
+
+test("chipIsFilterable: only idle and unused chips drive a filter (F144)", () => {
+  assert.equal(chipIsFilterable("idle"), true);
+  assert.equal(chipIsFilterable("unused"), true);
+  assert.equal(chipIsFilterable("total"), false);
+  assert.equal(chipIsFilterable("calls"), false);
+});
+
+test("toggleSummaryFilter: clicking arms, re-clicking clears, switch works", () => {
+  assert.equal(toggleSummaryFilter(null, "idle"), "idle");
+  assert.equal(toggleSummaryFilter("idle", "idle"), null);
+  assert.equal(toggleSummaryFilter("idle", "unused"), "unused");
+  // non-filter chips never change the filter
+  assert.equal(toggleSummaryFilter("idle", "total"), "idle");
+  assert.equal(toggleSummaryFilter(null, "calls"), null);
+});
+
+test("filterKeysByStatus: narrows to the matching bucket, null is pass-through", () => {
+  const list = [active(1), idle(2), unused()];
+  assert.equal(filterKeysByStatus(list, null, NOW).length, 3);
+  assert.equal(filterKeysByStatus(list, "idle", NOW).length, 1);
+  assert.equal(filterKeysByStatus(list, "unused", NOW).length, 1);
+  // returns a copy, not the same reference, so callers can't mutate the source
+  assert.notEqual(filterKeysByStatus(list, null, NOW), list);
+});
+
+test("filterKeysByStatus: non-array yields []", () => {
+  assert.deepEqual(filterKeysByStatus(null, "idle", NOW), []);
 });
