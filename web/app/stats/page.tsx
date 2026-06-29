@@ -46,6 +46,7 @@ import { chartsBusy } from "@/lib/stats-loading";
 import { statsClassLink } from "@/lib/stats-class-link";
 import { classMixTooltipFormatter } from "@/lib/class-mix-tooltip";
 import { kpiSkeletonKeys, showKpiSkeleton } from "@/lib/kpi-skeleton";
+import { confTrend, confTrendDeltaLabel } from "@/lib/conf-trend";
 
 type Aggregate = {
   total: number;
@@ -329,7 +330,14 @@ export default function StatsPage() {
         <Stat
           label="Mean confidence"
           value={pct(agg.mean_confidence, 1)}
-          hint={`${agg.latency_ms.count} timed · last ${winLabel}`}
+          hint={(() => {
+            // Per-hour mean-confidence trend across the window (F65). Reads the
+            // first/last populated buckets; appends a signed pts delta so the
+            // KPI says which way calibration is drifting, not just the snapshot.
+            const t = confTrend(agg.hourly);
+            const d = confTrendDeltaLabel(t);
+            return d ? `${agg.latency_ms.count} timed · ${d} · last ${winLabel}` : `${agg.latency_ms.count} timed · last ${winLabel}`;
+          })()}
           icon={<Gauge weight="duotone" size={18} />}
           info={<StatInfoPopover stat="mean_confidence" hours={hours} />}
         />
