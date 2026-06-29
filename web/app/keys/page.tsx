@@ -36,6 +36,7 @@ import {
   filterKeysByStatus,
   type KeySummaryFilter,
 } from "@/lib/key-summary";
+import { callBar, callCount, fleetMaxCalls, callBarTitle } from "@/lib/key-callbar";
 import {
   buildSnippet,
   type SnippetLang,
@@ -289,6 +290,9 @@ export default function KeysPage() {
     statusFilter,
     now,
   );
+  // Fleet peak across the visible keys -- backs the per-row "calls" mini bar
+  // (F152) so each bar scales against the busiest key currently shown.
+  const fleetPeak = fleetMaxCalls(visibleKeys);
 
   return (
     <div className="space-y-8">
@@ -752,7 +756,30 @@ export default function KeysPage() {
                       })()}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">
-                      {k.usage_count}
+                      {(() => {
+                        const c = callCount(k);
+                        const bar = callBar(c, fleetPeak);
+                        return (
+                          <div className="flex flex-col items-end gap-1" title={callBarTitle(c, fleetPeak)}>
+                            <span>{c.toLocaleString()}</span>
+                            <span
+                              className="h-1 w-16 overflow-hidden rounded-full"
+                              style={{ background: "var(--color-rule)" }}
+                              aria-hidden
+                            >
+                              <span
+                                className="block h-full rounded-full transition-[width]"
+                                style={{
+                                  width: bar.widthPct,
+                                  background: bar.isBusiest
+                                    ? "var(--color-cue-deep, #9a7a0a)"
+                                    : "var(--color-felt, #1f7a3d)",
+                                }}
+                              />
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2 text-right">
                       {(() => {
