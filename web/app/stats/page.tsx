@@ -45,6 +45,7 @@ import {
 import { chartsBusy } from "@/lib/stats-loading";
 import { statsClassLink } from "@/lib/stats-class-link";
 import { classMixTooltipFormatter } from "@/lib/class-mix-tooltip";
+import { kpiSkeletonKeys, showKpiSkeleton } from "@/lib/kpi-skeleton";
 
 type Aggregate = {
   total: number;
@@ -123,6 +124,22 @@ function Stat({
       </div>
       <div className="num text-[24px]">{value}</div>
       {hint && <div className="num text-[10px] opacity-60">{hint}</div>}
+    </div>
+  );
+}
+
+// Loading placeholder for a single KPI card (F146) -- matches Stat's panel p-4
+// footprint with chalk skeleton lines so the four cards settle in lockstep
+// with the chart skeletons rather than popping in fully formed.
+function StatSkeleton() {
+  return (
+    <div className="panel p-4 flex flex-col gap-1" data-testid="kpi-skeleton">
+      <div className="flex items-center justify-between">
+        <Skeleton width={88} height={11} radius={2} className="opacity-70" />
+        <Skeleton variant="circle" width={18} height={18} className="opacity-50" />
+      </div>
+      <Skeleton width={72} height={26} radius={4} className="opacity-70 mt-1" />
+      <Skeleton width={120} height={9} radius={2} className="opacity-50 mt-1" />
     </div>
   );
 }
@@ -298,6 +315,10 @@ export default function StatsPage() {
       )}
 
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {showKpiSkeleton(busy)
+          ? kpiSkeletonKeys().map((k) => <StatSkeleton key={k} />)
+          : (
+        <>
         <Stat
           label="Lifetime shots"
           value={agg.total.toLocaleString()}
@@ -326,6 +347,8 @@ export default function StatsPage() {
           icon={<PencilSimple weight="duotone" size={18} />}
           info={<StatInfoPopover stat="corrections" hours={hours} />}
         />
+        </>
+        )}
       </section>
 
       <section className="panel p-5">
