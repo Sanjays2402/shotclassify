@@ -42,6 +42,7 @@ import { shotRowToExportInput, type ShotExportInput } from "@/lib/shot-export";
 import { fetcherWithMeta, ENDPOINTS } from "@/lib/api";
 import { emptyCopyForList } from "@/lib/empty-state";
 import { filterCountLabel, type FilterKey } from "@/lib/filter-summary";
+import { confFloorReadout } from "@/lib/conf-floor";
 import { filterTabIndex } from "@/lib/filter-order";
 import {
   parseViewMode,
@@ -829,7 +830,12 @@ function ShotsPageInner() {
             aria-label="Minimum confidence"
             tabIndex={filterTabIndex("minConf")}
           />
-          <span className="num text-[11px] w-[34px] text-right">{minConfPct}%</span>
+          <span
+            className="num text-[11px] w-[60px] text-right tabular-nums"
+            title={minConfPct > 0 ? `Showing shots at or above ${minConfPct}% confidence` : "No confidence floor"}
+          >
+            {confFloorReadout(minConfPct)}
+          </span>
         </label>
 
         <button
