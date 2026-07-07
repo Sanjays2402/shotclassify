@@ -9,9 +9,9 @@ authors = [{ name = "Sanjay", email = "51058514+Sanjays2402@users.noreply.github
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
-    "python-multipart>=0.0.31",
+    "python-multipart>=0.0.32",
     "pydantic>=2.7",
-    "pydantic-settings>=2.4",
+    "pydantic-settings>=2.14.2",
     "httpx>=0.27",
     "openai>=1.40",
     "pillow>=10.3",
