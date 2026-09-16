@@ -2704,6 +2704,9 @@ Python (`scripts/`):
 Make targets: `install`, `dev`, `test`, `fmt`, `lint`, `samples`, `api`, `worker`, `web`, `docker`, `compose-up`, `clean`.
 
 CLI (`shotclassify` entrypoint, Typer): `classify`, `history`, `show`, `correct`, `serve`.
+The `correct` command suggests the closest valid category when it receives a
+typo (e.g. `shotclassify correct <id> reciept` answers `did you mean "receipt"?`),
+so re-labelling at speed no longer requires a round trip through `--help`.
 
 Web (`web/package.json`): `dev`, `build`, `start`, `lint`.
 

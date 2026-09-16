@@ -2140,3 +2140,15 @@ class ClassificationRecord(BaseModel):
     label: str | None = None
     tags: list[str] = Field(default_factory=list)
     pinned: bool = False
+
+
+def suggest_category(value: str) -> str | None:
+    """Return the closest valid category name for a typo, else None.
+
+    Used by the CLI to answer ``correct reciept`` with
+    ``did you mean "receipt"?`` instead of dumping the full value list.
+    """
+    import difflib
+
+    matches = difflib.get_close_matches(value, Category.all(), n=1, cutoff=0.6)
+    return matches[0] if matches else None

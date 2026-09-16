@@ -12,6 +12,7 @@ from rich.table import Table
 
 from shotclassify_common import configure_logging, get_settings
 from shotclassify_common.pipeline import process_image
+from shotclassify_common.utils import suggest_category
 from shotclassify_store import Repository
 
 app = typer.Typer(
@@ -87,7 +88,13 @@ def correct(item_id: str, category: str) -> None:
     try:
         cat = Category(category)
     except ValueError:
-        console.print(f"[red]Unknown category[/red] {category}; valid: {Category.all()}")
+        hint = suggest_category(category)
+        if hint:
+            console.print(
+                f"[red]Unknown category[/red] {category!r}; did you mean [green]{hint}[/green]?"
+            )
+        else:
+            console.print(f"[red]Unknown category[/red] {category!r}; valid: {Category.all()}")
         raise typer.Exit(code=2)
     r = repo.correct(item_id, cat)
     if r is None:

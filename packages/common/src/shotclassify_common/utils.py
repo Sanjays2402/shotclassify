@@ -1,6 +1,8 @@
 """Small helpers used across packages."""
 from __future__ import annotations
 
+from .schemas import suggest_category  # noqa: F401
+
 import hashlib
 import uuid
 from datetime import datetime, timezone
